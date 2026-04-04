@@ -1,4 +1,4 @@
-# bdlux — Image Processing Application Specification (Rust)
+# bdip — Image Processing Application Specification (Rust)
 
 ## 1. Overview
 The Image Processing Application is a high-performance, GPU-accelerated tool built completely in Rust. Engineered for macOS (leveraging WebGPU/Metal), it provides a snappy, modern desktop UI that can evolve rapidly. Crucially, the application is designed with strict separation of concerns, operating seamlessly as either an interactive desktop app or a headless command-line interface (CLI). The underlying image processing engine will be isolated as a standalone, consumable Rust library, empowering other external Rust programs to leverage its powerful transformation pipelines completely free from UI overhead.
@@ -6,16 +6,16 @@ The Image Processing Application is a high-performance, GPU-accelerated tool bui
 ## 2. Architecture & Design Principles (Library vs. Binary)
 To guarantee the user interface is completely decoupled from the image processing operations, the project will be structured fundamentally as a Core Library (`lib.rs`) and an Application Binary (`main.rs`).
 
-The project is structured as a **Cargo workspace** with two independent crates (`bdlux_core` and `bdlux`). This ensures the core library has zero dependency on UI crates (`iced`, `clap`, `rfd`) and can be consumed by external Rust projects purely as an image processing engine.
+The project is structured as a **Cargo workspace** with two independent crates (`bdip_core` and `bdip`). This ensures the core library has zero dependency on UI crates (`iced`, `clap`, `rfd`) and can be consumed by external Rust projects purely as an image processing engine.
 
-1. **Core Processing Library (`bdlux_core` crate)**:
+1. **Core Processing Library (`bdip_core` crate)**:
    * **GPU Transformation Engine**: Encapsulates all `wgpu` (WebGPU) compute/render logic. It consumes a base image buffer and a list of declarative `Transformation` instructions, processes them on the GPU, and outputs a formatted texture. It has strictly zero knowledge of `iced` or windowing systems.
    * **State Data Models**: Owns the standardized data structures dictating transformation parameters and `Undo`/`Redo` histories.
    * **I/O Manager**: Focuses comprehensively on serialization/deserialization using the `image` crate. Initially supported formats: `PNG`, `JPG`, `GIF`, and `TIFF`. This list may be expanded in future iterations as needs arise.
-   * **Error Types**: Defines a structured error enum using `thiserror` with variants for I/O failures, GPU errors, unsupported formats, and invalid transformation parameters. All public API functions return `Result<T, BdluxError>`.
+   * **Error Types**: Defines a structured error enum using `thiserror` with variants for I/O failures, GPU errors, unsupported formats, and invalid transformation parameters. All public API functions return `Result<T, BdipError>`.
    * *Extensibility*: Other Rust projects can import this crate and use its pipeline freely.
    
-2. **Application Binary (`bdlux` crate)**:
+2. **Application Binary (`bdip` crate)**:
    * **CLI Controller**: Uses the `clap` crate to parse startup arguments. It determines whether to boot the `iced` windowing context or execute purely headless logic.
    * **UI Layer**: Built using `iced`. It translates interactive UI states (slider drags, clicks) into commands passed directly to the Core Processing Library.
    * **Error Presentation**: Uses `anyhow` to wrap library errors with user-facing context. The CLI reports errors to stderr with non-zero exit codes. The UI surfaces errors via modal dialogs.
@@ -26,7 +26,7 @@ The project is structured as a **Cargo workspace** with two independent crates (
 * **Graphics API**: `wgpu`. The Rust implementation of the WebGPU standard. Natively targets Metal on macOS. Provides unparalleled performance for headless compute tasks and interactive rendering alike.
 * **Media Handling**: `image` crate. A highly optimized pure-Rust library for seamless decoding and encoding of all supported formats.
 * **CLI Parser**: `clap`. The robust standard for parsing terminal arguments securely.
-* **Error Handling**: `thiserror` in `bdlux_core` for structured, matchable error types. `anyhow` in `bdlux` for ergonomic error wrapping with user-facing context.
+* **Error Handling**: `thiserror` in `bdip_core` for structured, matchable error types. `anyhow` in `bdip` for ergonomic error wrapping with user-facing context.
 
 ### Internal Pixel Format & Color Space
 The engine operates internally on **`Rgba16Float`** textures in **linear color space**. Input images are converted from sRGB gamma space on upload to the GPU; output is converted back to sRGB for display and file export. This 16-bit floating-point format preserves precision across chained transformations (eliminating banding artifacts) and provides headroom above 1.0 for intermediate calculations without clamping. The sRGB↔linear conversion is handled automatically by GPU hardware at zero performance cost.
@@ -40,10 +40,10 @@ Because it is declarative, `iced` accommodates sweeping visual changes and advan
 
 ### 4.1. Command-Line Interface (CLI) & Headless Execution
 By offloading rendering and routing to the Core Library, the CLI supports dual run-modes:
-* **Interactive UI with Asset Preloading**: Running `$ bdlux /path/to/img.jpg` launches the UI immediately, bypassing file pickers to load the respective file smoothly into the visual canvas.
+* **Interactive UI with Asset Preloading**: Running `$ bdip /path/to/img.jpg` launches the UI immediately, bypassing file pickers to load the respective file smoothly into the visual canvas.
 * **Headless Batch Mode**: To ensure that the command line can safely handle order-dependent arrays of image transformations seamlessly, the CLI runs a hybrid parser approach:
-   * **Ordered Multivalue Arguments**: Operating from the terminal directly uses repeatable flags. Example: `$ bdlux --headless in.jpg --output out.jpg --apply brightness:0.5 --apply blur:5.0`. The `clap` parser evaluates these left-to-right safely. 
-   * **Pipeline Manifest Files**: Executing `$ bdlux --headless in.jpg --output out.jpg --pipeline script.txt` references an external file for repeatable pipelines. This file cleanly holds a newline-separated list of the same underlying `--apply` arguments. The CLI binary iterates these lines directly as isolated parameters handed down to the transformation library.
+   * **Ordered Multivalue Arguments**: Operating from the terminal directly uses repeatable flags. Example: `$ bdip --headless in.jpg --output out.jpg --apply brightness:0.5 --apply blur:5.0`. The `clap` parser evaluates these left-to-right safely. 
+   * **Pipeline Manifest Files**: Executing `$ bdip --headless in.jpg --output out.jpg --pipeline script.txt` references an external file for repeatable pipelines. This file cleanly holds a newline-separated list of the same underlying `--apply` arguments. The CLI binary iterates these lines directly as isolated parameters handed down to the transformation library.
 
 ### 4.2. File I/O
 * **Open**: UI file pickers (`rfd` crate) or CLI arguments pass local file strings to the Core Library. The `image` crate deserializes raw buffers into a unified `wgpu` layout map.
@@ -58,24 +58,24 @@ Transformations are stored as lightweight standardized structs (e.g., `Brightnes
 ## 5. Iterative Implementation Plan
 
 1. **Core Library Foundation**:
-   * Format Cargo workspace with `bdlux_core` (library) and `bdlux` (binary).
-   * Define the `Transformation` enum, `BdluxError` types, and history data structures in `bdlux_core`.
-   * Implement image decoding/encoding via the `image` crate in `bdlux_core`.
+   * Format Cargo workspace with `bdip_core` (library) and `bdip` (binary).
+   * Define the `Transformation` enum, `BdipError` types, and history data structures in `bdip_core`.
+   * Implement image decoding/encoding via the `image` crate in `bdip_core`.
    * *Verified when*: Unit tests confirm load → encode round-trip for all supported formats.
 2. **GPU Pipeline & Headless CLI**:
-   * Initialize headless `wgpu` device/queue in `bdlux_core` (no window context).
+   * Initialize headless `wgpu` device/queue in `bdip_core` (no window context).
    * Implement the first WGSL compute shader (Brightness) and the GPU texture pipeline (upload → bind → dispatch → readback).
    * Build the transformation stack and history (undo/redo) model alongside the pipeline, as they are tightly coupled.
-   * Wire `clap` argument parsing in `bdlux` (positional input path, `--output`, `--apply`, `--pipeline`).
-   * *Verified when*: `$ bdlux --headless test.jpg --output out.png --apply brightness:0.5` produces a visibly brighter output image.
+   * Wire `clap` argument parsing in `bdip` (positional input path, `--output`, `--apply`, `--pipeline`).
+   * *Verified when*: `$ bdip --headless test.jpg --output out.png --apply brightness:0.5` produces a visibly brighter output image.
 3. **UI Prototype Spike** *(Go/No-Go Gate)*:
-   * Build a minimal `iced` application in `bdlux` that renders a single GPU-processed texture into a window.
-   * Validate the `wgpu` context sharing approach between `bdlux_core` and `iced`'s renderer.
+   * Build a minimal `iced` application in `bdip` that renders a single GPU-processed texture into a window.
+   * Validate the `wgpu` context sharing approach between `bdip_core` and `iced`'s renderer.
    * *Verified when*: A window displays a loaded image with a brightness adjustment applied. This phase determines the integration strategy for all subsequent UI work.
 4. **Full UI Integration**:
    * Implement file open/save dialogs (`rfd` crate).
    * Construct the sidebar layout with slider controls for each V1 transformation.
-   * Wire slider state changes to the transformation pipeline in `bdlux_core`.
+   * Wire slider state changes to the transformation pipeline in `bdip_core`.
    * Bind keyboard shortcuts for undo/redo (Cmd+Z / Cmd+Shift+Z).
    * *Verified when*: A user can open an image, adjust brightness/contrast/saturation via sliders, undo/redo changes, and save the result.
 5. **V1 Completion & Polish**:
@@ -84,7 +84,7 @@ Transformations are stored as lightweight standardized structs (e.g., `Brightnes
    * *Verified when*: All V1 transformations work in both headless CLI and interactive UI modes.
 
 **Future Considerations (Selection and Extensibility)**:
-When dramatic UI layouts are requested, only the UI layer in `bdlux` requires modification, while the transformation logic inside `bdlux_core` remains perfectly sealed and safe. Building Region-Selection tools natively fits into this structure; a user selection merely provides an alpha-channel Mask texture to the Core Library. Because of the headless/binary separation constraints, this capability to apply transformations strictly against a mask will inherently be supported visually in the UI and pragmatically across the Command Line (e.g. passing a bounding box logic payload to the batch processor).
+When dramatic UI layouts are requested, only the UI layer in `bdip` requires modification, while the transformation logic inside `bdip_core` remains perfectly sealed and safe. Building Region-Selection tools natively fits into this structure; a user selection merely provides an alpha-channel Mask texture to the Core Library. Because of the headless/binary separation constraints, this capability to apply transformations strictly against a mask will inherently be supported visually in the UI and pragmatically across the Command Line (e.g. passing a bounding box logic payload to the batch processor).
 
 ## 6. Addendum: Image Transformations Reference
 The Core Library's transformation pipeline is driven by a `Transformation` enum. Each variant represents a single filter operation with typed parameters. All parameter values use normalized floating-point ranges (typically `-1.0` to `1.0` or `0.0` to `1.0`) unless otherwise specified.

@@ -1,6 +1,6 @@
 # Architectural Component Diagram
 
-The following diagram provides a top-down view of the strict module separation inside the `bdlux` workspace. It illustrates the data boundary isolating the **Application Binary (UI & CLI routing)** from the **Core Processing Library (GPU execution & Data I/O)**.
+The following diagram provides a top-down view of the strict module separation inside the `bdip` workspace. It illustrates the data boundary isolating the **Application Binary (UI & CLI routing)** from the **Core Processing Library (GPU execution & Data I/O)**.
 
 ```mermaid 
 flowchart TB
@@ -9,7 +9,7 @@ flowchart TB
     FileSystem[(File System)]
 
     %% Application Binary Workspace
-    subgraph AppBinary ["📦 Application Binary (bdlux)"]
+    subgraph AppBinary ["📦 Application Binary (bdip)"]
         CLI["Terminal CLI Router<br/>(Parses Arguments)"]
         
         subgraph UILayer ["🖥 UI Presentation Layer (Iced)"]
@@ -20,7 +20,7 @@ flowchart TB
     end
 
     %% Core Library Workspace
-    subgraph CoreLib ["📦 Core Processing Library (bdlux_core)"]
+    subgraph CoreLib ["📦 Core Processing Library (bdip_core)"]
         IO["I/O & Serialization Manager<br/>(Reads/Writes JPG, TIFF, GIF)"]
         
         subgraph StateManager ["🧠 State & History Manager"]
