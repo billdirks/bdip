@@ -1,0 +1,3 @@
+[workspace]
+members = ["bdip_core", "bdip"]
+resolver = "2"

@@ -1,0 +1,8 @@
+[package]
+name = "bdip"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bdip_core = { path = "../bdip_core" }
+anyhow = "1"
