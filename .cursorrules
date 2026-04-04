@@ -1,0 +1,13 @@
+# General Constraints
+- All file formatting, including documentation and this rules file, must be hard-wrapped to a
+  maximum of 100 characters per line wherever practical.
+
+# Unit Testing Standards
+- All unit tests must be granular and test a single, isolated concept or behavior.
+- Do NOT write monolithic unit tests that combine multiple assertions or steps representing different
+  behaviors (e.g., do not combine testing format support and I/O error handling into one test).
+  (Integration and end-to-end tests are exempt from this strict single-behavior rule).
+- Use descriptive test names that clearly convey the specific behavior being tested (e.g.,
+  `test_save_unsupported_extension` rather than `test_save_errors`).
+- Share setup code using helper functions (e.g., `create_test_image()`) rather than repeating
+  setup logic across multiple tests.
