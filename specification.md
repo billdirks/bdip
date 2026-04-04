@@ -43,7 +43,7 @@ By offloading rendering and routing to the Core Library, the CLI supports dual r
 * **Interactive UI with Asset Preloading**: Running `$ bdlux /path/to/img.jpg` launches the UI immediately, bypassing file pickers to load the respective file smoothly into the visual canvas.
 * **Headless Batch Mode**: To ensure that the command line can safely handle order-dependent arrays of image transformations seamlessly, the CLI runs a hybrid parser approach:
    * **Ordered Multivalue Arguments**: Operating from the terminal directly uses repeatable flags. Example: `$ bdlux --headless in.jpg --output out.jpg --apply brightness:0.5 --apply blur:5.0`. The `clap` parser evaluates these left-to-right safely. 
-   * **Pipeline Manifest Files**: Executing `$ bdlux --headless --input in.jpg --output out.jpg --pipeline script.txt` references an external file for repeatable pipelines. This file cleanly holds a newline-separated list of the same underlying `--apply` arguments. The CLI binary iterates these lines directly as isolated parameters handed down to the transformation library.
+   * **Pipeline Manifest Files**: Executing `$ bdlux --headless in.jpg --output out.jpg --pipeline script.txt` references an external file for repeatable pipelines. This file cleanly holds a newline-separated list of the same underlying `--apply` arguments. The CLI binary iterates these lines directly as isolated parameters handed down to the transformation library.
 
 ### 4.2. File I/O
 * **Open**: UI file pickers (`rfd` crate) or CLI arguments pass local file strings to the Core Library. The `image` crate deserializes raw buffers into a unified `wgpu` layout map.
@@ -57,23 +57,31 @@ Transformations are stored as lightweight standardized structs (e.g., `Brightnes
 
 ## 5. Iterative Implementation Plan
 
-1. **Library Scaffolding & I/O Phase**:
-   * Format Cargo workspace with `bdlux_core` and `bdlux`.
-   * Apply `clap` argument parsing resolving `--input`, multiple `--apply` vectors, and `--pipeline` iterators.
-   * Implement decoding images into base buffers via `image` running specifically inside `bdlux_core`.
-2. **Headless Engine & Processing Phase**:
-   * Build the standalone `wgpu` execution logic in `bdlux_core` (fully detached from window contexts).
-   * Achieve proof-of-concept for the Headless CLI: Read a file, apply pipeline transformations based on the list, and write via `wgpu`. 
-3. **UI Integration Phase**:
-   * Boot the `iced` event lifecycle in `bdlux`.
-   * Share the initialized `wgpu` adapter context between `bdlux_core` and `iced`. Display the output texture into a primary application viewport seamlessly.
-4. **Toolbar & Interactive Enhancements**:
-   * Construct `iced` right-hand layout sidebar modules. 
-   * Formally introduce the Brightness shader in `bdlux_core` (mapped similarly to Headless capability).
-   * Map `iced` slider feedback messages directly to pipeline alterations.
-5. **History & Buffer Execution**:
-   * Refine History Structs tracking transformations independently.
-   * Bind `iced` keystrokes into queue stack array mutators correctly.
+1. **Core Library Foundation**:
+   * Format Cargo workspace with `bdlux_core` (library) and `bdlux` (binary).
+   * Define the `Transformation` enum, `BdluxError` types, and history data structures in `bdlux_core`.
+   * Implement image decoding/encoding via the `image` crate in `bdlux_core`.
+   * *Verified when*: Unit tests confirm load → encode round-trip for all supported formats.
+2. **GPU Pipeline & Headless CLI**:
+   * Initialize headless `wgpu` device/queue in `bdlux_core` (no window context).
+   * Implement the first WGSL compute shader (Brightness) and the GPU texture pipeline (upload → bind → dispatch → readback).
+   * Build the transformation stack and history (undo/redo) model alongside the pipeline, as they are tightly coupled.
+   * Wire `clap` argument parsing in `bdlux` (positional input path, `--output`, `--apply`, `--pipeline`).
+   * *Verified when*: `$ bdlux --headless test.jpg --output out.png --apply brightness:0.5` produces a visibly brighter output image.
+3. **UI Prototype Spike** *(Go/No-Go Gate)*:
+   * Build a minimal `iced` application in `bdlux` that renders a single GPU-processed texture into a window.
+   * Validate the `wgpu` context sharing approach between `bdlux_core` and `iced`'s renderer.
+   * *Verified when*: A window displays a loaded image with a brightness adjustment applied. This phase determines the integration strategy for all subsequent UI work.
+4. **Full UI Integration**:
+   * Implement file open/save dialogs (`rfd` crate).
+   * Construct the sidebar layout with slider controls for each V1 transformation.
+   * Wire slider state changes to the transformation pipeline in `bdlux_core`.
+   * Bind keyboard shortcuts for undo/redo (Cmd+Z / Cmd+Shift+Z).
+   * *Verified when*: A user can open an image, adjust brightness/contrast/saturation via sliders, undo/redo changes, and save the result.
+5. **V1 Completion & Polish**:
+   * Implement remaining V1 shaders: Contrast, Saturation, Grayscale, Invert.
+   * End-to-end testing of both CLI and UI workflows.
+   * *Verified when*: All V1 transformations work in both headless CLI and interactive UI modes.
 
 **Future Considerations (Selection and Extensibility)**:
 When dramatic UI layouts are requested, only the UI layer in `bdlux` requires modification, while the transformation logic inside `bdlux_core` remains perfectly sealed and safe. Building Region-Selection tools natively fits into this structure; a user selection merely provides an alpha-channel Mask texture to the Core Library. Because of the headless/binary separation constraints, this capability to apply transformations strictly against a mask will inherently be supported visually in the UI and pragmatically across the Command Line (e.g. passing a bounding box logic payload to the batch processor).
