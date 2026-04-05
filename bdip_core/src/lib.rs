@@ -1,4 +1,5 @@
 pub mod error;
+pub mod gpu;
 pub mod history;
 pub mod io;
 pub mod transformation;

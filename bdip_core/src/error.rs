@@ -13,4 +13,7 @@ pub enum BdipError {
 
     #[error("Invalid transformation parameter: {0}")]
     InvalidParameter(String),
+
+    #[error("GPU error: {0}")]
+    Gpu(String),
 }

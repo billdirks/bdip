@@ -11,3 +11,7 @@
   `test_save_unsupported_extension` rather than `test_save_errors`).
 - Share setup code using helper functions (e.g., `create_test_image()`) rather than repeating
   setup logic across multiple tests.
+- Adhere strictly to the "Testing Pyramid" philosophy: Maximize heavily isolated, fast-executing
+  unit tests. Minimize slow, brittle integration and end-to-end (e2e) tests. Use unit tests strictly
+  for permutations and edge-case validation, reserving e2e tests only for integration "glue" 
+  verification (e.g., passing data across boundaries).
