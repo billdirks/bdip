@@ -69,7 +69,7 @@ pub(crate) fn calculate_padded_bytes_per_row(img_width: u32, bytes_per_pixel: u3
 }
 
 pub(crate) fn clamp_f32_to_u8(val: f32) -> u8 {
-    (val.max(0.0).min(1.0) * 255.0).round() as u8
+    (val.clamp(0.0, 1.0) * 255.0).round() as u8
 }
 
 pub fn download_texture(device: &Device, queue: &Queue, texture: &wgpu::Texture, img_width: u32, img_height: u32) -> Result<RgbaImage, crate::error::BdipError> {
@@ -124,7 +124,7 @@ pub fn download_texture(device: &Device, queue: &Queue, texture: &wgpu::Texture,
     // Poll the device in a blocking way
     device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
     
-    if let Err(_) = rx.recv().unwrap() {
+    if rx.recv().unwrap().is_err() {
         return Err(crate::error::BdipError::Gpu("Failed to map buffer for reading".into()));
     }
 

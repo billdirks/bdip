@@ -25,18 +25,18 @@ fn main() -> anyhow::Result<()> {
         let output_path = args.output.ok_or_else(|| anyhow::anyhow!("--output is required in headless mode"))?;
         
         let mut transforms = Vec::new();
-        for t in args.apply {
-            transforms.push(parse_transform(&t)?);
-        }
 
         if let Some(pipeline_path) = args.pipeline {
             let config = std::fs::read_to_string(pipeline_path)?;
             for line in config.lines() {
                 let s = line.trim();
-                // ignore empty lines and comments
                 if !s.is_empty() && !s.starts_with('#') {
                     transforms.push(parse_transform(s)?);
                 }
+            }
+        } else {
+            for t in args.apply {
+                transforms.push(parse_transform(&t)?);
             }
         }
 
