@@ -1,0 +1,10 @@
+[alias]
+
+# Start the UI prototype Spike
+ui = "run -p bdip"
+
+# Run rigorous static analysis (as required by .cursorrules)
+lint = "clippy --workspace --all-targets --all-features"
+
+# Format all code securely (as required by .cursorrules)
+format = "fmt --all"

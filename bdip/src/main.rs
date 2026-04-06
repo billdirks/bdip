@@ -3,6 +3,7 @@ use bdip_core::{Transformation, gpu::engine::GpuEngine, gpu::pipeline::Renderer}
 use clap::Parser;
 
 mod cli;
+mod ui_spike;
 
 fn parse_transform(s: &str) -> anyhow::Result<Transformation> {
     let parts: Vec<&str> = s.split(':').collect();
@@ -47,8 +48,11 @@ fn main() -> anyhow::Result<()> {
             }
         }
 
-        println!("Running headless processing on {:?}", args.input);
-        let mut img = bdip_core::io::load_image(&args.input)?;
+        let input_path = args
+            .input
+            .ok_or_else(|| anyhow::anyhow!("An input file is required in headless mode"))?;
+        println!("Running headless processing on {:?}", input_path);
+        let mut img = bdip_core::io::load_image(&input_path)?;
 
         let engine = GpuEngine::new()?;
         let renderer = Renderer::new(&engine);
@@ -79,7 +83,8 @@ fn main() -> anyhow::Result<()> {
         bdip_core::io::save_image(&img, &output_path)?;
         println!("Saved output to {:?}", output_path);
     } else {
-        println!("GUI Mode is not implemented yet. Please use --headless.");
+        println!("Starting UI Spike...");
+        ui_spike::run(args.input)?;
     }
 
     Ok(())

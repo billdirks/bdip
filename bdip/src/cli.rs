@@ -4,8 +4,8 @@ use std::path::PathBuf;
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 pub struct Cli {
-    /// Input image file path
-    pub input: PathBuf,
+    /// Input image file path (optional for UI mode)
+    pub input: Option<PathBuf>,
 
     /// Run the application in headless mode without UI
     #[arg(long, default_value_t = false)]

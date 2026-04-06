@@ -43,5 +43,20 @@ This document tracks known architectural shortcuts, generic naming, and structur
 - **Priority:** Low for V1 (Apple Silicon target, typical image sizes are fast). Revisit before
   shipping on non-Apple or supporting very large (50MP+) images.
 
+## Image I/O (Precision)
+
+### [IMMEDIATE FIX] 8-bit Downsampling Trap
+- **Location:** `bdip_core/src/io.rs` (`load_image`)
+- **Current Pattern:** The `load_image` function explicitly calls `img.to_rgba8()`.
+- **Risk:** This is a "silent quality killer." High-end DSLR and mirrorless camera exports (16-bit
+  TIFFs) are immediately downsampled to 8-bit integers upon loading. This destroys the extra
+  precision and dynamic range before the GPU pipeline even starts, defeating the purpose of our
+  internal `Rgba16Float` engine.
+- **Suggested Remediation:** Update `load_image` to use `to_rgba16()`. This will require updating
+  the `bdip_core` GPU texture upload logic to accept `u16` buffers and correctly map them to the
+  `wgpu` texture format without narrowing the data.
+- **Priority:** **High / Immediate.** This should be resolved before Phase 4 full UI integration to
+  ensure we are actually delivering the promised "commercial-beating" image quality.
+
 ## Future Considerations
 *(Add new items here as they are discovered during development)*
