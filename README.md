@@ -37,9 +37,15 @@ cargo ui-release -- path/to/your/image.jpg
 ```
 
 **Run the CLI (Headless processing)**
-Loads a specific image and runs it through the core pipeline without starting the UI:
+Processes an image through the core pipeline without starting the UI. Requires an input path,
+`--output`, and at least one `--apply` transformation:
 ```bash
-cargo run -p bdip -- path/to/your/image.jpg
+cargo headless path/to/your/image.jpg --output out.png --apply brightness:0.5
+```
+You can also chain multiple transformations or use a pipeline file:
+```bash
+cargo headless input.jpg --output out.png --apply brightness:0.3 --apply brightness:0.2
+cargo headless input.jpg --output out.png --pipeline transforms.txt
 ```
 
 ### Development Commands

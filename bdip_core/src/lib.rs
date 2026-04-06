@@ -6,4 +6,5 @@ pub mod transformation;
 
 pub use error::BdipError;
 pub use history::HistoryManager;
+pub use image;
 pub use transformation::Transformation;

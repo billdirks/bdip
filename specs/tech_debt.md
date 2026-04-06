@@ -27,7 +27,7 @@ This document tracks known architectural shortcuts, generic naming, and structur
 
 ## UI Responsiveness
 
-### Synchronous Disk I/O Blocks UI Initialization
+### [PHASE 4 REQUIREMENT] Synchronous Disk I/O Blocks UI Initialization
 - **Location:** `bdip/src/ui_spike.rs` (`SpikeApp::new`)
 - **Current Pattern:** The `io::load_image` function is called directly within the application
   initialization logic on the main thread.
@@ -39,6 +39,20 @@ This document tracks known architectural shortcuts, generic naming, and structur
   non-blocking background `iced::Task`. Once the background worker yields the loaded image, pass it 
   back to the event loop natively via an `Update` message to render the scene.
 - **Priority:** **High.** Mandatory for delivering a seamless, native-feeling user experience.
+
+### [PHASE 4 REQUIREMENT] Panic-on-Failure in Application Constructor
+- **Location:** `bdip/src/ui_spike.rs` (`SpikeApp::new`)
+- **Current Pattern:** The constructor uses `expect()` for all fallible operations (image loading,
+  GPU init, texture download). The `iced` application constructor returns `(Self, Task<Message>)`,
+  not a `Result`, so there is no way to propagate errors without panicking.
+- **Risk:** An invalid file path, missing GPU, or readback failure crashes the process with a stack
+  trace before the window appears. Acceptable in a throwaway spike, unacceptable in a shipping app.
+- **Suggested Remediation:** When building the Phase 4 `iced` app, the constructor should return
+  immediately with an empty/loading state. All fallible work (I/O, GPU init, pipeline execution)
+  should be dispatched via `iced::Task` and results communicated back through `Message` variants
+  that carry `Result` payloads. Errors should be surfaced via a UI error dialog, not a panic.
+- **Priority:** **High.** Must be addressed in the Phase 4 app design, not retroactively in the
+  spike.
 
 ### Synchronous Readback Blocks UI Thread
 - **Location:** `bdip_core/src/gpu/texture.rs` (`download_texture`), call sites in `bdip/src/`
@@ -72,7 +86,7 @@ This document tracks known architectural shortcuts, generic naming, and structur
 
 ## Image I/O (Precision)
 
-### [IMMEDIATE FIX] 8-bit Downsampling Trap
+### [PHASE 4 GATE] 8-bit Downsampling Trap
 - **Location:** `bdip_core/src/io.rs` (`load_image`)
 - **Current Pattern:** The `load_image` function explicitly calls `img.to_rgba8()`.
 - **Risk:** This is a "silent quality killer." High-end DSLR and mirrorless camera exports (16-bit
@@ -84,6 +98,24 @@ This document tracks known architectural shortcuts, generic naming, and structur
   `wgpu` texture format without narrowing the data.
 - **Priority:** **High / Immediate.** This should be resolved before Phase 4 full UI integration to
   ensure we are actually delivering the promised "commercial-beating" image quality.
+
+### [PHASE 4 GATE] Missing sRGB ↔ Linear Color Space Conversion
+- **Location:** `bdip_core/src/gpu/texture.rs` (`upload_texture`, `download_texture`)
+- **Current Pattern:** `upload_texture` divides `u8` values by `255.0` to produce `f16` values, and
+  `download_texture` multiplies `f32` values by `255.0` to produce `u8`. Both treat the conversion
+  as a simple linear scaling.
+- **Risk:** sRGB-encoded pixel values are not linearly proportional to light intensity. A pixel
+  value of `128` in sRGB represents ~21.5% luminance, not 50%. Without applying the sRGB transfer
+  function during upload (sRGB → linear) and download (linear → sRGB), all transformations operate
+  on gamma-encoded values. The errors partially cancel for brightness (making the result "look okay"),
+  but will produce visibly incorrect results for contrast, saturation, and any transformation that
+  relies on perceptually accurate luminance relationships.
+- **Suggested Remediation:** Apply the sRGB → linear transfer function during upload and the inverse
+  during download. The cheapest GPU-native approach is to use `Rgba8UnormSrgb` as the upload texture
+  format, which causes the hardware to perform the gamma conversion automatically at zero cost.
+  Alternatively, implement the conversion in the upload/download CPU code or in a dedicated shader.
+- **Priority:** **High / Phase 4 Gate.** This must be resolved before Phase 4 adds contrast,
+  saturation, and other transformations. Incorrect color math compounds with every new operation.
 
 ## Future Considerations
 *(Add new items here as they are discovered during development)*

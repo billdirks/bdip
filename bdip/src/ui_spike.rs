@@ -35,8 +35,8 @@ impl SpikeApp {
             bdip_core::io::load_image(&path).expect("Failed to load image via UI spike")
         } else {
             // Generate an 800x600 test image (gradient pattern)
-            ::image::RgbaImage::from_fn(800, 600, |x, y| {
-                ::image::Rgba([(x % 255) as u8, (y % 255) as u8, 128, 255])
+            bdip_core::image::RgbaImage::from_fn(800, 600, |x, y| {
+                bdip_core::image::Rgba([(x % 255) as u8, (y % 255) as u8, 128, 255])
             })
         };
 
@@ -45,6 +45,7 @@ impl SpikeApp {
         let renderer = Renderer::new(&engine);
 
         let current_texture = upload_texture(&engine.device, &engine.queue, &loaded_image);
+        println!("Applying hardcoded brightness: 0.5");
         let processed_texture = renderer.apply_brightness(&engine, &current_texture, 0.5);
 
         let (width, height) = loaded_image.dimensions();

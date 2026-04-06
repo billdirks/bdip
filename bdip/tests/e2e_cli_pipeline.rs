@@ -96,3 +96,25 @@ fn test_cli_pipeline_flow() {
         INITIAL_LUMINANCE
     );
 }
+
+#[test]
+fn test_cli_headless_without_input_fails() {
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let out_path = tmp_dir.path().join("should_not_exist.png");
+
+    let cargo_bin = assert_cmd::cargo::cargo_bin("bdip");
+    let output = Command::new(cargo_bin)
+        .arg("--headless")
+        .arg("--output")
+        .arg(&out_path)
+        .arg("--apply")
+        .arg("brightness:0.5")
+        .output()
+        .expect("Failed to execute bdip");
+
+    assert!(
+        !output.status.success(),
+        "Headless mode without an input file should fail"
+    );
+    assert!(!out_path.exists());
+}
