@@ -25,7 +25,20 @@ This document tracks known architectural shortcuts, generic naming, and structur
 - **Refactor Goal:** Prevent a "Monster Initialization" bottleneck. As the application grows to support dozens of transformations, globally compiling all shaders and building all pipelines at startup will aggressively bottleneck application launch times and waste GPU resources for transformations the user may never actually click.
 - **Suggested Remediation:** Refactor the `Renderer` (or create a dedicated `PipelineCache`) to implement a **Lazy-Loading** pattern. Shaders and their corresponding pipelines should safely JIT (Just-In-Time) compile upon their first invocation during an `apply_*` call, and then be stored in a HashMap/cache for rapid re-use.
 
-## UI Responsiveness (GPU Pipeline)
+## UI Responsiveness
+
+### Synchronous Disk I/O Blocks UI Initialization
+- **Location:** `bdip/src/ui_spike.rs` (`SpikeApp::new`)
+- **Current Pattern:** The `io::load_image` function is called directly within the application
+  initialization logic on the main thread.
+- **Risk:** Decoding massive DSLR imagery (e.g. 100+ MB TIFFs) is CPU-intensive. Running it
+  synchronously entirely blocks the UI framework event loop from launching. The user sees no window 
+  and the app appears "frozen" or unresponsive for up to a full second while booting/loading an image.
+- **Suggested Remediation:** Return the `iced::Application` state immediately with an empty "Loading" 
+  UI (e.g., `None` for the `image_handle`). Dispatch the heavy `io::load_image` execution as a 
+  non-blocking background `iced::Task`. Once the background worker yields the loaded image, pass it 
+  back to the event loop natively via an `Update` message to render the scene.
+- **Priority:** **High.** Mandatory for delivering a seamless, native-feeling user experience.
 
 ### Synchronous Readback Blocks UI Thread
 - **Location:** `bdip_core/src/gpu/texture.rs` (`download_texture`), call sites in `bdip/src/`
@@ -42,6 +55,20 @@ This document tracks known architectural shortcuts, generic naming, and structur
   or external async runtime is required.
 - **Priority:** Low for V1 (Apple Silicon target, typical image sizes are fast). Revisit before
   shipping on non-Apple or supporting very large (50MP+) images.
+
+### CPU Readback Pixel Unpadding Loop (Debug Bottleneck)
+- **Location:** `bdip_core/src/gpu/texture.rs` (`download_texture`)
+- **Current Pattern:** The readback function uses a manual, double `for` loop on the CPU to iterate
+  over every pixel. It decodes bytes to `f16`, converts to `f32`, multiplies/clamps to 8-bit, and
+  writes to an `RgbaImage` to avoid `wgpu` row padding constraints.
+- **Risk:** While fast in `release` mode due to SIMD vectorization, this unoptimized floating-point
+  loop causes a massive ~2,000ms latency hit in `debug` mode for 24MP images, degrading developer
+  iteration speed. Even in `release` mode, CPU-side mathematical conversions waste battery.
+- **Suggested Remediation:** Implement a final "Presentation" compute shader pass on the GPU. This
+  shader should read the final `Rgba16Float` texture, efficiently convert it to `u8`, and write it
+  directly to an unpadded `Rgba8Unorm` buffer. The CPU can then simply run an instantaneous, 
+  zero-cost memory copy (`bytemuck::cast_slice`) to hand it to the UI.
+- **Priority:** **Medium.** Crucial for developer experience and maximum macOS battery efficiency.
 
 ## Image I/O (Precision)
 

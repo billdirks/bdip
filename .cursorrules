@@ -21,3 +21,10 @@
   unit tests. Minimize slow, brittle integration and end-to-end (e2e) tests. Use unit tests strictly
   for permutations and edge-case validation, reserving e2e tests only for integration "glue" 
   verification (e.g., passing data across boundaries).
+
+# Documentation & Tone
+- **Objective but Explanatory:** Technical documentation should be readable and provide necessary
+  context, not just a terse list of commands. It is good to explain *why* a command is run or *how*
+  a system works to aid understanding. However, keep the language objective. Avoid flowery,
+  self-aggrandizing, or sales-like adjectives (e.g., "massive," "flawless," "heavily leveraging")
+  that do not add to technical clarity. Present mechanics as neutral architectural details.

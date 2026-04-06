@@ -1,7 +1,10 @@
 [alias]
 
-# Start the UI prototype Spike
+# Start the UI prototype Spike (Debug mode)
 ui = "run -p bdip"
+
+# Start the UI prototype Spike (Release mode for accurate performance/latency testing)
+ui-release = "run -p bdip --release"
 
 # Run rigorous static analysis (as required by .cursorrules)
 lint = "clippy --workspace --all-targets --all-features"

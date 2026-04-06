@@ -1,12 +1,12 @@
 # bdip — High-Performance Image Processor
 
 A GPU-accelerated image processing application built in Rust, targeting macOS (Metal/WebGPU). The
-project's primary goal is to achieve sub-20ms rendering latency for 24MP images on Apple Silicon
-by heavily leveraging floating-point precision on the GPU.
+project's goal is to achieve sub-20ms rendering latency for 24MP images on Apple Silicon by
+utilizing floating-point precision on the GPU.
 
-## Architecture Structure
+## Architecture
 
-The project is natively structured as a Cargo workspace:
+The project is structured as a Cargo workspace:
 - **`bdip_core`**: The headless core library. Contains the `wgpu` transformation engine, error
   handling, history logic, and file I/O operations.
 - **`bdip`**: The application binary. Serves as both a headless CLI tool for batch processing
@@ -29,16 +29,22 @@ You can also pass a specific image path to test the UI with real data:
 cargo ui -- path/to/your/image.jpg
 ```
 
+**Run the UI (Performance Testing)**
+To test pipeline performance without the latency penalty of Rust's debug mode, use the release
+alias. This applies optimizations such as SIMD vectorization to the CPU Bridge:
+```bash
+cargo ui-release -- path/to/your/image.jpg
+```
+
 **Run the CLI (Headless processing)**
 Loads a specific image and runs it through the core pipeline without starting the UI:
 ```bash
 cargo run -p bdip -- path/to/your/image.jpg
 ```
 
-### Development & Workflows
+### Development Commands
 
-To satisfy the strict standards in our `.cursorrules`, you should run the following alias commands
-before finalizing any edits:
+Run the following commands before finalizing any edits to ensure code quality:
 
 **1. Code Formatting**
 Ensure all Rust code is neatly formatted:
@@ -46,7 +52,7 @@ Ensure all Rust code is neatly formatted:
 cargo format
 ```
 
-**2. Static Analysis (Linting)**
+**2. Static Analysis **
 Check for warnings, clippy issues, and unoptimized patterns across the entire workspace:
 ```bash
 cargo lint
