@@ -25,5 +25,23 @@ This document tracks known architectural shortcuts, generic naming, and structur
 - **Refactor Goal:** Prevent a "Monster Initialization" bottleneck. As the application grows to support dozens of transformations, globally compiling all shaders and building all pipelines at startup will aggressively bottleneck application launch times and waste GPU resources for transformations the user may never actually click.
 - **Suggested Remediation:** Refactor the `Renderer` (or create a dedicated `PipelineCache`) to implement a **Lazy-Loading** pattern. Shaders and their corresponding pipelines should safely JIT (Just-In-Time) compile upon their first invocation during an `apply_*` call, and then be stored in a HashMap/cache for rapid re-use.
 
+## UI Responsiveness (GPU Pipeline)
+
+### Synchronous Readback Blocks UI Thread
+- **Location:** `bdip_core/src/gpu/texture.rs` (`download_texture`), call sites in `bdip/src/`
+- **Current Pattern:** `download_texture()` calls `device.poll(wait_indefinitely)`, which blocks the
+  calling thread until the GPU finishes and the PCIe transfer (on discrete GPUs) completes. If called
+  on the UI thread, the window freezes for the duration of the operation.
+- **Risk:** On Apple Silicon (UMA) this is 1–4 ms and imperceptible. On discrete GPU hardware with
+  large images (24MP+), it can approach 15–20 ms per edit — noticeable as stutter during rapid edits.
+- **Suggested Remediation:** Move the full pipeline invocation (compute shader dispatch +
+  `download_texture`) onto a background thread using `std::thread::spawn`. `wgpu::Device` and
+  `wgpu::Queue` are `Send + Sync` and can be moved freely. Send the resulting `RgbaImage` back to
+  the UI thread via an `std::sync::mpsc` channel. The UI thread polls the channel and refreshes the
+  image widget when the result arrives, remaining fully responsive during processing. No `async/await`
+  or external async runtime is required.
+- **Priority:** Low for V1 (Apple Silicon target, typical image sizes are fast). Revisit before
+  shipping on non-Apple or supporting very large (50MP+) images.
+
 ## Future Considerations
 *(Add new items here as they are discovered during development)*

@@ -31,10 +31,10 @@ The project is structured as a **Cargo workspace** with two independent crates (
 ### Internal Pixel Format & Color Space
 The engine operates internally on **`Rgba16Float`** textures in **linear color space**. Input images are converted from sRGB gamma space on upload to the GPU; output is converted back to sRGB for display and file export. This 16-bit floating-point format preserves precision across chained transformations (eliminating banding artifacts) and provides headroom above 1.0 for intermediate calculations without clamping. The sRGB↔linear conversion is handled automatically by GPU hardware at zero performance cost.
 
-### UI Framework Evaluation (The Decision: `iced`)
-A top-priority requirement is that the UI must be modern, beautiful, and extremely flexible for dramatic layout redesigns. `iced` (Declarative / Elm Architecture) is chosen over `egui` (Immediate Mode) or Tauri (Webview). 
+### UI Framework Evaluation
+A top-priority requirement is that the UI must be modern, beautiful, and extremely flexible for dramatic layout redesigns. Declarative frameworks like `iced` (Elm Architecture) or `slint` (Custom DSL) are the primary candidates over immediate mode (`egui`) or webviews (`Tauri`).
 
-Because it is declarative, `iced` accommodates sweeping visual changes and advanced styling cleanly. Most importantly, `iced` renders using `wgpu` internally. This allows the Core Library's `wgpu` pipeline and the UI window device to natively share memory, processing everything in a unified, instantly "snappy" environment with absolutely no Swift/C++ shims or IPC barriers.
+To ensure `bdip_core` remains an entirely uncoupled library, the UI binary integrates with the core GPU engine via a **CPU Bridge**. This means that instead of attempting to perfectly align `wgpu` versions to share a single GPU context, the core library processes textures on its own isolated `wgpu` device and downloads the final processed frame into standard CPU host-memory. It then returns a standard `RgbaImage` struct to the UI binary, which the UI framework seamlessly re-uploads to its own rendering surface. On Apple Silicon, this host-memory handoff takes ~1-4ms, rendering the performance cost negligible. This grants complete freedom to choose a UI framework based on state-management and styling capabilities, rather than being forced to match a specific `wgpu` version dependency.
 
 ## 4. Key Workflows & Features
 
@@ -68,10 +68,10 @@ Transformations are stored as lightweight standardized structs (e.g., `Brightnes
    * Build the transformation stack and history (undo/redo) model alongside the pipeline, as they are tightly coupled.
    * Wire `clap` argument parsing in `bdip` (positional input path, `--output`, `--apply`, `--pipeline`).
    * *Verified when*: `$ bdip --headless test.jpg --output out.png --apply brightness:0.5` produces a visibly brighter output image.
-3. **UI Prototype Spike** *(Go/No-Go Gate)*:
-   * Build a minimal `iced` application in `bdip` that renders a single GPU-processed texture into a window.
-   * Validate the `wgpu` context sharing approach between `bdip_core` and `iced`'s renderer.
-   * *Verified when*: A window displays a loaded image with a brightness adjustment applied. This phase determines the integration strategy for all subsequent UI work.
+3. **UI Prototype Spike**:
+   * Build a minimal application window in `bdip` using the chosen UI framework (e.g., `iced` or `slint`).
+   * Validate the **CPU Bridge** integration strategy: reading an `RgbaImage` from `bdip_core`'s headless pipeline and displaying it in a standard image widget.
+   * *Verified when*: A window successfully displays a loaded image with a brightness adjustment applied, validating the framework's ergonomics and rendering pipeline before committing to full UI controls.
 4. **Full UI Integration**:
    * Implement file open/save dialogs (`rfd` crate).
    * Construct the sidebar layout with slider controls for each V1 transformation.
