@@ -1,10 +1,10 @@
 #[derive(Debug, Clone, PartialEq)]
 pub enum Transformation {
-    Brightness(f32),    // -1.0 (full dark) to 1.0 (full bright)
-    Contrast(f32),      // -1.0 (flat gray) to 1.0 (max contrast)
-    Saturation(f32),    // -1.0 (grayscale) to 1.0 (max saturation)
-    Grayscale,          // No parameters — converts to luminance
-    Invert,             // No parameters — inverts all channels
+    Brightness(f32), // -1.0 (full dark) to 1.0 (full bright)
+    Contrast(f32),   // -1.0 (flat gray) to 1.0 (max contrast)
+    Saturation(f32), // -1.0 (grayscale) to 1.0 (max saturation)
+    Grayscale,       // No parameters — converts to luminance
+    Invert,          // No parameters — inverts all channels
 }
 
 #[cfg(test)]

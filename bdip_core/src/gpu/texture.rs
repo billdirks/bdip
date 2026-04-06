@@ -1,7 +1,11 @@
-use wgpu::{Device, Extent3d, TexelCopyTextureInfo, TexelCopyBufferLayout, TexelCopyBufferInfo, Origin3d, Queue, TextureAspect, TextureDescriptor, TextureDimension, TextureFormat, TextureUsages};
-use image::RgbaImage;
-use half::f16;
 use bytemuck::{Pod, Zeroable};
+use half::f16;
+use image::RgbaImage;
+use wgpu::{
+    Device, Extent3d, Origin3d, Queue, TexelCopyBufferInfo, TexelCopyBufferLayout,
+    TexelCopyTextureInfo, TextureAspect, TextureDescriptor, TextureDimension, TextureFormat,
+    TextureUsages,
+};
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
@@ -14,7 +18,7 @@ pub struct PixelF16 {
 
 pub fn upload_texture(device: &Device, queue: &Queue, img: &RgbaImage) -> wgpu::Texture {
     let (width, height) = img.dimensions();
-    
+
     // Convert Rgba8 to f16 arrays.
     let mut float_data: Vec<PixelF16> = Vec::with_capacity((width * height) as usize);
     for pixel in img.pixels() {
@@ -39,7 +43,10 @@ pub fn upload_texture(device: &Device, queue: &Queue, img: &RgbaImage) -> wgpu::
         sample_count: 1,
         dimension: TextureDimension::D2,
         format: TextureFormat::Rgba16Float,
-        usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST | TextureUsages::COPY_SRC | TextureUsages::STORAGE_BINDING,
+        usage: TextureUsages::TEXTURE_BINDING
+            | TextureUsages::COPY_DST
+            | TextureUsages::COPY_SRC
+            | TextureUsages::STORAGE_BINDING,
         view_formats: &[],
     });
 
@@ -72,13 +79,19 @@ pub(crate) fn clamp_f32_to_u8(val: f32) -> u8 {
     (val.clamp(0.0, 1.0) * 255.0).round() as u8
 }
 
-pub fn download_texture(device: &Device, queue: &Queue, texture: &wgpu::Texture, img_width: u32, img_height: u32) -> Result<RgbaImage, crate::error::BdipError> {
+pub fn download_texture(
+    device: &Device,
+    queue: &Queue,
+    texture: &wgpu::Texture,
+    img_width: u32,
+    img_height: u32,
+) -> Result<RgbaImage, crate::error::BdipError> {
     // Reading from WGPU requires creating a staging buffer.
-    
+
     // WebGPU requires bytes_per_row to be a multiple of 256.
     let byte_size = 8; // Rgba16Float -> 8 bytes per pixel
     let padded_bytes_per_row = calculate_padded_bytes_per_row(img_width, byte_size);
-    
+
     let buffer_size = (padded_bytes_per_row * img_height) as wgpu::BufferAddress;
 
     let staging_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -89,7 +102,8 @@ pub fn download_texture(device: &Device, queue: &Queue, texture: &wgpu::Texture,
     });
 
     // Encode a command to copy texture to staging buffer
-    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+    let mut encoder =
+        device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
     encoder.copy_texture_to_buffer(
         TexelCopyTextureInfo {
             texture,
@@ -116,23 +130,25 @@ pub fn download_texture(device: &Device, queue: &Queue, texture: &wgpu::Texture,
     // Map the buffer securely via `pollster` blocking
     let buffer_slice = staging_buffer.slice(..);
     let (tx, rx) = std::sync::mpsc::channel();
-    
+
     buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
         tx.send(result).unwrap();
     });
-    
+
     // Poll the device in a blocking way
     device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
-    
+
     if rx.recv().unwrap().is_err() {
-        return Err(crate::error::BdipError::Gpu("Failed to map buffer for reading".into()));
+        return Err(crate::error::BdipError::Gpu(
+            "Failed to map buffer for reading".into(),
+        ));
     }
 
     let data = buffer_slice.get_mapped_range();
-    
+
     // Decode bytes back to floats, then clamp to 0-255 u8.
     let mut out_img_buf = image::ImageBuffer::new(img_width, img_height);
-    
+
     for y in 0..img_height {
         for x in 0..img_width {
             let offset = (y * padded_bytes_per_row + x * byte_size) as usize;
@@ -142,15 +158,19 @@ pub fn download_texture(device: &Device, queue: &Queue, texture: &wgpu::Texture,
             let b_f16 = f16::from_bits(u16::from_ne_bytes([data[offset + 4], data[offset + 5]]));
             let a_f16 = f16::from_bits(u16::from_ne_bytes([data[offset + 6], data[offset + 7]]));
 
-            out_img_buf.put_pixel(x, y, image::Rgba([
-                clamp_f32_to_u8(r_f16.to_f32()),
-                clamp_f32_to_u8(g_f16.to_f32()),
-                clamp_f32_to_u8(b_f16.to_f32()),
-                clamp_f32_to_u8(a_f16.to_f32()),
-            ]));
+            out_img_buf.put_pixel(
+                x,
+                y,
+                image::Rgba([
+                    clamp_f32_to_u8(r_f16.to_f32()),
+                    clamp_f32_to_u8(g_f16.to_f32()),
+                    clamp_f32_to_u8(b_f16.to_f32()),
+                    clamp_f32_to_u8(a_f16.to_f32()),
+                ]),
+            );
         }
     }
-    
+
     drop(data);
     staging_buffer.unmap();
 

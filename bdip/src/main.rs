@@ -1,6 +1,6 @@
-use clap::Parser;
+use bdip_core::gpu::texture::{download_texture, upload_texture};
 use bdip_core::{Transformation, gpu::engine::GpuEngine, gpu::pipeline::Renderer};
-use bdip_core::gpu::texture::{upload_texture, download_texture};
+use clap::Parser;
 
 mod cli;
 
@@ -9,12 +9,17 @@ fn parse_transform(s: &str) -> anyhow::Result<Transformation> {
     match parts[0].to_lowercase().as_str() {
         "brightness" => {
             if parts.len() != 2 {
-                return Err(anyhow::anyhow!("Brightness requires a float value. E.g., brightness:0.5"));
+                return Err(anyhow::anyhow!(
+                    "Brightness requires a float value. E.g., brightness:0.5"
+                ));
             }
             let val = parts[1].parse::<f32>()?;
             Ok(Transformation::Brightness(val))
         }
-        _ => Err(anyhow::anyhow!("Unsupported or unknown transformation: {}", parts[0])),
+        _ => Err(anyhow::anyhow!(
+            "Unsupported or unknown transformation: {}",
+            parts[0]
+        )),
     }
 }
 
@@ -22,8 +27,10 @@ fn main() -> anyhow::Result<()> {
     let args = cli::Cli::parse();
 
     if args.headless {
-        let output_path = args.output.ok_or_else(|| anyhow::anyhow!("--output is required in headless mode"))?;
-        
+        let output_path = args
+            .output
+            .ok_or_else(|| anyhow::anyhow!("--output is required in headless mode"))?;
+
         let mut transforms = Vec::new();
 
         if let Some(pipeline_path) = args.pipeline {
@@ -61,11 +68,16 @@ fn main() -> anyhow::Result<()> {
         }
 
         let (width, height) = img.dimensions();
-        img = download_texture(&engine.device, &engine.queue, &current_texture, width, height)?;
-        
+        img = download_texture(
+            &engine.device,
+            &engine.queue,
+            &current_texture,
+            width,
+            height,
+        )?;
+
         bdip_core::io::save_image(&img, &output_path)?;
         println!("Saved output to {:?}", output_path);
-        
     } else {
         println!("GUI Mode is not implemented yet. Please use --headless.");
     }

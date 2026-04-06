@@ -55,7 +55,7 @@ impl HistoryManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_initial_state() {
         let hm = HistoryManager::new();
@@ -76,10 +76,10 @@ mod tests {
         let mut hm = HistoryManager::new();
         hm.apply(Transformation::Grayscale);
         hm.apply(Transformation::Invert);
-        
+
         assert_eq!(hm.undo(), Some(()));
         assert_eq!(hm.applied_transforms().len(), 1);
-        
+
         assert_eq!(hm.redo(), Some(()));
         assert_eq!(hm.applied_transforms().len(), 2);
     }
@@ -92,7 +92,7 @@ mod tests {
         hm.apply(Transformation::Contrast(0.8));
         assert_eq!(hm.redo(), None);
     }
-    
+
     #[test]
     fn test_undo_empty_stack() {
         let mut hm = HistoryManager::new();

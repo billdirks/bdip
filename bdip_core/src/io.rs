@@ -16,7 +16,9 @@ pub fn save_image<P: AsRef<Path>>(image: &RgbaImage, path: P) -> Result<(), Bdip
         .extension()
         .and_then(|ext| ext.to_str())
         .map(|ext| ext.to_lowercase())
-        .ok_or_else(|| BdipError::UnsupportedFormat("Missing or invalid formatting extension".to_string()))?;
+        .ok_or_else(|| {
+            BdipError::UnsupportedFormat("Missing or invalid formatting extension".to_string())
+        })?;
 
     let format = ImageFormat::from_extension(&extension).ok_or_else(|| {
         BdipError::UnsupportedFormat(format!("Unsupported format for extension: {}", extension))
@@ -24,16 +26,20 @@ pub fn save_image<P: AsRef<Path>>(image: &RgbaImage, path: P) -> Result<(), Bdip
 
     if format == ImageFormat::Jpeg {
         let rgb_img = image::DynamicImage::ImageRgba8(image.clone()).into_rgb8();
-        rgb_img.save_with_format(path, format).map_err(BdipError::Image)
+        rgb_img
+            .save_with_format(path, format)
+            .map_err(BdipError::Image)
     } else {
-        image.save_with_format(path, format).map_err(BdipError::Image)
+        image
+            .save_with_format(path, format)
+            .map_err(BdipError::Image)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use image::{Rgba, ImageBuffer};
+    use image::{ImageBuffer, Rgba};
     use std::fs;
 
     fn create_test_image() -> RgbaImage {
@@ -50,10 +56,10 @@ mod tests {
     fn test_save_and_load_png() {
         let img = create_test_image();
         let path = setup_test_dir().join("test_save.png");
-        
+
         save_image(&img, &path).unwrap();
         let loaded = load_image(&path).unwrap();
-        
+
         assert_eq!(loaded.dimensions(), (64, 64));
         assert_eq!(loaded.get_pixel(0, 0), &Rgba([255, 0, 0, 255]));
     }
@@ -62,10 +68,10 @@ mod tests {
     fn test_save_and_load_jpg() {
         let img = create_test_image();
         let path = setup_test_dir().join("test_save.jpg");
-        
+
         save_image(&img, &path).unwrap();
         let loaded = load_image(&path).unwrap();
-        
+
         assert_eq!(loaded.dimensions(), (64, 64));
     }
 
@@ -73,7 +79,7 @@ mod tests {
     fn test_save_unsupported_extension() {
         let img = create_test_image();
         let path = setup_test_dir().join("test_invalid.fake");
-        
+
         let err = save_image(&img, &path).unwrap_err();
         assert!(matches!(err, BdipError::UnsupportedFormat(_)));
     }
@@ -81,7 +87,7 @@ mod tests {
     #[test]
     fn test_load_nonexistent_file() {
         let path = setup_test_dir().join("nonexistent_test.png");
-        
+
         let err = load_image(&path).unwrap_err();
         assert!(matches!(err, BdipError::Io(_)));
     }
