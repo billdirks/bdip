@@ -1,6 +1,11 @@
+# Workflow Constraints
+- Always read in all the `specs/*goal*` files before making any changes.
+- Always run `rustfmt` on all Rust files before being finished with edits (this can happen as
+  the last step).
+
 # General Constraints
-- All file formatting, including documentation and this rules file, must be hard-wrapped to a
-  maximum of 100 characters per line wherever practical.
+- Non-code file formatting, including documentation and this rules file, must be hard-wrapped to a
+  maximum of 100 characters per line wherever practical. Rust files are formatted by `rustfmt`.
 
 # Unit Testing Standards
 - All unit tests must be granular and test a single, isolated concept or behavior.
