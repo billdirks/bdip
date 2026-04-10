@@ -1,16 +1,16 @@
-use crate::BdipError;
-use image::{ImageFormat, RgbaImage};
+use crate::{BdipError, Rgba16Image};
+use image::ImageFormat;
 use std::path::Path;
 
-pub fn load_image<P: AsRef<Path>>(path: P) -> Result<RgbaImage, BdipError> {
+pub fn load_image<P: AsRef<Path>>(path: P) -> Result<Rgba16Image, BdipError> {
     let img = image::open(path).map_err(|e| match e {
         image::ImageError::IoError(io_err) => BdipError::Io(io_err),
         other => BdipError::Image(other),
     })?;
-    Ok(img.to_rgba8()) // Convert to Rgba8
+    Ok(img.to_rgba16()) // Convert to Rgba16
 }
 
-pub fn save_image<P: AsRef<Path>>(image: &RgbaImage, path: P) -> Result<(), BdipError> {
+pub fn save_image<P: AsRef<Path>>(image: &Rgba16Image, path: P) -> Result<(), BdipError> {
     let path = path.as_ref();
     let extension = path
         .extension()
@@ -24,16 +24,16 @@ pub fn save_image<P: AsRef<Path>>(image: &RgbaImage, path: P) -> Result<(), Bdip
         BdipError::UnsupportedFormat(format!("Unsupported format for extension: {}", extension))
     })?;
 
-    if format == ImageFormat::Jpeg {
-        let rgb_img = image::DynamicImage::ImageRgba8(image.clone()).into_rgb8();
-        rgb_img
-            .save_with_format(path, format)
-            .map_err(BdipError::Image)
-    } else {
-        image
-            .save_with_format(path, format)
-            .map_err(BdipError::Image)
+    match format {
+        ImageFormat::Jpeg => image::DynamicImage::ImageRgba16(image.clone())
+            .into_rgb8()
+            .save_with_format(path, format),
+        ImageFormat::Gif => image::DynamicImage::ImageRgba16(image.clone())
+            .into_rgba8()
+            .save_with_format(path, format),
+        _ => image.save_with_format(path, format),
     }
+    .map_err(BdipError::Image)
 }
 
 #[cfg(test)]
@@ -42,8 +42,8 @@ mod tests {
     use image::{ImageBuffer, Rgba};
     use std::fs;
 
-    fn create_test_image() -> RgbaImage {
-        ImageBuffer::from_pixel(64, 64, Rgba([255, 0, 0, 255]))
+    fn create_test_image() -> crate::Rgba16Image {
+        ImageBuffer::from_pixel(64, 64, Rgba([65535, 0, 0, 65535]))
     }
 
     fn setup_test_dir() -> std::path::PathBuf {
@@ -61,7 +61,7 @@ mod tests {
         let loaded = load_image(&path).unwrap();
 
         assert_eq!(loaded.dimensions(), (64, 64));
-        assert_eq!(loaded.get_pixel(0, 0), &Rgba([255, 0, 0, 255]));
+        assert_eq!(loaded.get_pixel(0, 0), &Rgba([65535, 0, 0, 65535]));
     }
 
     #[test]

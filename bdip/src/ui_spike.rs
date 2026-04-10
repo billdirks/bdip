@@ -35,8 +35,10 @@ impl SpikeApp {
             bdip_core::io::load_image(&path).expect("Failed to load image via UI spike")
         } else {
             // Generate an 800x600 test image (gradient pattern)
-            bdip_core::image::RgbaImage::from_fn(800, 600, |x, y| {
-                bdip_core::image::Rgba([(x % 255) as u8, (y % 255) as u8, 128, 255])
+            bdip_core::Rgba16Image::from_fn(800, 600, |x, y| {
+                let r = ((x % 255) as u16) * 257;
+                let g = ((y % 255) as u16) * 257;
+                bdip_core::image::Rgba([r, g, 32768, 65535])
             })
         };
 
@@ -66,8 +68,11 @@ impl SpikeApp {
             elapsed.as_secs_f64() * 1000.0
         );
 
-        let (out_width, out_height) = final_image.dimensions();
-        let pixels = final_image.into_raw();
+        let final_image_8bit =
+            bdip_core::image::DynamicImage::ImageRgba16(final_image).into_rgba8();
+
+        let (out_width, out_height) = final_image_8bit.dimensions();
+        let pixels = final_image_8bit.into_raw();
 
         app.image_handle = Some(image::Handle::from_rgba(out_width, out_height, pixels));
         (app, Task::none())

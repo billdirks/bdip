@@ -1,6 +1,6 @@
+use crate::Rgba16Image;
 use bytemuck::{Pod, Zeroable};
 use half::f16;
-use image::RgbaImage;
 use wgpu::{
     Device, Extent3d, Origin3d, Queue, TexelCopyBufferInfo, TexelCopyBufferLayout,
     TexelCopyTextureInfo, TextureAspect, TextureDescriptor, TextureDimension, TextureFormat,
@@ -16,17 +16,17 @@ pub struct PixelF16 {
     pub a: f16,
 }
 
-pub fn upload_texture(device: &Device, queue: &Queue, img: &RgbaImage) -> wgpu::Texture {
+pub fn upload_texture(device: &Device, queue: &Queue, img: &Rgba16Image) -> wgpu::Texture {
     let (width, height) = img.dimensions();
 
-    // Convert Rgba8 to f16 arrays.
+    // Convert Rgba16 to f16 arrays.
     let mut float_data: Vec<PixelF16> = Vec::with_capacity((width * height) as usize);
     for pixel in img.pixels() {
         float_data.push(PixelF16 {
-            r: f16::from_f32(pixel[0] as f32 / 255.0),
-            g: f16::from_f32(pixel[1] as f32 / 255.0),
-            b: f16::from_f32(pixel[2] as f32 / 255.0),
-            a: f16::from_f32(pixel[3] as f32 / 255.0),
+            r: f16::from_f32(pixel[0] as f32 / 65535.0),
+            g: f16::from_f32(pixel[1] as f32 / 65535.0),
+            b: f16::from_f32(pixel[2] as f32 / 65535.0),
+            a: f16::from_f32(pixel[3] as f32 / 65535.0),
         });
     }
 
@@ -75,8 +75,8 @@ pub(crate) fn calculate_padded_bytes_per_row(img_width: u32, bytes_per_pixel: u3
     (unpadded_bytes_per_row + align - 1) & !(align - 1)
 }
 
-pub(crate) fn clamp_f32_to_u8(val: f32) -> u8 {
-    (val.clamp(0.0, 1.0) * 255.0).round() as u8
+pub(crate) fn clamp_f32_to_u16(val: f32) -> u16 {
+    (val.clamp(0.0, 1.0) * 65535.0).round() as u16
 }
 
 pub fn download_texture(
@@ -85,7 +85,7 @@ pub fn download_texture(
     texture: &wgpu::Texture,
     img_width: u32,
     img_height: u32,
-) -> Result<RgbaImage, crate::error::BdipError> {
+) -> Result<Rgba16Image, crate::error::BdipError> {
     // Reading from WGPU requires creating a staging buffer.
 
     // WebGPU requires bytes_per_row to be a multiple of 256.
@@ -146,7 +146,7 @@ pub fn download_texture(
 
     let data = buffer_slice.get_mapped_range();
 
-    // Decode bytes back to floats, then clamp to 0-255 u8.
+    // Decode bytes back to floats, then clamp to 0-65535 u16.
     let mut out_img_buf = image::ImageBuffer::new(img_width, img_height);
 
     for y in 0..img_height {
@@ -162,10 +162,10 @@ pub fn download_texture(
                 x,
                 y,
                 image::Rgba([
-                    clamp_f32_to_u8(r_f16.to_f32()),
-                    clamp_f32_to_u8(g_f16.to_f32()),
-                    clamp_f32_to_u8(b_f16.to_f32()),
-                    clamp_f32_to_u8(a_f16.to_f32()),
+                    clamp_f32_to_u16(r_f16.to_f32()),
+                    clamp_f32_to_u16(g_f16.to_f32()),
+                    clamp_f32_to_u16(b_f16.to_f32()),
+                    clamp_f32_to_u16(a_f16.to_f32()),
                 ]),
             );
         }
@@ -200,27 +200,27 @@ mod tests {
     }
 
     #[test]
-    fn test_clamp_f32_to_u8_lower_bound() {
-        assert_eq!(clamp_f32_to_u8(0.0), 0);
+    fn test_clamp_f32_to_u16_lower_bound() {
+        assert_eq!(clamp_f32_to_u16(0.0), 0);
     }
 
     #[test]
-    fn test_clamp_f32_to_u8_upper_bound() {
-        assert_eq!(clamp_f32_to_u8(1.0), 255);
+    fn test_clamp_f32_to_u16_upper_bound() {
+        assert_eq!(clamp_f32_to_u16(1.0), 65535);
     }
 
     #[test]
-    fn test_clamp_f32_to_u8_midpoint() {
-        assert_eq!(clamp_f32_to_u8(0.5), 128); // 127.5 rounds up
+    fn test_clamp_f32_to_u16_midpoint() {
+        assert_eq!(clamp_f32_to_u16(0.5), 32768); // 32767.5 rounds up
     }
 
     #[test]
-    fn test_clamp_f32_to_u8_underflow_clips_to_zero() {
-        assert_eq!(clamp_f32_to_u8(-0.5), 0);
+    fn test_clamp_f32_to_u16_underflow_clips_to_zero() {
+        assert_eq!(clamp_f32_to_u16(-0.5), 0);
     }
 
     #[test]
-    fn test_clamp_f32_to_u8_overflow_clips_to_max() {
-        assert_eq!(clamp_f32_to_u8(1.5), 255);
+    fn test_clamp_f32_to_u16_overflow_clips_to_max() {
+        assert_eq!(clamp_f32_to_u16(1.5), 65535);
     }
 }

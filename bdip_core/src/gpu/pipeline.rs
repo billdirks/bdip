@@ -207,22 +207,22 @@ mod tests {
         let renderer = Renderer::new(&engine);
 
         // 50% gray image
-        let mut img = image::RgbaImage::new(2, 2);
+        let mut img = crate::Rgba16Image::new(2, 2);
         for pixel in img.pixels_mut() {
-            *pixel = image::Rgba([127, 127, 127, 255]);
+            *pixel = image::Rgba([32767, 32767, 32767, 65535]);
         }
 
         let initial_texture = upload_texture(&engine.device, &engine.queue, &img);
 
-        // Boost brightness by +0.5 (should hit max 255 because 127 + 127 = 254/255)
+        // Boost brightness by +0.5 (should hit max 65535)
         let out_texture = renderer.apply_brightness(&engine, &initial_texture, 0.5);
         let out_img = download_texture(&engine.device, &engine.queue, &out_texture, 2, 2).unwrap();
 
         for pixel in out_img.pixels() {
-            assert!(pixel[0] == 255);
-            assert!(pixel[1] == 255);
-            assert!(pixel[2] == 255);
-            assert!(pixel[3] == 255); // Alpha untouched
+            assert!(pixel[0] == 65535);
+            assert!(pixel[1] == 65535);
+            assert!(pixel[2] == 65535);
+            assert!(pixel[3] == 65535); // Alpha untouched
         }
     }
 
@@ -231,9 +231,9 @@ mod tests {
         let engine = GpuEngine::new().unwrap();
         let renderer = Renderer::new(&engine);
 
-        let mut img = image::RgbaImage::new(2, 2);
+        let mut img = crate::Rgba16Image::new(2, 2);
         for pixel in img.pixels_mut() {
-            *pixel = image::Rgba([127, 127, 127, 255]);
+            *pixel = image::Rgba([32767, 32767, 32767, 65535]);
         }
 
         let initial_texture = upload_texture(&engine.device, &engine.queue, &img);
@@ -244,7 +244,7 @@ mod tests {
             assert!(pixel[0] == 0);
             assert!(pixel[1] == 0);
             assert!(pixel[2] == 0);
-            assert!(pixel[3] == 255); // Alpha untouched
+            assert!(pixel[3] == 65535); // Alpha untouched
         }
     }
 
@@ -253,9 +253,9 @@ mod tests {
         let engine = GpuEngine::new().unwrap();
         let renderer = Renderer::new(&engine);
 
-        let mut img = image::RgbaImage::new(2, 2);
+        let mut img = crate::Rgba16Image::new(2, 2);
         for pixel in img.pixels_mut() {
-            *pixel = image::Rgba([42, 100, 200, 255]);
+            *pixel = image::Rgba([10794, 25700, 51400, 65535]);
         }
 
         let initial_texture = upload_texture(&engine.device, &engine.queue, &img);
@@ -263,11 +263,11 @@ mod tests {
         let out_img = download_texture(&engine.device, &engine.queue, &out_texture, 2, 2).unwrap();
 
         for pixel in out_img.pixels() {
-            assert!(pixel[0] == 42); // 42 or 43 due to f16 back and forth precision
-            // Allow precision variance of 1
-            assert!((pixel[1] as i32 - 100).abs() <= 1);
-            assert!((pixel[2] as i32 - 200).abs() <= 1);
-            assert!(pixel[3] == 255);
+            // Allow precision variance appropriate for f16
+            assert!((pixel[0] as i32 - 10794).abs() <= 32);
+            assert!((pixel[1] as i32 - 25700).abs() <= 32);
+            assert!((pixel[2] as i32 - 51400).abs() <= 64);
+            assert!(pixel[3] == 65535);
         }
     }
 
@@ -276,9 +276,9 @@ mod tests {
         let engine = GpuEngine::new().unwrap();
         let renderer = Renderer::new(&engine);
 
-        let mut img = image::RgbaImage::new(2, 2);
+        let mut img = crate::Rgba16Image::new(2, 2);
         for pixel in img.pixels_mut() {
-            *pixel = image::Rgba([200, 200, 200, 255]);
+            *pixel = image::Rgba([51400, 51400, 51400, 65535]);
         }
 
         let initial_texture = upload_texture(&engine.device, &engine.queue, &img);
@@ -291,10 +291,40 @@ mod tests {
             download_texture(&engine.device, &engine.queue, &final_texture, 2, 2).unwrap();
 
         for pixel in out_img.pixels() {
-            assert!(pixel[0] == 255);
-            assert!(pixel[1] == 255);
-            assert!(pixel[2] == 255);
-            assert!(pixel[3] == 255); // Alpha untouched
+            assert!(pixel[0] == 65535);
+            assert!(pixel[1] == 65535);
+            assert!(pixel[2] == 65535);
+            assert!(pixel[3] == 65535); // Alpha untouched
+        }
+    }
+
+    #[test]
+    fn test_shader_headroom_preservation() {
+        let engine = GpuEngine::new().unwrap();
+        let renderer = Renderer::new(&engine);
+
+        // Start with a gray value 32767 (~0.5)
+        let mut img = crate::Rgba16Image::new(2, 2);
+        for pixel in img.pixels_mut() {
+            *pixel = image::Rgba([32767, 32767, 32767, 65535]);
+        }
+
+        let initial_texture = upload_texture(&engine.device, &engine.queue, &img);
+
+        // Apply brightness 0.8 -> ~1.3
+        let intermediate_texture = renderer.apply_brightness(&engine, &initial_texture, 0.8);
+        // Apply brightness -0.8 -> ~0.5
+        let final_texture = renderer.apply_brightness(&engine, &intermediate_texture, -0.8);
+
+        let out_img =
+            download_texture(&engine.device, &engine.queue, &final_texture, 2, 2).unwrap();
+
+        for pixel in out_img.pixels() {
+            // Expected ~32767, allow tolerance of ±64
+            assert!((pixel[0] as i32 - 32767).abs() <= 64);
+            assert!((pixel[1] as i32 - 32767).abs() <= 64);
+            assert!((pixel[2] as i32 - 32767).abs() <= 64);
+            assert!(pixel[3] == 65535);
         }
     }
 }

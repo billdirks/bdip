@@ -118,3 +118,48 @@ fn test_cli_headless_without_input_fails() {
     );
     assert!(!out_path.exists());
 }
+
+#[test]
+fn test_cli_16bit_precision_preserved() {
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let in_path = tmp_dir.path().join("test_in_16bit.png");
+    let mut img = bdip_core::Rgba16Image::new(16, 16);
+    for pixel in img.pixels_mut() {
+        // Value 32768 would be downsampled to 128 in 8-bit, which upsamples back to 32896.
+        *pixel = image::Rgba([32768, 32768, 32768, 65535]);
+    }
+    img.save(&in_path).unwrap();
+
+    let out_path = tmp_dir.path().join("test_out_16bit.png");
+
+    let cargo_bin = assert_cmd::cargo::cargo_bin("bdip");
+    let mut cmd = Command::new(cargo_bin);
+    cmd.arg("--headless")
+        .arg(&in_path)
+        .arg("--output")
+        .arg(&out_path)
+        .arg("--apply")
+        .arg("brightness:0.0"); // Identity transform
+
+    let output = cmd.output().expect("Failed to execute bdip");
+    if !output.status.success() {
+        panic!(
+            "CLI --apply failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    assert!(out_path.exists());
+    let res = image::open(&out_path)
+        .expect("Failed to open output image")
+        .into_rgba16();
+    let avg_r =
+        res.pixels().map(|p| p[0] as u64).sum::<u64>() / (res.width() * res.height()) as u64;
+
+    // Allow slight precision loss from f16 conversion but must clearly be closer to 32768 than 32896
+    assert!(
+        (avg_r as i64 - 32768_i64).abs() < 64,
+        "Expected ~32768, got {}",
+        avg_r
+    );
+}
