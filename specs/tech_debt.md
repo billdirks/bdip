@@ -84,6 +84,19 @@ This document tracks known architectural shortcuts, generic naming, and structur
   zero-cost memory copy (`bytemuck::cast_slice`) to hand it to the UI.
 - **Priority:** **Medium.** Crucial for developer experience and maximum macOS battery efficiency.
 
+### CPU Upload Pixel Conversion Loop
+- **Location:** `bdip_core/src/gpu/texture.rs` (`upload_texture`)
+- **Current Pattern:** The upload function uses a manual `for` loop on the CPU to iterate over every
+  pixel, converting `u16` sRGB-normalized values to `f16` before calling `queue.write_texture`.
+- **Risk:** Similar to the readback bottleneck, this puts significant linear work on the CPU before
+  the GPU can start processing. While less complex than the readback padding constraints, it
+  still wastes battery and impacts debug-mode performance for large images.
+- **Suggested Remediation:** Upload raw `u16` buffers directly using `TextureFormat::Rgba16Unorm`.
+  Refactor the "Ingest" compute shader to read this `Unorm` texture; the GPU hardware will
+  automatically handle the conversion to floating point, allowing the CPU to simply use a
+  raw memory copy during upload.
+- **Priority:** **Medium.** Completes the "zero-CPU-loop" architecture and improves startup latency.
+
 ## Image I/O (Precision)
 
 ### [PHASE 4 GATE] 8-bit Downsampling Trap

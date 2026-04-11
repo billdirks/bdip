@@ -1,9 +1,9 @@
 use crate::gpu::engine::GpuEngine;
 use wgpu::{
-    util::DeviceExt, BindGroupDescriptor, BindGroupEntry, BindGroupLayoutDescriptor,
-    BindGroupLayoutEntry, BindingResource, BindingType, ComputePipeline, ComputePipelineDescriptor,
+    BindGroupDescriptor, BindGroupEntry, BindGroupLayoutDescriptor, BindGroupLayoutEntry,
+    BindingResource, BindingType, ComputePipeline, ComputePipelineDescriptor,
     PipelineLayoutDescriptor, ShaderStages, StorageTextureAccess, TextureFormat,
-    TextureViewDescriptor, TextureViewDimension,
+    TextureViewDescriptor, TextureViewDimension, util::DeviceExt,
 };
 
 pub struct Renderer {
@@ -24,8 +24,7 @@ struct ParamsUniform {
 }
 
 /// Shared bind group layout for passes that bind one source texture and one
-/// destination storage texture (no uniforms). Used by the Ingest and
-/// Presentation passes.
+/// destination storage texture (no uniforms).
 fn make_texture_only_bind_group_layout(
     device: &wgpu::Device,
     label: &str,
