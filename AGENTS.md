@@ -8,6 +8,12 @@
 - Non-code file formatting, including documentation and this rules file, must be hard-wrapped to a
   maximum of 100 characters per line wherever practical. Rust files are formatted by `rustfmt`.
 
+# Tech Debt & Design Decisions
+- Avoid exacerbating tracked tech debt (`specs/tech_debt.md`). Recommend the correct fix
+  over temporary patches that would be undone during debt remediation. If the fix is
+  substantially costlier, escalate the decision to a human reviewer rather than choosing
+  the path that worsens debt.
+
 # Unit Testing Standards
 - All unit tests must be granular and test a single, isolated concept or behavior.
 - Do NOT write monolithic unit tests that combine multiple assertions or steps representing different
