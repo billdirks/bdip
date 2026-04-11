@@ -1,5 +1,5 @@
 use bdip_core::gpu::texture::{download_texture, upload_texture};
-use bdip_core::{Transformation, gpu::engine::GpuEngine, gpu::pipeline::Renderer};
+use bdip_core::{gpu::engine::GpuEngine, gpu::pipeline::Renderer, Transformation};
 use clap::Parser;
 
 mod cli;
@@ -57,7 +57,8 @@ fn main() -> anyhow::Result<()> {
         let engine = GpuEngine::new()?;
         let renderer = Renderer::new(&engine);
 
-        let mut current_texture = upload_texture(&engine.device, &engine.queue, &img);
+        let uploaded_texture = upload_texture(&engine.device, &engine.queue, &img);
+        let mut current_texture = renderer.ingest(&engine, &uploaded_texture);
 
         for transform in transforms {
             match transform {
@@ -71,11 +72,12 @@ fn main() -> anyhow::Result<()> {
             }
         }
 
+        let presentation_texture = renderer.present(&engine, &current_texture);
         let (width, height) = img.dimensions();
         img = download_texture(
             &engine.device,
             &engine.queue,
-            &current_texture,
+            &presentation_texture,
             width,
             height,
         )?;

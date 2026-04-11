@@ -117,5 +117,39 @@ This document tracks known architectural shortcuts, generic naming, and structur
 - **Priority:** **High / Phase 4 Gate.** This must be resolved before Phase 4 adds contrast,
   saturation, and other transformations. Incorrect color math compounds with every new operation.
 
+## API Design
+
+### Missing High-Level Pipeline Execution Method
+- **Location:** `bdip_core/src/gpu/pipeline.rs` (`Renderer`)
+- **Current Pattern:** Consumers must manually assemble the full GPU pipeline sequence
+  themselves: `upload_texture` → `renderer.ingest` → `renderer.apply_*` (one per
+  transformation) → `renderer.present` → `download_texture`. Both `bdip/src/main.rs` and
+  `bdip/src/ui_spike.rs` duplicate this plumbing.
+- **Risk:** Every new consumer of `bdip_core` must understand GPU pipeline mechanics
+  (ingest/present ordering, texture lifetime) to use the library correctly. This is
+  implementation detail leakage — the spec describes the core library as something that
+  "consumes a base image buffer and a list of declarative `Transformation` instructions
+  and outputs a formatted texture," which implies a single call, not manual orchestration.
+  Omitting `ingest` or `present`, or calling them in the wrong order, produces silently
+  incorrect color output with no error.
+- **Suggested Remediation:** Add a method to `Renderer` (or a free function in
+  `bdip_core`) with a signature along the lines of:
+  ```rust
+  pub fn apply(
+      &self,
+      engine: &GpuEngine,
+      img: &Rgba16Image,
+      transforms: &[Transformation],
+  ) -> Result<Rgba16Image, BdipError>
+  ```
+  This method owns the complete sequence internally (upload → ingest → per-transform
+  dispatch → present → download) and returns a plain CPU image. The low-level primitives
+  (`upload_texture`, `ingest`, `present`, `download_texture`) remain public for advanced
+  callers who need single-encoder dispatch or intermediate texture access, but this method
+  covers the common case without exposing any GPU concepts.
+- **Priority:** Medium. Not blocking for V1 given there are only two call sites today,
+  but should be addressed before `bdip_core` is used by additional consumers or exposed
+  as a library API.
+
 ## Future Considerations
 *(Add new items here as they are discovered during development)*

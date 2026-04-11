@@ -46,9 +46,11 @@ impl SpikeApp {
         let engine = GpuEngine::new().expect("Failed to init GPU engine");
         let renderer = Renderer::new(&engine);
 
-        let current_texture = upload_texture(&engine.device, &engine.queue, &loaded_image);
+        let uploaded_texture = upload_texture(&engine.device, &engine.queue, &loaded_image);
+        let linear_texture = renderer.ingest(&engine, &uploaded_texture);
         println!("Applying hardcoded brightness: 0.5");
-        let processed_texture = renderer.apply_brightness(&engine, &current_texture, 0.5);
+        let brightened_texture = renderer.apply_brightness(&engine, &linear_texture, 0.5);
+        let presentation_texture = renderer.present(&engine, &brightened_texture);
 
         let (width, height) = loaded_image.dimensions();
 
@@ -57,7 +59,7 @@ impl SpikeApp {
         let final_image = download_texture(
             &engine.device,
             &engine.queue,
-            &processed_texture,
+            &presentation_texture,
             width,
             height,
         )
