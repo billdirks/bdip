@@ -70,19 +70,12 @@ This document tracks known architectural shortcuts, generic naming, and structur
 - **Priority:** Low for V1 (Apple Silicon target, typical image sizes are fast). Revisit before
   shipping on non-Apple or supporting very large (50MP+) images.
 
-### CPU Readback Pixel Unpadding Loop (Debug Bottleneck)
-- **Location:** `bdip_core/src/gpu/texture.rs` (`download_texture`)
-- **Current Pattern:** The readback function uses a manual, double `for` loop on the CPU to iterate
-  over every pixel. It decodes bytes to `f16`, converts to `f32`, multiplies/clamps to 8-bit, and
-  writes to an `RgbaImage` to avoid `wgpu` row padding constraints.
-- **Risk:** While fast in `release` mode due to SIMD vectorization, this unoptimized floating-point
-  loop causes a massive ~2,000ms latency hit in `debug` mode for 24MP images, degrading developer
-  iteration speed. Even in `release` mode, CPU-side mathematical conversions waste battery.
-- **Suggested Remediation:** Implement a final "Presentation" compute shader pass on the GPU. This
-  shader should read the final `Rgba16Float` texture, efficiently convert it to `u8`, and write it
-  directly to an unpadded `Rgba8Unorm` buffer. The CPU can then simply run an instantaneous, 
-  zero-cost memory copy (`bytemuck::cast_slice`) to hand it to the UI.
-- **Priority:** **Medium.** Crucial for developer experience and maximum macOS battery efficiency.
+### [RESOLVED] CPU Readback Pixel Unpadding Loop (Debug Bottleneck)
+- **Location:** `bdip_core/src/gpu/texture.rs` (`download_presentation_buffer`)
+- **Resolution:** A final `presentation.wgsl` compute shader pass was implemented, which writes the
+  final texture directly to a tightly-packed storage buffer. This allows the CPU to simply use an
+  instantaneous memory copy (`bytemuck::cast_slice`) via `download_presentation_buffer` to hand it
+  to the UI, completely eliminating the manual pixel-unpadding float bottleneck loop.
 
 ### CPU Upload Pixel Conversion Loop
 - **Location:** `bdip_core/src/gpu/texture.rs` (`upload_texture`)
@@ -99,36 +92,20 @@ This document tracks known architectural shortcuts, generic naming, and structur
 
 ## Image I/O (Precision)
 
-### [PHASE 4 GATE] 8-bit Downsampling Trap
+### [RESOLVED] [PHASE 4 GATE] 8-bit Downsampling Trap
 - **Location:** `bdip_core/src/io.rs` (`load_image`)
-- **Current Pattern:** The `load_image` function explicitly calls `img.to_rgba8()`.
-- **Risk:** This is a "silent quality killer." High-end DSLR and mirrorless camera exports (16-bit
-  TIFFs) are immediately downsampled to 8-bit integers upon loading. This destroys the extra
-  precision and dynamic range before the GPU pipeline even starts, defeating the purpose of our
-  internal `Rgba16Float` engine.
-- **Suggested Remediation:** Update `load_image` to use `to_rgba16()`. This will require updating
-  the `bdip_core` GPU texture upload logic to accept `u16` buffers and correctly map them to the
-  `wgpu` texture format without narrowing the data.
-- **Priority:** **High / Immediate.** This should be resolved before Phase 4 full UI integration to
-  ensure we are actually delivering the promised "commercial-beating" image quality.
+- **Resolution:** `load_image` and the texture upload/download path have been refactored to support
+  and preserve `Rgba16Image`. The pipeline now defaults to `u16` representations in CPU-side
+  buffers, passing 16-bit per channel precision down to the WebGPU compute pipeline, retaining the
+  necessary headroom avoiding any silent 8-bit compression.
 
-### [PHASE 4 GATE] Missing sRGB ↔ Linear Color Space Conversion
-- **Location:** `bdip_core/src/gpu/texture.rs` (`upload_texture`, `download_texture`)
-- **Current Pattern:** `upload_texture` divides `u8` values by `255.0` to produce `f16` values, and
-  `download_texture` multiplies `f32` values by `255.0` to produce `u8`. Both treat the conversion
-  as a simple linear scaling.
-- **Risk:** sRGB-encoded pixel values are not linearly proportional to light intensity. A pixel
-  value of `128` in sRGB represents ~21.5% luminance, not 50%. Without applying the sRGB transfer
-  function during upload (sRGB → linear) and download (linear → sRGB), all transformations operate
-  on gamma-encoded values. The errors partially cancel for brightness (making the result "look okay"),
-  but will produce visibly incorrect results for contrast, saturation, and any transformation that
-  relies on perceptually accurate luminance relationships.
-- **Suggested Remediation:** Apply the sRGB → linear transfer function during upload and the inverse
-  during download. The cheapest GPU-native approach is to use `Rgba8UnormSrgb` as the upload texture
-  format, which causes the hardware to perform the gamma conversion automatically at zero cost.
-  Alternatively, implement the conversion in the upload/download CPU code or in a dedicated shader.
-- **Priority:** **High / Phase 4 Gate.** This must be resolved before Phase 4 adds contrast,
-  saturation, and other transformations. Incorrect color math compounds with every new operation.
+### [RESOLVED] [PHASE 4 GATE] Missing sRGB ↔ Linear Color Space Conversion
+- **Location:** `bdip_core/src/gpu/ingest.wgsl`, `bdip_core/src/gpu/presentation.wgsl`
+- **Resolution:** A two-pass compute shader system sandwiching the main pipeline was created.
+  `ingest.wgsl` converts normalized sRGB image data coming from the CPU into pure linear color space
+  internally, ensuring that chained filter equations work precisely. Resulting data correctly flows
+  back through the `presentation.wgsl` where linear light translates back into gamma-space (sRGB)
+  before mapping to the read-back buffer.
 
 ## API Design
 
