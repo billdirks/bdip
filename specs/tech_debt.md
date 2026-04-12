@@ -7,26 +7,13 @@ This document tracks known architectural shortcuts, generic naming, and structur
 
 ## Generalization Blockers (GPU Pipeline)
 
-### Generic Parameter Structs — **[SCHEDULED: Phase 4]**
-- **Location:** `bdip_core/src/gpu/pipeline.rs`
-- **Current Pattern:** The GPU parameter mapping struct is generically named `ParamsUniform`.
-- **Refactor Goal:** Prevent a "Monster Struct" pattern where a single giant struct holds unused
-  parameters for *all* possible transformations, which wastes GPU memory alignment space and causes
-  developer confusion.
-- **Suggested Remediation:** Rename `ParamsUniform` to `BrightnessParams`. Create
-  `SaturationParams` for the new Saturation shader. Moving forward, create dedicated, tightly
-  packed, and specifically named parameter structs for *each* discrete transformation.
-- **Resolution Plan:** `specs/2shader_plan.md`, Step 1.
+### Generic Parameter Structs — **[RESOLVED: Phase 4, PR 1]**
+- **Resolution:** `ParamsUniform` renamed to `BrightnessParams` in both
+  `pipeline.rs` (Rust struct) and `brightness.wgsl` (WGSL struct).
 
-### Generic Shader Naming — **[SCHEDULED: Phase 4]**
-- **Location:** `bdip_core/src/gpu/shader.wgsl`
-- **Current Pattern:** The core compute shader file is generically named `shader.wgsl` despite
-  only handling the Brightness algorithm.
-- **Refactor Goal:** Avoid confusion and filename collision when managing multiple shaders
-  handling different calculations on the GPU.
-- **Suggested Remediation:** Rename `shader.wgsl` to `brightness.wgsl`. Future shaders follow
-  this naming convention (`saturation.wgsl`, `contrast.wgsl`, etc.).
-- **Resolution Plan:** `specs/2shader_plan.md`, Step 1.
+### Generic Shader Naming — **[RESOLVED: Phase 4, PR 1]**
+- **Resolution:** `shader.wgsl` renamed to `brightness.wgsl`. Future shaders
+  follow this naming convention (`saturation.wgsl`, `contrast.wgsl`, etc.).
 
 ### Monolithic Pipeline Initialization — **[SCHEDULED: Phase 4]**
 - **Location:** `bdip_core/src/gpu/pipeline.rs` (`Renderer::new`)

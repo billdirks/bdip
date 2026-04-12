@@ -19,7 +19,7 @@ pub struct Renderer {
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-struct ParamsUniform {
+struct BrightnessParams {
     brightness_offset: f32,
     _padding: [f32; 3], // WebGPU uniforms require 16-byte alignment
 }
@@ -73,7 +73,7 @@ impl Renderer {
             .device
             .create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("Brightness Shader"),
-                source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
+                source: wgpu::ShaderSource::Wgsl(include_str!("brightness.wgsl").into()),
             });
 
         let texture_bind_group_layout =
@@ -487,7 +487,7 @@ impl Renderer {
             ],
         });
 
-        let params = ParamsUniform {
+        let params = BrightnessParams {
             brightness_offset: brightness_val,
             _padding: [0.0; 3],
         };
