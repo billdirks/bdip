@@ -161,9 +161,9 @@ impl PipelineCache {
 
 // ========== Helpers ==========
 
-/// Shared bind group layout for passes that bind one source texture and one
-/// destination storage texture (no uniforms). Used by the Ingest pass and all
-/// transform passes.
+/// Shared bind group layout for the core image data (one source texture, one
+/// destination storage texture). Used by the Ingest pass and as Bind Group 0
+/// for all transform passes.
 fn make_texture_only_bind_group_layout(
     device: &wgpu::Device,
     label: &str,

@@ -113,9 +113,12 @@ This document tracks known architectural shortcuts, generic naming, and structur
   ```
   This method owns the complete sequence internally (upload → ingest → per-transform
   dispatch → present → download) and returns a plain CPU image. The low-level primitives
-  (`upload_texture`, `ingest`, `present`, `download_texture`) remain public for advanced
-  callers who need single-encoder dispatch or intermediate texture access, but this method
-  covers the common case without exposing any GPU concepts.
+  (`upload_texture`, `ingest`, `present`, `download_texture`) remain public. This is critical
+  for interactive consumers like the UI, which need to upload and `ingest` the full-resolution
+  image *once* and cache the resulting intermediate `wgpu::Texture` in GPU memory. During a live
+  slider drag, the UI can then just call `apply` and `present` directly on that cached texture,
+  skipping the expensive PCIe upload and ensuring smooth responsiveness. The new high-level
+  `apply` method covers the common one-shot case (like the CLI) without exposing GPU concepts.
 - **Priority:** Medium. Not blocking for V1 given there are only two call sites today,
   but should be addressed before `bdip_core` is used by additional consumers or exposed
   as a library API.
