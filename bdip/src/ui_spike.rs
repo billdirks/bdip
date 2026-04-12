@@ -1,7 +1,7 @@
 use anyhow::Context;
 use bdip_core::gpu::engine::GpuEngine;
 use bdip_core::gpu::pipeline::Renderer;
-use bdip_core::gpu::texture::{download_texture, upload_texture};
+use bdip_core::gpu::texture::{download_presentation_buffer, upload_texture};
 use iced::widget::{container, image};
 use iced::{Element, Length, Task};
 use std::path::PathBuf;
@@ -50,20 +50,20 @@ impl SpikeApp {
         let linear_texture = renderer.ingest(&engine, &uploaded_texture);
         println!("Applying hardcoded brightness: 0.5");
         let brightened_texture = renderer.apply_brightness(&engine, &linear_texture, 0.5);
-        let presentation_texture = renderer.present(&engine, &brightened_texture);
+        let presentation_buffer = renderer.present(&engine, &brightened_texture);
 
         let (width, height) = loaded_image.dimensions();
 
         println!("Starting CPU bridge readback...");
         let start = Instant::now();
-        let final_image = download_texture(
+        let final_image = download_presentation_buffer(
             &engine.device,
             &engine.queue,
-            &presentation_texture,
+            &presentation_buffer,
             width,
             height,
         )
-        .expect("Failed to download texture");
+        .expect("Failed to download presentation buffer");
         let elapsed = start.elapsed();
         println!(
             "CPU Bridge readback took: {:.2} ms",

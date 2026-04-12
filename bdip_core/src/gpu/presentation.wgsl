@@ -1,18 +1,32 @@
-// Presentation pass: linear light → sRGB-encoded.
+// Presentation pass: linear light → sRGB-encoded, packed into a u16 storage buffer.
 //
 // Reads an Rgba16Float texture whose RGB channels hold linear-light values
-// (the output of the transformation chain) and writes a new Rgba16Float
-// texture whose RGB channels hold sRGB-encoded values ready for file export
-// or display. Alpha is copied unchanged.
+// (the output of the transformation chain) and writes them as sRGB-encoded u16
+// values into a tightly packed storage buffer. Alpha is copied unchanged.
+// Values above 1.0 in linear space (headroom from chained transforms) are
+// clamped to [0, 1] before gamma encoding.
 //
 // This pass is the last step of every pipeline run before CPU readback.
 //
-// IMPORTANT: the final textureStore is a single statement at the tail of
-// main. PR #2 will replace it with a buffer store; keeping it localized
-// makes that swap mechanical. Do not factor the write into a helper.
+// Buffer layout: 2 u32s per pixel, tightly packed, no row padding.
+//   dst_buffer[base]     = R in bits [ 0..15] | G in bits [16..31]
+//   dst_buffer[base + 1] = B in bits [ 0..15] | A in bits [16..31]
+// where base = (y * width + x) * 2.
+//
+// When the CPU reads the buffer back as &[u16] via bytemuck::cast_slice,
+// the result is interleaved [R, G, B, A, R, G, B, A, ...] that
+// Rgba16Image::from_raw accepts directly — no per-pixel CPU loop required.
 
 @group(0) @binding(0) var src_texture: texture_2d<f32>;
-@group(0) @binding(1) var dst_texture: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(1) var<storage, read_write> dst_buffer: array<u32>;
+
+struct PresentParams {
+    width: u32,
+    _padding1: u32,
+    _padding2: u32,
+    _padding3: u32,
+}
+@group(1) @binding(0) var<uniform> params: PresentParams;
 
 fn linear_to_srgb(c: f32) -> f32 {
     if (c <= 0.0031308) {
@@ -32,10 +46,19 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     let color = textureLoad(src_texture, coords, 0);
 
-    let srgb_r = linear_to_srgb(color.r);
-    let srgb_g = linear_to_srgb(color.g);
-    let srgb_b = linear_to_srgb(color.b);
-    let final_color = vec4<f32>(srgb_r, srgb_g, srgb_b, color.a);
+    // Clamp to [0, 1] before gamma encoding; values above 1.0 are headroom
+    // that gets clipped at presentation time.
+    let srgb_r = linear_to_srgb(clamp(color.r, 0.0, 1.0));
+    let srgb_g = linear_to_srgb(clamp(color.g, 0.0, 1.0));
+    let srgb_b = linear_to_srgb(clamp(color.b, 0.0, 1.0));
+    let alpha   = clamp(color.a, 0.0, 1.0);
 
-    textureStore(dst_texture, coords, final_color);
+    let r_u16 = u32(srgb_r * 65535.0);
+    let g_u16 = u32(srgb_g * 65535.0);
+    let b_u16 = u32(srgb_b * 65535.0);
+    let a_u16 = u32(alpha  * 65535.0);
+
+    let base = (coords.y * params.width + coords.x) * 2u;
+    dst_buffer[base]      = (r_u16 & 0xFFFFu) | ((g_u16 & 0xFFFFu) << 16u);
+    dst_buffer[base + 1u] = (b_u16 & 0xFFFFu) | ((a_u16 & 0xFFFFu) << 16u);
 }

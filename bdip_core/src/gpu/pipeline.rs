@@ -13,7 +13,8 @@ pub struct Renderer {
     ingest_pipeline: ComputePipeline,
     ingest_bind_group_layout: wgpu::BindGroupLayout,
     present_pipeline: ComputePipeline,
-    present_bind_group_layout: wgpu::BindGroupLayout,
+    present_texture_bind_group_layout: wgpu::BindGroupLayout,
+    present_params_bind_group_layout: wgpu::BindGroupLayout,
 }
 
 #[repr(C)]
@@ -23,8 +24,15 @@ struct ParamsUniform {
     _padding: [f32; 3], // WebGPU uniforms require 16-byte alignment
 }
 
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+struct PresentParams {
+    width: u32,
+    _padding: [u32; 3], // WebGPU uniforms require 16-byte alignment
+}
+
 /// Shared bind group layout for passes that bind one source texture and one
-/// destination storage texture (no uniforms).
+/// destination storage texture (no uniforms). Used by the Ingest pass.
 fn make_texture_only_bind_group_layout(
     device: &wgpu::Device,
     label: &str,
@@ -139,7 +147,7 @@ impl Renderer {
                 cache: None,
             });
 
-        // --- Presentation pipeline (linear → sRGB) ---
+        // --- Presentation pipeline (linear → sRGB, writes to storage buffer) ---
         let present_shader = engine
             .device
             .create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -147,15 +155,63 @@ impl Renderer {
                 source: wgpu::ShaderSource::Wgsl(include_str!("presentation.wgsl").into()),
             });
 
-        let present_bind_group_layout =
-            make_texture_only_bind_group_layout(&engine.device, "Presentation Texture BGL");
+        // Group 0: source texture (binding 0) + destination storage buffer (binding 1)
+        let present_texture_bind_group_layout =
+            engine
+                .device
+                .create_bind_group_layout(&BindGroupLayoutDescriptor {
+                    label: Some("Presentation Texture BGL"),
+                    entries: &[
+                        BindGroupLayoutEntry {
+                            binding: 0,
+                            visibility: ShaderStages::COMPUTE,
+                            ty: BindingType::Texture {
+                                sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                                view_dimension: TextureViewDimension::D2,
+                                multisampled: false,
+                            },
+                            count: None,
+                        },
+                        BindGroupLayoutEntry {
+                            binding: 1,
+                            visibility: ShaderStages::COMPUTE,
+                            ty: BindingType::Buffer {
+                                ty: wgpu::BufferBindingType::Storage { read_only: false },
+                                has_dynamic_offset: false,
+                                min_binding_size: None,
+                            },
+                            count: None,
+                        },
+                    ],
+                });
+
+        // Group 1: width uniform
+        let present_params_bind_group_layout =
+            engine
+                .device
+                .create_bind_group_layout(&BindGroupLayoutDescriptor {
+                    label: Some("Presentation Params BGL"),
+                    entries: &[BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: ShaderStages::COMPUTE,
+                        ty: BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    }],
+                });
 
         let present_pipeline_layout =
             engine
                 .device
                 .create_pipeline_layout(&PipelineLayoutDescriptor {
                     label: Some("Presentation Pipeline Layout"),
-                    bind_group_layouts: &[Some(&present_bind_group_layout)],
+                    bind_group_layouts: &[
+                        Some(&present_texture_bind_group_layout),
+                        Some(&present_params_bind_group_layout),
+                    ],
                     immediate_size: 0,
                 });
 
@@ -177,7 +233,8 @@ impl Renderer {
             ingest_pipeline,
             ingest_bind_group_layout,
             present_pipeline,
-            present_bind_group_layout,
+            present_texture_bind_group_layout,
+            present_params_bind_group_layout,
         }
     }
 
@@ -193,20 +250,80 @@ impl Renderer {
         )
     }
 
-    /// Converts linear-light values in `src_texture` to sRGB-encoded output,
-    /// returning a new `Rgba16Float` texture. Must be the last pass before
-    /// `download_texture`.
-    pub fn present(&self, engine: &GpuEngine, src_texture: &wgpu::Texture) -> wgpu::Texture {
-        self.run_color_space_pass(
-            engine,
-            src_texture,
-            &self.present_pipeline,
-            &self.present_bind_group_layout,
-            "present_dst_texture",
-        )
+    /// Converts linear-light values in `src_texture` to sRGB-encoded u16 values
+    /// packed into a tightly packed storage buffer (2 u32s per pixel, no row padding).
+    /// Must be the last pass before `download_presentation_buffer`.
+    pub fn present(&self, engine: &GpuEngine, src_texture: &wgpu::Texture) -> wgpu::Buffer {
+        let (width, height) = (src_texture.width(), src_texture.height());
+
+        // Tightly packed output: 4 channels × 2 bytes = 8 bytes per pixel, no row padding.
+        let dst_buffer = engine.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("present_dst_buffer"),
+            size: (width * height * 8) as wgpu::BufferAddress,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+
+        let params = PresentParams {
+            width,
+            _padding: [0; 3],
+        };
+        let params_buffer = engine
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("present_params_buffer"),
+                contents: bytemuck::cast_slice(&[params]),
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            });
+
+        let src_view = src_texture.create_view(&TextureViewDescriptor::default());
+
+        let texture_bind_group = engine.device.create_bind_group(&BindGroupDescriptor {
+            label: Some("Present Texture Bind Group"),
+            layout: &self.present_texture_bind_group_layout,
+            entries: &[
+                BindGroupEntry {
+                    binding: 0,
+                    resource: BindingResource::TextureView(&src_view),
+                },
+                BindGroupEntry {
+                    binding: 1,
+                    resource: dst_buffer.as_entire_binding(),
+                },
+            ],
+        });
+
+        let params_bind_group = engine.device.create_bind_group(&BindGroupDescriptor {
+            label: Some("Present Params Bind Group"),
+            layout: &self.present_params_bind_group_layout,
+            entries: &[BindGroupEntry {
+                binding: 0,
+                resource: params_buffer.as_entire_binding(),
+            }],
+        });
+
+        let mut encoder = engine
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        {
+            let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: None,
+                timestamp_writes: None,
+            });
+            cpass.set_pipeline(&self.present_pipeline);
+            cpass.set_bind_group(0, &texture_bind_group, &[]);
+            cpass.set_bind_group(1, &params_bind_group, &[]);
+            cpass.dispatch_workgroups(width.div_ceil(16), height.div_ceil(16), 1);
+        }
+
+        engine.queue.submit(Some(encoder.finish()));
+
+        dst_buffer
     }
 
-    /// Dispatches a single-pass color-space conversion shader (no uniforms).
+    /// Dispatches a single-pass color-space conversion shader that reads a source
+    /// texture and writes to a destination storage texture (no uniforms). Used by
+    /// `ingest`.
     fn run_color_space_pass(
         &self,
         engine: &GpuEngine,
@@ -366,7 +483,7 @@ impl Renderer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gpu::texture::{download_texture, upload_texture};
+    use crate::gpu::texture::{download_presentation_buffer, upload_texture};
 
     #[test]
     fn test_brightness_shader_positive() {
@@ -382,8 +499,10 @@ mod tests {
         let upload = upload_texture(&engine.device, &engine.queue, &img);
         let linear = renderer.ingest(&engine, &upload);
         let brightened = renderer.apply_brightness(&engine, &linear, 0.5);
-        let presented = renderer.present(&engine, &brightened);
-        let out_img = download_texture(&engine.device, &engine.queue, &presented, 2, 2).unwrap();
+        let present_buf = renderer.present(&engine, &brightened);
+        let out_img =
+            download_presentation_buffer(&engine.device, &engine.queue, &present_buf, 2, 2)
+                .unwrap();
 
         // 0.214 + 0.5 = 0.714 linear → sRGB ≈ 0.862 → u16 ≈ 56500
         for pixel in out_img.pixels() {
@@ -420,8 +539,10 @@ mod tests {
         let upload = upload_texture(&engine.device, &engine.queue, &img);
         let linear = renderer.ingest(&engine, &upload);
         let darkened = renderer.apply_brightness(&engine, &linear, -0.6);
-        let presented = renderer.present(&engine, &darkened);
-        let out_img = download_texture(&engine.device, &engine.queue, &presented, 2, 2).unwrap();
+        let present_buf = renderer.present(&engine, &darkened);
+        let out_img =
+            download_presentation_buffer(&engine.device, &engine.queue, &present_buf, 2, 2)
+                .unwrap();
 
         for pixel in out_img.pixels() {
             assert!(pixel[0] == 0);
@@ -444,8 +565,10 @@ mod tests {
         let upload = upload_texture(&engine.device, &engine.queue, &img);
         let linear = renderer.ingest(&engine, &upload);
         let unchanged = renderer.apply_brightness(&engine, &linear, 0.0);
-        let presented = renderer.present(&engine, &unchanged);
-        let out_img = download_texture(&engine.device, &engine.queue, &presented, 2, 2).unwrap();
+        let present_buf = renderer.present(&engine, &unchanged);
+        let out_img =
+            download_presentation_buffer(&engine.device, &engine.queue, &present_buf, 2, 2)
+                .unwrap();
 
         // sRGB → linear → sRGB is a mathematical identity; differences are f16 rounding.
         for pixel in out_img.pixels() {
@@ -473,9 +596,10 @@ mod tests {
         // 0.577 - 0.2 = 0.377; 0.377 + 0.5 = 0.877 linear → sRGB ≈ 0.944 → u16 ≈ 61880
         let intermediate = renderer.apply_brightness(&engine, &linear, -0.2);
         let final_linear = renderer.apply_brightness(&engine, &intermediate, 0.5);
-        let presented = renderer.present(&engine, &final_linear);
-
-        let out_img = download_texture(&engine.device, &engine.queue, &presented, 2, 2).unwrap();
+        let present_buf = renderer.present(&engine, &final_linear);
+        let out_img =
+            download_presentation_buffer(&engine.device, &engine.queue, &present_buf, 2, 2)
+                .unwrap();
 
         for pixel in out_img.pixels() {
             assert!(
@@ -514,9 +638,10 @@ mod tests {
         // 0.214 + 0.8 = 1.014 (above 1.0, held in headroom); 1.014 - 0.8 = 0.214 linear
         let up = renderer.apply_brightness(&engine, &linear, 0.8);
         let down = renderer.apply_brightness(&engine, &up, -0.8);
-        let presented = renderer.present(&engine, &down);
-
-        let out_img = download_texture(&engine.device, &engine.queue, &presented, 2, 2).unwrap();
+        let present_buf = renderer.present(&engine, &down);
+        let out_img =
+            download_presentation_buffer(&engine.device, &engine.queue, &present_buf, 2, 2)
+                .unwrap();
 
         // linear_to_srgb(0.214) ≈ 0.500 sRGB → u16 ≈ 32767; allow ±64 for f16 precision
         for pixel in out_img.pixels() {
@@ -540,8 +665,10 @@ mod tests {
 
         let upload = upload_texture(&engine.device, &engine.queue, &img);
         let linear = renderer.ingest(&engine, &upload);
-        let presented = renderer.present(&engine, &linear);
-        let out_img = download_texture(&engine.device, &engine.queue, &presented, 4, 4).unwrap();
+        let present_buf = renderer.present(&engine, &linear);
+        let out_img =
+            download_presentation_buffer(&engine.device, &engine.queue, &present_buf, 4, 4)
+                .unwrap();
 
         // sRGB → linear → sRGB is mathematically exact; allow ±128 to absorb
         // both directions of f16 + pow rounding.
@@ -577,8 +704,10 @@ mod tests {
 
         let upload = upload_texture(&engine.device, &engine.queue, &img);
         let linear = renderer.ingest(&engine, &upload);
-        let presented = renderer.present(&engine, &linear);
-        let out_img = download_texture(&engine.device, &engine.queue, &presented, 2, 1).unwrap();
+        let present_buf = renderer.present(&engine, &linear);
+        let out_img =
+            download_presentation_buffer(&engine.device, &engine.queue, &present_buf, 2, 1)
+                .unwrap();
 
         let black = out_img.get_pixel(0, 0);
         let white = out_img.get_pixel(1, 0);
@@ -606,5 +735,56 @@ mod tests {
             white[2]
         );
         assert_eq!(white[3], 65535, "Alpha should be untouched");
+    }
+
+    #[test]
+    fn test_presentation_buffer_layout() {
+        let engine = GpuEngine::new().unwrap();
+        let renderer = Renderer::new(&engine);
+
+        // 3×2 image: row 0 = black, row 1 = white.
+        // If row stride or pixel packing is wrong, rows or channels will be swapped.
+        let mut img = crate::Rgba16Image::new(3, 2);
+        for x in 0..3 {
+            img.put_pixel(x, 0, image::Rgba([0, 0, 0, 65535]));
+            img.put_pixel(x, 1, image::Rgba([65535, 65535, 65535, 65535]));
+        }
+
+        let upload = upload_texture(&engine.device, &engine.queue, &img);
+        let linear = renderer.ingest(&engine, &upload);
+        let present_buf = renderer.present(&engine, &linear);
+        let out_img =
+            download_presentation_buffer(&engine.device, &engine.queue, &present_buf, 3, 2)
+                .unwrap();
+
+        // Row 0: black → sRGB(0.0) = 0.0 → u16 = 0
+        for x in 0..3 {
+            let px = out_img.get_pixel(x, 0);
+            assert_eq!(px[0], 0, "Row 0, col {x}: R should be 0 (black)");
+            assert_eq!(px[1], 0, "Row 0, col {x}: G should be 0 (black)");
+            assert_eq!(px[2], 0, "Row 0, col {x}: B should be 0 (black)");
+            assert_eq!(px[3], 65535, "Row 0, col {x}: A should be 65535");
+        }
+
+        // Row 1: white → sRGB(1.0) = 1.0 → u16 ≈ 65535
+        for x in 0..3 {
+            let px = out_img.get_pixel(x, 1);
+            assert!(
+                (px[0] as i32 - 65535).abs() <= 64,
+                "Row 1, col {x}: R expected ~65535, got {}",
+                px[0]
+            );
+            assert!(
+                (px[1] as i32 - 65535).abs() <= 64,
+                "Row 1, col {x}: G expected ~65535, got {}",
+                px[1]
+            );
+            assert!(
+                (px[2] as i32 - 65535).abs() <= 64,
+                "Row 1, col {x}: B expected ~65535, got {}",
+                px[2]
+            );
+            assert_eq!(px[3], 65535, "Row 1, col {x}: A should be 65535");
+        }
     }
 }

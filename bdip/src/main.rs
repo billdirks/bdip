@@ -1,4 +1,4 @@
-use bdip_core::gpu::texture::{download_texture, upload_texture};
+use bdip_core::gpu::texture::{download_presentation_buffer, upload_texture};
 use bdip_core::{Transformation, gpu::engine::GpuEngine, gpu::pipeline::Renderer};
 use clap::Parser;
 
@@ -72,12 +72,12 @@ fn main() -> anyhow::Result<()> {
             }
         }
 
-        let presentation_texture = renderer.present(&engine, &current_texture);
+        let presentation_buffer = renderer.present(&engine, &current_texture);
         let (width, height) = img.dimensions();
-        img = download_texture(
+        img = download_presentation_buffer(
             &engine.device,
             &engine.queue,
-            &presentation_texture,
+            &presentation_buffer,
             width,
             height,
         )?;
