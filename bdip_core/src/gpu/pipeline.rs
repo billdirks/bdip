@@ -1,4 +1,6 @@
 use crate::gpu::engine::GpuEngine;
+use crate::transformation::Transformation;
+use std::collections::HashMap;
 use wgpu::{
     BindGroupDescriptor, BindGroupEntry, BindGroupLayoutDescriptor, BindGroupLayoutEntry,
     BindingResource, BindingType, ComputePipeline, ComputePipelineDescriptor,
@@ -6,21 +8,19 @@ use wgpu::{
     TextureViewDescriptor, TextureViewDimension, util::DeviceExt,
 };
 
-pub struct Renderer {
-    pipeline: ComputePipeline,
-    texture_bind_group_layout: wgpu::BindGroupLayout,
-    params_bind_group_layout: wgpu::BindGroupLayout,
-    ingest_pipeline: ComputePipeline,
-    ingest_bind_group_layout: wgpu::BindGroupLayout,
-    present_pipeline: ComputePipeline,
-    present_texture_bind_group_layout: wgpu::BindGroupLayout,
-    present_params_bind_group_layout: wgpu::BindGroupLayout,
-}
+// ========== Uniform structs ==========
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 struct BrightnessParams {
     brightness_offset: f32,
+    _padding: [f32; 3], // WebGPU uniforms require 16-byte alignment
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+struct SaturationParams {
+    saturation_offset: f32,
     _padding: [f32; 3], // WebGPU uniforms require 16-byte alignment
 }
 
@@ -33,8 +33,137 @@ struct PresentParams {
     _padding: u32, // WebGPU uniforms require 16-byte alignment
 }
 
+// ========== TransformKind ==========
+
+/// Lightweight discriminant identifying which compiled pipeline to use.
+/// Derived from a `Transformation` variant — carries no parameter values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum TransformKind {
+    Brightness,
+    Saturation,
+}
+
+impl From<&Transformation> for TransformKind {
+    fn from(t: &Transformation) -> Self {
+        match t {
+            Transformation::Brightness(_) => TransformKind::Brightness,
+            Transformation::Saturation(_) => TransformKind::Saturation,
+            other => panic!("TransformKind not implemented for {:?}", other),
+        }
+    }
+}
+
+// ========== CachedPipeline ==========
+
+struct CachedPipeline {
+    pipeline: ComputePipeline,
+    texture_bind_group_layout: wgpu::BindGroupLayout,
+    params_bind_group_layout: wgpu::BindGroupLayout,
+}
+
+// ========== PipelineCache ==========
+
+/// Lazily compiles and caches transform pipelines on first use.
+struct PipelineCache {
+    cache: HashMap<TransformKind, CachedPipeline>,
+}
+
+impl PipelineCache {
+    fn new() -> Self {
+        Self {
+            cache: HashMap::new(),
+        }
+    }
+
+    /// Returns a reference to the compiled pipeline for `kind`, compiling it on
+    /// first access and caching the result for all subsequent calls.
+    fn get_or_create(&mut self, device: &wgpu::Device, kind: TransformKind) -> &CachedPipeline {
+        self.cache
+            .entry(kind)
+            .or_insert_with(|| Self::compile(device, kind))
+    }
+
+    fn compile(device: &wgpu::Device, kind: TransformKind) -> CachedPipeline {
+        let (
+            shader_src,
+            shader_label,
+            pipeline_label,
+            texture_bgl_label,
+            params_bgl_label,
+            pl_label,
+        ) = match kind {
+            TransformKind::Brightness => (
+                include_str!("brightness.wgsl"),
+                "Brightness Shader",
+                "Brightness Pipeline",
+                "Brightness Texture BGL",
+                "Brightness Params BGL",
+                "Brightness Pipeline Layout",
+            ),
+            TransformKind::Saturation => (
+                include_str!("saturation.wgsl"),
+                "Saturation Shader",
+                "Saturation Pipeline",
+                "Saturation Texture BGL",
+                "Saturation Params BGL",
+                "Saturation Pipeline Layout",
+            ),
+        };
+
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some(shader_label),
+            source: wgpu::ShaderSource::Wgsl(shader_src.into()),
+        });
+
+        let texture_bind_group_layout =
+            make_texture_only_bind_group_layout(device, texture_bgl_label);
+
+        let params_bind_group_layout =
+            device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+                label: Some(params_bgl_label),
+                entries: &[BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                }],
+            });
+
+        let pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+            label: Some(pl_label),
+            bind_group_layouts: &[
+                Some(&texture_bind_group_layout),
+                Some(&params_bind_group_layout),
+            ],
+            immediate_size: 0,
+        });
+
+        let pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
+            label: Some(pipeline_label),
+            layout: Some(&pipeline_layout),
+            module: &shader,
+            entry_point: Some("main"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+
+        CachedPipeline {
+            pipeline,
+            texture_bind_group_layout,
+            params_bind_group_layout,
+        }
+    }
+}
+
+// ========== Helpers ==========
+
 /// Shared bind group layout for passes that bind one source texture and one
-/// destination storage texture (no uniforms). Used by the Ingest pass.
+/// destination storage texture (no uniforms). Used by the Ingest pass and all
+/// transform passes.
 fn make_texture_only_bind_group_layout(
     device: &wgpu::Device,
     label: &str,
@@ -66,58 +195,22 @@ fn make_texture_only_bind_group_layout(
     })
 }
 
+// ========== Renderer ==========
+
+pub struct Renderer {
+    // Ingest and present pipelines are always needed — eagerly initialized.
+    ingest_pipeline: ComputePipeline,
+    ingest_bind_group_layout: wgpu::BindGroupLayout,
+    present_pipeline: ComputePipeline,
+    present_texture_bind_group_layout: wgpu::BindGroupLayout,
+    present_params_bind_group_layout: wgpu::BindGroupLayout,
+
+    // Transform pipelines are compiled on first use.
+    pipeline_cache: PipelineCache,
+}
+
 impl Renderer {
     pub fn new(engine: &GpuEngine) -> Self {
-        // --- Brightness pipeline ---
-        let shader = engine
-            .device
-            .create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("Brightness Shader"),
-                source: wgpu::ShaderSource::Wgsl(include_str!("brightness.wgsl").into()),
-            });
-
-        let texture_bind_group_layout =
-            make_texture_only_bind_group_layout(&engine.device, "Brightness Texture BGL");
-
-        let params_bind_group_layout =
-            engine
-                .device
-                .create_bind_group_layout(&BindGroupLayoutDescriptor {
-                    label: Some("Params Bind Group Layout"),
-                    entries: &[BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Uniform,
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
-                    }],
-                });
-
-        let pipeline_layout = engine
-            .device
-            .create_pipeline_layout(&PipelineLayoutDescriptor {
-                label: Some("Pipeline Layout"),
-                bind_group_layouts: &[
-                    Some(&texture_bind_group_layout),
-                    Some(&params_bind_group_layout),
-                ],
-                immediate_size: 0,
-            });
-
-        let pipeline = engine
-            .device
-            .create_compute_pipeline(&ComputePipelineDescriptor {
-                label: Some("Brightness Pipeline"),
-                layout: Some(&pipeline_layout),
-                module: &shader,
-                entry_point: Some("main"),
-                compilation_options: Default::default(),
-                cache: None,
-            });
-
         // --- Ingest pipeline (sRGB → linear) ---
         let ingest_shader = engine
             .device
@@ -229,14 +322,12 @@ impl Renderer {
             });
 
         Self {
-            pipeline,
-            texture_bind_group_layout,
-            params_bind_group_layout,
             ingest_pipeline,
             ingest_bind_group_layout,
             present_pipeline,
             present_texture_bind_group_layout,
             present_params_bind_group_layout,
+            pipeline_cache: PipelineCache::new(),
         }
     }
 
@@ -440,12 +531,18 @@ impl Renderer {
         dst_texture
     }
 
-    pub fn apply_brightness(
-        &self,
+    /// Applies a single `Transformation` to `src_texture` and returns a new
+    /// `Rgba16Float` texture in linear light. The correct pipeline is compiled
+    /// on first use and cached for subsequent calls with the same transform kind.
+    pub fn apply(
+        &mut self,
         engine: &GpuEngine,
         src_texture: &wgpu::Texture,
-        brightness_val: f32,
+        transformation: &Transformation,
     ) -> wgpu::Texture {
+        let kind = TransformKind::from(transformation);
+        let cached = self.pipeline_cache.get_or_create(&engine.device, kind);
+
         let (width, height, depth) = (
             src_texture.width(),
             src_texture.height(),
@@ -453,7 +550,7 @@ impl Renderer {
         );
 
         let dst_texture = engine.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("dst_texture"),
+            label: Some("apply_dst_texture"),
             size: wgpu::Extent3d {
                 width,
                 height,
@@ -473,8 +570,8 @@ impl Renderer {
         let dst_view = dst_texture.create_view(&TextureViewDescriptor::default());
 
         let texture_bind_group = engine.device.create_bind_group(&BindGroupDescriptor {
-            label: Some("Texture Bind Group"),
-            layout: &self.texture_bind_group_layout,
+            label: Some("Apply Texture Bind Group"),
+            layout: &cached.texture_bind_group_layout,
             entries: &[
                 BindGroupEntry {
                     binding: 0,
@@ -487,22 +584,39 @@ impl Renderer {
             ],
         });
 
-        let params = BrightnessParams {
-            brightness_offset: brightness_val,
-            _padding: [0.0; 3],
+        let params_buffer = match transformation {
+            Transformation::Brightness(val) => {
+                let p = BrightnessParams {
+                    brightness_offset: *val,
+                    _padding: [0.0; 3],
+                };
+                engine
+                    .device
+                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("Apply Params Buffer"),
+                        contents: bytemuck::cast_slice(&[p]),
+                        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                    })
+            }
+            Transformation::Saturation(val) => {
+                let p = SaturationParams {
+                    saturation_offset: *val,
+                    _padding: [0.0; 3],
+                };
+                engine
+                    .device
+                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("Apply Params Buffer"),
+                        contents: bytemuck::cast_slice(&[p]),
+                        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                    })
+            }
+            other => panic!("apply: unsupported transformation {:?}", other),
         };
 
-        let params_buffer = engine
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Params Uniform Buffer"),
-                contents: bytemuck::cast_slice(&[params]),
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            });
-
         let params_bind_group = engine.device.create_bind_group(&BindGroupDescriptor {
-            label: Some("Params Bind Group"),
-            layout: &self.params_bind_group_layout,
+            label: Some("Apply Params Bind Group"),
+            layout: &cached.params_bind_group_layout,
             entries: &[BindGroupEntry {
                 binding: 0,
                 resource: params_buffer.as_entire_binding(),
@@ -517,7 +631,7 @@ impl Renderer {
                 label: None,
                 timestamp_writes: None,
             });
-            cpass.set_pipeline(&self.pipeline);
+            cpass.set_pipeline(&cached.pipeline);
             cpass.set_bind_group(0, &texture_bind_group, &[]);
             cpass.set_bind_group(1, &params_bind_group, &[]);
             cpass.dispatch_workgroups(width.div_ceil(16), height.div_ceil(16), 1);
@@ -532,26 +646,50 @@ impl Renderer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Transformation;
     use crate::gpu::texture::{download_presentation_buffer, upload_texture};
+
+    // ========== Helpers ==========
+
+    fn make_solid_image(w: u32, h: u32, r: u16, g: u16, b: u16) -> crate::Rgba16Image {
+        let mut img = crate::Rgba16Image::new(w, h);
+        for pixel in img.pixels_mut() {
+            *pixel = image::Rgba([r, g, b, 65535]);
+        }
+        img
+    }
+
+    fn roundtrip(
+        renderer: &mut Renderer,
+        engine: &GpuEngine,
+        img: &crate::Rgba16Image,
+        transforms: &[Transformation],
+    ) -> crate::Rgba16Image {
+        let (w, h) = (img.width(), img.height());
+        let upload = upload_texture(&engine.device, &engine.queue, img);
+        let mut current = renderer.ingest(engine, &upload);
+        for t in transforms {
+            current = renderer.apply(engine, &current, t);
+        }
+        let buf = renderer.present(engine, &current);
+        download_presentation_buffer(&engine.device, &engine.queue, &buf, w, h).unwrap()
+    }
+
+    // ========== Existing brightness tests (updated to use apply()) ==========
 
     #[test]
     fn test_brightness_shader_positive() {
         let engine = GpuEngine::new().unwrap();
-        let renderer = Renderer::new(&engine);
+        let mut renderer = Renderer::new(&engine);
 
         // 50% gray in sRGB (32767/65535 ≈ 0.500 sRGB → ~0.214 linear)
-        let mut img = crate::Rgba16Image::new(2, 2);
-        for pixel in img.pixels_mut() {
-            *pixel = image::Rgba([32767, 32767, 32767, 65535]);
-        }
-
-        let upload = upload_texture(&engine.device, &engine.queue, &img);
-        let linear = renderer.ingest(&engine, &upload);
-        let brightened = renderer.apply_brightness(&engine, &linear, 0.5);
-        let present_buf = renderer.present(&engine, &brightened);
-        let out_img =
-            download_presentation_buffer(&engine.device, &engine.queue, &present_buf, 2, 2)
-                .unwrap();
+        let img = make_solid_image(2, 2, 32767, 32767, 32767);
+        let out_img = roundtrip(
+            &mut renderer,
+            &engine,
+            &img,
+            &[Transformation::Brightness(0.5)],
+        );
 
         // 0.214 + 0.5 = 0.714 linear → sRGB ≈ 0.862 → u16 ≈ 56500
         for pixel in out_img.pixels() {
@@ -570,86 +708,72 @@ mod tests {
                 "B: expected ~56500, got {}",
                 pixel[2]
             );
-            assert!(pixel[3] == 65535); // Alpha untouched
+            assert_eq!(pixel[3], 65535);
         }
     }
 
     #[test]
     fn test_brightness_shader_negative() {
         let engine = GpuEngine::new().unwrap();
-        let renderer = Renderer::new(&engine);
+        let mut renderer = Renderer::new(&engine);
 
         // 50% gray in sRGB → ~0.214 linear; 0.214 - 0.6 = -0.386 → clamped to 0
-        let mut img = crate::Rgba16Image::new(2, 2);
-        for pixel in img.pixels_mut() {
-            *pixel = image::Rgba([32767, 32767, 32767, 65535]);
-        }
-
-        let upload = upload_texture(&engine.device, &engine.queue, &img);
-        let linear = renderer.ingest(&engine, &upload);
-        let darkened = renderer.apply_brightness(&engine, &linear, -0.6);
-        let present_buf = renderer.present(&engine, &darkened);
-        let out_img =
-            download_presentation_buffer(&engine.device, &engine.queue, &present_buf, 2, 2)
-                .unwrap();
+        let img = make_solid_image(2, 2, 32767, 32767, 32767);
+        let out_img = roundtrip(
+            &mut renderer,
+            &engine,
+            &img,
+            &[Transformation::Brightness(-0.6)],
+        );
 
         for pixel in out_img.pixels() {
-            assert!(pixel[0] == 0);
-            assert!(pixel[1] == 0);
-            assert!(pixel[2] == 0);
-            assert!(pixel[3] == 65535); // Alpha untouched
+            assert_eq!(pixel[0], 0);
+            assert_eq!(pixel[1], 0);
+            assert_eq!(pixel[2], 0);
+            assert_eq!(pixel[3], 65535);
         }
     }
 
     #[test]
     fn test_brightness_shader_zero() {
         let engine = GpuEngine::new().unwrap();
-        let renderer = Renderer::new(&engine);
+        let mut renderer = Renderer::new(&engine);
 
-        let mut img = crate::Rgba16Image::new(2, 2);
-        for pixel in img.pixels_mut() {
-            *pixel = image::Rgba([10794, 25700, 51400, 65535]);
-        }
-
-        let upload = upload_texture(&engine.device, &engine.queue, &img);
-        let linear = renderer.ingest(&engine, &upload);
-        let unchanged = renderer.apply_brightness(&engine, &linear, 0.0);
-        let present_buf = renderer.present(&engine, &unchanged);
-        let out_img =
-            download_presentation_buffer(&engine.device, &engine.queue, &present_buf, 2, 2)
-                .unwrap();
+        let img = make_solid_image(2, 2, 10794, 25700, 51400);
+        let out_img = roundtrip(
+            &mut renderer,
+            &engine,
+            &img,
+            &[Transformation::Brightness(0.0)],
+        );
 
         // sRGB → linear → sRGB is a mathematical identity; differences are f16 rounding.
         for pixel in out_img.pixels() {
             assert!((pixel[0] as i32 - 10794).abs() <= 64);
             assert!((pixel[1] as i32 - 25700).abs() <= 64);
             assert!((pixel[2] as i32 - 51400).abs() <= 64);
-            assert!(pixel[3] == 65535);
+            assert_eq!(pixel[3], 65535);
         }
     }
 
     #[test]
     fn test_shader_chaining() {
         let engine = GpuEngine::new().unwrap();
-        let renderer = Renderer::new(&engine);
+        let mut renderer = Renderer::new(&engine);
 
         // 51400/65535 ≈ 0.784 sRGB → ~0.577 linear
-        let mut img = crate::Rgba16Image::new(2, 2);
-        for pixel in img.pixels_mut() {
-            *pixel = image::Rgba([51400, 51400, 51400, 65535]);
-        }
-
-        let upload = upload_texture(&engine.device, &engine.queue, &img);
-        let linear = renderer.ingest(&engine, &upload);
+        let img = make_solid_image(2, 2, 51400, 51400, 51400);
+        let out_img = roundtrip(
+            &mut renderer,
+            &engine,
+            &img,
+            &[
+                Transformation::Brightness(-0.2),
+                Transformation::Brightness(0.5),
+            ],
+        );
 
         // 0.577 - 0.2 = 0.377; 0.377 + 0.5 = 0.877 linear → sRGB ≈ 0.944 → u16 ≈ 61880
-        let intermediate = renderer.apply_brightness(&engine, &linear, -0.2);
-        let final_linear = renderer.apply_brightness(&engine, &intermediate, 0.5);
-        let present_buf = renderer.present(&engine, &final_linear);
-        let out_img =
-            download_presentation_buffer(&engine.device, &engine.queue, &present_buf, 2, 2)
-                .unwrap();
-
         for pixel in out_img.pixels() {
             assert!(
                 (pixel[0] as i32 - 61880).abs() <= 64,
@@ -666,38 +790,34 @@ mod tests {
                 "B: expected ~61880, got {}",
                 pixel[2]
             );
-            assert!(pixel[3] == 65535); // Alpha untouched
+            assert_eq!(pixel[3], 65535);
         }
     }
 
     #[test]
     fn test_shader_headroom_preservation() {
         let engine = GpuEngine::new().unwrap();
-        let renderer = Renderer::new(&engine);
+        let mut renderer = Renderer::new(&engine);
 
         // 32767/65535 ≈ 0.500 sRGB → ~0.214 linear
-        let mut img = crate::Rgba16Image::new(2, 2);
-        for pixel in img.pixels_mut() {
-            *pixel = image::Rgba([32767, 32767, 32767, 65535]);
-        }
-
-        let upload = upload_texture(&engine.device, &engine.queue, &img);
-        let linear = renderer.ingest(&engine, &upload);
+        let img = make_solid_image(2, 2, 32767, 32767, 32767);
+        let out_img = roundtrip(
+            &mut renderer,
+            &engine,
+            &img,
+            &[
+                Transformation::Brightness(0.8),
+                Transformation::Brightness(-0.8),
+            ],
+        );
 
         // 0.214 + 0.8 = 1.014 (above 1.0, held in headroom); 1.014 - 0.8 = 0.214 linear
-        let up = renderer.apply_brightness(&engine, &linear, 0.8);
-        let down = renderer.apply_brightness(&engine, &up, -0.8);
-        let present_buf = renderer.present(&engine, &down);
-        let out_img =
-            download_presentation_buffer(&engine.device, &engine.queue, &present_buf, 2, 2)
-                .unwrap();
-
         // linear_to_srgb(0.214) ≈ 0.500 sRGB → u16 ≈ 32767; allow ±64 for f16 precision
         for pixel in out_img.pixels() {
             assert!((pixel[0] as i32 - 32767).abs() <= 64);
             assert!((pixel[1] as i32 - 32767).abs() <= 64);
             assert!((pixel[2] as i32 - 32767).abs() <= 64);
-            assert!(pixel[3] == 65535);
+            assert_eq!(pixel[3], 65535);
         }
     }
 
@@ -737,7 +857,7 @@ mod tests {
                 "B: expected ~49152, got {}",
                 pixel[2]
             );
-            assert!(pixel[3] == 65535);
+            assert_eq!(pixel[3], 65535);
         }
     }
 
@@ -909,5 +1029,290 @@ mod tests {
                 assert_eq!(tp, rp, "Pixel ({x},{y}) mismatch: tiled={tp:?}, ref={rp:?}");
             }
         }
+    }
+
+    // ========== Saturation correctness tests ==========
+
+    #[test]
+    fn test_saturation_zero_is_identity() {
+        let engine = GpuEngine::new().unwrap();
+        let mut renderer = Renderer::new(&engine);
+
+        // Use a non-gray, non-neutral color so saturation has values to act on.
+        let img = make_solid_image(2, 2, 32767, 16384, 8192);
+        let out_img = roundtrip(
+            &mut renderer,
+            &engine,
+            &img,
+            &[Transformation::Saturation(0.0)],
+        );
+
+        // saturation_offset=0 → scale=1.0 → identity; only f16 rounding applies.
+        for pixel in out_img.pixels() {
+            assert!(
+                (pixel[0] as i32 - 32767).abs() <= 64,
+                "R: expected ~32767, got {}",
+                pixel[0]
+            );
+            assert!(
+                (pixel[1] as i32 - 16384).abs() <= 64,
+                "G: expected ~16384, got {}",
+                pixel[1]
+            );
+            assert!(
+                (pixel[2] as i32 - 8192).abs() <= 64,
+                "B: expected ~8192, got {}",
+                pixel[2]
+            );
+            assert_eq!(pixel[3], 65535);
+        }
+    }
+
+    #[test]
+    fn test_saturation_negative_one_produces_grayscale() {
+        let engine = GpuEngine::new().unwrap();
+        let mut renderer = Renderer::new(&engine);
+
+        // Pure red: R=65535, G=0, B=0 in sRGB. After desaturation, all channels
+        // equal Rec.709 luminance of the linear values: lum = 0.2126*1.0 = 0.2126.
+        let img = make_solid_image(2, 2, 65535, 0, 0);
+        let out_img = roundtrip(
+            &mut renderer,
+            &engine,
+            &img,
+            &[Transformation::Saturation(-1.0)],
+        );
+
+        for pixel in out_img.pixels() {
+            // All three channels should be equal — the defining property of grayscale.
+            assert!(
+                (pixel[0] as i32 - pixel[1] as i32).abs() <= 64,
+                "R and G should be equal after full desaturation: R={}, G={}",
+                pixel[0],
+                pixel[1]
+            );
+            assert!(
+                (pixel[1] as i32 - pixel[2] as i32).abs() <= 64,
+                "G and B should be equal after full desaturation: G={}, B={}",
+                pixel[1],
+                pixel[2]
+            );
+            // The gray value should reflect luminance, not zero or the original red.
+            assert!(
+                pixel[0] > 0 && pixel[0] < 65535,
+                "Desaturated value should be a mid-tone, got {}",
+                pixel[0]
+            );
+            assert_eq!(pixel[3], 65535);
+        }
+    }
+
+    #[test]
+    fn test_saturation_positive_increases_color() {
+        let engine = GpuEngine::new().unwrap();
+        let mut renderer = Renderer::new(&engine);
+
+        // Input: warm color where R > G > B.
+        // After positive saturation: R should increase (it's above luminance),
+        // G and B should decrease (they're below luminance).
+        let img = make_solid_image(2, 2, 32767, 16384, 8192);
+        let out_img = roundtrip(
+            &mut renderer,
+            &engine,
+            &img,
+            &[Transformation::Saturation(0.5)],
+        );
+
+        for pixel in out_img.pixels() {
+            assert!(
+                pixel[0] > 32767,
+                "R should increase with positive saturation: got {}",
+                pixel[0]
+            );
+            assert!(
+                pixel[1] < 16384,
+                "G should decrease with positive saturation: got {}",
+                pixel[1]
+            );
+            assert!(
+                pixel[2] < 8192,
+                "B should decrease with positive saturation: got {}",
+                pixel[2]
+            );
+            assert_eq!(pixel[3], 65535);
+        }
+    }
+
+    // ========== PipelineCache behavior tests ==========
+
+    #[test]
+    fn test_pipeline_cache_returns_same_pipeline() {
+        let engine = GpuEngine::new().unwrap();
+        let mut cache = PipelineCache::new();
+
+        // Calling get_or_create twice for the same kind must return the same
+        // cached entry — no recompilation on the second call.
+        let p1 =
+            cache.get_or_create(&engine.device, TransformKind::Brightness) as *const CachedPipeline;
+        let p2 =
+            cache.get_or_create(&engine.device, TransformKind::Brightness) as *const CachedPipeline;
+        assert!(
+            std::ptr::eq(p1, p2),
+            "same TransformKind should return the same cached pipeline pointer"
+        );
+    }
+
+    #[test]
+    fn test_pipeline_cache_different_kinds() {
+        let engine = GpuEngine::new().unwrap();
+        let mut cache = PipelineCache::new();
+
+        // Brightness and Saturation must occupy separate cache entries.
+        let pb =
+            cache.get_or_create(&engine.device, TransformKind::Brightness) as *const CachedPipeline;
+        let ps =
+            cache.get_or_create(&engine.device, TransformKind::Saturation) as *const CachedPipeline;
+        assert!(
+            !std::ptr::eq(pb, ps),
+            "different TransformKinds should return different pipeline pointers"
+        );
+    }
+
+    // ========== Chaining tests ==========
+
+    #[test]
+    fn test_chained_brightness_then_saturation() {
+        let engine = GpuEngine::new().unwrap();
+        let mut renderer = Renderer::new(&engine);
+
+        let img = make_solid_image(2, 2, 32767, 16384, 8192);
+
+        // Apply each transform independently to establish baselines.
+        let brightness_only = roundtrip(
+            &mut renderer,
+            &engine,
+            &img,
+            &[Transformation::Brightness(0.3)],
+        );
+        let saturation_only = roundtrip(
+            &mut renderer,
+            &engine,
+            &img,
+            &[Transformation::Saturation(-0.5)],
+        );
+        let chained = roundtrip(
+            &mut renderer,
+            &engine,
+            &img,
+            &[
+                Transformation::Brightness(0.3),
+                Transformation::Saturation(-0.5),
+            ],
+        );
+
+        // The chained result must differ from either single-transform result.
+        let r_chain = chained.get_pixel(0, 0)[0] as i32;
+        let r_bright = brightness_only.get_pixel(0, 0)[0] as i32;
+        let r_sat = saturation_only.get_pixel(0, 0)[0] as i32;
+        assert!(
+            (r_chain - r_bright).abs() > 64,
+            "chained result should differ from brightness-only: chain={r_chain}, bright={r_bright}"
+        );
+        assert!(
+            (r_chain - r_sat).abs() > 64,
+            "chained result should differ from saturation-only: chain={r_chain}, sat={r_sat}"
+        );
+    }
+
+    #[test]
+    fn test_chained_saturation_then_brightness() {
+        let engine = GpuEngine::new().unwrap();
+        let mut renderer = Renderer::new(&engine);
+
+        let img = make_solid_image(2, 2, 32767, 16384, 8192);
+
+        // Note: brightness (uniform additive offset) and saturation (linear scaling around
+        // luminance) commute exactly when Rec.709 coefficients sum to 1.0 — which they do
+        // (0.2126 + 0.7152 + 0.0722 = 1.0). Both orderings produce algebraically identical
+        // results. This test verifies the chaining mechanism works regardless of order and
+        // that the outputs are consistent.
+        let bright_then_sat = roundtrip(
+            &mut renderer,
+            &engine,
+            &img,
+            &[
+                Transformation::Brightness(0.3),
+                Transformation::Saturation(-0.5),
+            ],
+        );
+        let sat_then_bright = roundtrip(
+            &mut renderer,
+            &engine,
+            &img,
+            &[
+                Transformation::Saturation(-0.5),
+                Transformation::Brightness(0.3),
+            ],
+        );
+
+        for y in 0..2u32 {
+            for x in 0..2u32 {
+                let a = bright_then_sat.get_pixel(x, y);
+                let b = sat_then_bright.get_pixel(x, y);
+                assert!(
+                    (a[0] as i32 - b[0] as i32).abs() <= 64,
+                    "R at ({x},{y}): order A={}, order B={}",
+                    a[0],
+                    b[0]
+                );
+                assert!(
+                    (a[1] as i32 - b[1] as i32).abs() <= 64,
+                    "G at ({x},{y}): order A={}, order B={}",
+                    a[1],
+                    b[1]
+                );
+                assert!(
+                    (a[2] as i32 - b[2] as i32).abs() <= 64,
+                    "B at ({x},{y}): order A={}, order B={}",
+                    a[2],
+                    b[2]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_multiple_same_transform() {
+        let engine = GpuEngine::new().unwrap();
+        let mut renderer = Renderer::new(&engine);
+
+        // ~50% gray in sRGB → ~0.214 linear. Each +0.3 brightness step accumulates.
+        let img = make_solid_image(2, 2, 32767, 32767, 32767);
+
+        let once = roundtrip(
+            &mut renderer,
+            &engine,
+            &img,
+            &[Transformation::Brightness(0.3)],
+        );
+        let twice = roundtrip(
+            &mut renderer,
+            &engine,
+            &img,
+            &[
+                Transformation::Brightness(0.3),
+                Transformation::Brightness(0.3),
+            ],
+        );
+
+        // 0.214 + 0.3 = 0.514 linear → sRGB ≈ 0.744 → u16 ≈ 48777
+        // 0.214 + 0.6 = 0.814 linear → sRGB ≈ 0.913 → u16 ≈ 59840
+        // Applying brightness twice must produce a strictly brighter result.
+        let r_once = once.get_pixel(0, 0)[0];
+        let r_twice = twice.get_pixel(0, 0)[0];
+        assert!(
+            r_twice > r_once,
+            "two brightness passes should accumulate: once={r_once}, twice={r_twice}"
+        );
     }
 }

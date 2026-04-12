@@ -15,7 +15,7 @@ This document tracks known architectural shortcuts, generic naming, and structur
 - **Resolution:** `shader.wgsl` renamed to `brightness.wgsl`. Future shaders
   follow this naming convention (`saturation.wgsl`, `contrast.wgsl`, etc.).
 
-### Monolithic Pipeline Initialization — **[SCHEDULED: Phase 4]**
+### Monolithic Pipeline Initialization — **[RESOLVED: Phase 4, PR 2]**
 - **Location:** `bdip_core/src/gpu/pipeline.rs` (`Renderer::new`)
 - **Current Pattern:** The `Renderer::new` constructor eagerly compiles the shader module and
   statically generates the `ComputePipeline` directly inside the startup sequence.

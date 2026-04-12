@@ -1,5 +1,5 @@
 use bdip_core::gpu::texture::{download_presentation_buffer, upload_texture};
-use bdip_core::{Transformation, gpu::engine::GpuEngine, gpu::pipeline::Renderer};
+use bdip_core::{gpu::engine::GpuEngine, gpu::pipeline::Renderer, Transformation};
 use clap::Parser;
 
 mod cli;
@@ -55,21 +55,14 @@ fn main() -> anyhow::Result<()> {
         let mut img = bdip_core::io::load_image(&input_path)?;
 
         let engine = GpuEngine::new()?;
-        let renderer = Renderer::new(&engine);
+        let mut renderer = Renderer::new(&engine);
 
         let uploaded_texture = upload_texture(&engine.device, &engine.queue, &img);
         let mut current_texture = renderer.ingest(&engine, &uploaded_texture);
 
-        for transform in transforms {
-            match transform {
-                Transformation::Brightness(val) => {
-                    println!("Applying Brightness {}", val);
-                    current_texture = renderer.apply_brightness(&engine, &current_texture, val);
-                }
-                _ => {
-                    println!("Unknown transform {:?}", transform);
-                }
-            }
+        for transform in &transforms {
+            println!("Applying {:?}", transform);
+            current_texture = renderer.apply(&engine, &current_texture, transform);
         }
 
         let presentation_buffer = renderer.present(&engine, &current_texture);

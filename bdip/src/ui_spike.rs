@@ -2,6 +2,7 @@ use anyhow::Context;
 use bdip_core::gpu::engine::GpuEngine;
 use bdip_core::gpu::pipeline::Renderer;
 use bdip_core::gpu::texture::{download_presentation_buffer, upload_texture};
+use bdip_core::Transformation;
 use iced::widget::{container, image};
 use iced::{Element, Length, Task};
 use std::path::PathBuf;
@@ -44,12 +45,13 @@ impl SpikeApp {
 
         // Initialize GPU
         let engine = GpuEngine::new().expect("Failed to init GPU engine");
-        let renderer = Renderer::new(&engine);
+        let mut renderer = Renderer::new(&engine);
 
         let uploaded_texture = upload_texture(&engine.device, &engine.queue, &loaded_image);
         let linear_texture = renderer.ingest(&engine, &uploaded_texture);
         println!("Applying hardcoded brightness: 0.5");
-        let brightened_texture = renderer.apply_brightness(&engine, &linear_texture, 0.5);
+        let brightened_texture =
+            renderer.apply(&engine, &linear_texture, &Transformation::Brightness(0.5));
         let presentation_buffer = renderer.present(&engine, &brightened_texture);
 
         let (width, height) = loaded_image.dimensions();
