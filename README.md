@@ -42,6 +42,11 @@ Processes an image through the core pipeline without starting the UI. Requires a
 ```bash
 cargo headless path/to/your/image.jpg --output out.png --apply brightness:0.5
 ```
+There is also a headless release version which is useful for performance testing:
+```bash
+cargo headless-release path/to/your/image.jpg --output out.png --apply brightness:0.5
+```
+
 You can also chain multiple transformations or use a pipeline file:
 ```bash
 cargo headless input.jpg --output out.png --apply brightness:0.3 --apply brightness:0.2

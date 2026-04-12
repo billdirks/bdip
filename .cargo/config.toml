@@ -9,6 +9,9 @@ ui-release = "run -p bdip --release"
 # Run headless CLI processing (e.g., cargo headless img.jpg --output out.png --apply brightness:0.5)
 headless = "run -p bdip -- --headless"
 
+# Run headless release CLI processing (e.g., cargo headless img.jpg --output out.png --apply brightness:0.5)
+headless-release = "run -p bdip --release -- --headless"
+
 # Run rigorous static analysis (as required by .cursorrules)
 lint = "clippy --workspace --all-targets --all-features"
 

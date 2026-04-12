@@ -1,5 +1,5 @@
 use bdip_core::gpu::texture::{download_texture, upload_texture};
-use bdip_core::{gpu::engine::GpuEngine, gpu::pipeline::Renderer, Transformation};
+use bdip_core::{Transformation, gpu::engine::GpuEngine, gpu::pipeline::Renderer};
 use clap::Parser;
 
 mod cli;
