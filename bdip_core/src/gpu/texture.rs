@@ -1,3 +1,10 @@
+//! GPU texture upload and presentation buffer download.
+//!
+//! Integration tests for the GPU interaction in this module are located in
+//! `pipeline.rs`. Tests exercise the full round-trip (upload → ingest/present →
+//! download) with real shader pipelines, which provides stronger coverage than
+//! isolated unit tests of these functions.
+
 use crate::Rgba16Image;
 use bytemuck::{Pod, Zeroable};
 use half::f16;
