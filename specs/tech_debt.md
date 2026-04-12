@@ -70,13 +70,6 @@ This document tracks known architectural shortcuts, generic naming, and structur
 - **Priority:** Low for V1 (Apple Silicon target, typical image sizes are fast). Revisit before
   shipping on non-Apple or supporting very large (50MP+) images.
 
-### [RESOLVED] CPU Readback Pixel Unpadding Loop (Debug Bottleneck)
-- **Location:** `bdip_core/src/gpu/texture.rs` (`download_presentation_buffer`)
-- **Resolution:** A final `presentation.wgsl` compute shader pass was implemented, which writes the
-  final texture directly to a tightly-packed storage buffer. This allows the CPU to simply use an
-  instantaneous memory copy (`bytemuck::cast_slice`) via `download_presentation_buffer` to hand it
-  to the UI, completely eliminating the manual pixel-unpadding float bottleneck loop.
-
 ### CPU Upload Pixel Conversion Loop
 - **Location:** `bdip_core/src/gpu/texture.rs` (`upload_texture`)
 - **Current Pattern:** The upload function uses a manual `for` loop on the CPU to iterate over every
@@ -89,23 +82,6 @@ This document tracks known architectural shortcuts, generic naming, and structur
   automatically handle the conversion to floating point, allowing the CPU to simply use a
   raw memory copy during upload.
 - **Priority:** **Medium.** Completes the "zero-CPU-loop" architecture and improves startup latency.
-
-## Image I/O (Precision)
-
-### [RESOLVED] [PHASE 4 GATE] 8-bit Downsampling Trap
-- **Location:** `bdip_core/src/io.rs` (`load_image`)
-- **Resolution:** `load_image` and the texture upload/download path have been refactored to support
-  and preserve `Rgba16Image`. The pipeline now defaults to `u16` representations in CPU-side
-  buffers, passing 16-bit per channel precision down to the WebGPU compute pipeline, retaining the
-  necessary headroom avoiding any silent 8-bit compression.
-
-### [RESOLVED] [PHASE 4 GATE] Missing sRGB ↔ Linear Color Space Conversion
-- **Location:** `bdip_core/src/gpu/ingest.wgsl`, `bdip_core/src/gpu/presentation.wgsl`
-- **Resolution:** A two-pass compute shader system sandwiching the main pipeline was created.
-  `ingest.wgsl` converts normalized sRGB image data coming from the CPU into pure linear color space
-  internally, ensuring that chained filter equations work precisely. Resulting data correctly flows
-  back through the `presentation.wgsl` where linear light translates back into gamma-space (sRGB)
-  before mapping to the read-back buffer.
 
 ## API Design
 
