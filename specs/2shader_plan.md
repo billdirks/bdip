@@ -30,9 +30,34 @@ simple. It also validates the multi-shader pipeline before UI work begins in Pha
 
 ---
 
+## PR Strategy
+
+Steps are grouped into PRs based on compilation boundaries. Steps within a PR
+are tightly coupled — landing them separately would leave the code in a
+non-compiling or non-functional state.
+
+| PR | Steps | Description | Tests landing with PR |
+|----|-------|-------------|---------------------|
+| 1 | 1 | Rename generics (`shader.wgsl` → `brightness.wgsl`, `ParamsUniform` → `BrightnessParams`). Pure refactor — all existing tests pass unchanged. | Existing tests (updated references only) |
+| 2 | 2, 3, 4 | `PipelineCache` + saturation shader + generalized `apply()`. These three are inseparable: the cache needs a second shader to be meaningful, and `apply()` needs the cache to dispatch. | Saturation correctness tests, cache behavior tests, chaining tests |
+| 3 | 5, 6 | CLI multi-transform chaining + saturation parsing. Headless mode fully functional with both shaders. | Integration test (`test_headless_multi_apply`) |
+| 4 | 7 | UI spike mechanical update (`apply_brightness` → `apply`). | Existing UI spike continues to compile and run |
+
+**Why not 1 PR per step:** Steps 2–4 form an atomic unit. Step 2 (PipelineCache)
+removes `apply_brightness` in favor of a generalized `apply`, but `apply` needs
+Step 3 (saturation shader) to have a second pipeline to dispatch, and Step 4
+(dispatch logic) is the `apply` method itself. Landing Step 2 alone would leave
+`Renderer` with a cache but no method to use it, breaking compilation for all
+callers. Similarly, Steps 5–6 are a natural pair: the chaining loop (Step 5) is
+trivial without a second transform to chain, and the CLI parser (Step 6) is
+useless without the chaining loop.
+
+---
+
 ## Implementation Steps
 
 ### Step 1: Rename Existing Generics (Tech Debt Cleanup)
+**PR 1** — Pure refactor, no behavioral changes.
 
 **Files:** `bdip_core/src/gpu/pipeline.rs`, `bdip_core/src/gpu/shader.wgsl`
 
@@ -44,7 +69,10 @@ simple. It also validates the multi-shader pipeline before UI work begins in Pha
 **Resolves:** "Generic Parameter Structs" and "Generic Shader Naming" items in
 `specs/tech_debt.md`.
 
+**Verification:** All existing tests pass. `cargo clippy` clean.
+
 ### Step 2: Introduce PipelineCache (Lazy-Loading Refactor)
+**PR 2** — Lands together with Steps 3 and 4.
 
 **Files:** `bdip_core/src/gpu/pipeline.rs`
 
@@ -76,17 +104,19 @@ CachedPipeline {
 }
 ```
 
-- `TransformKind` is a lightweight discriminant enum (e.g., `Brightness`, `Saturation`)
-  derived from `Transformation` — it identifies which pipeline to use without carrying
-  parameter values.
+- `TransformKind` is a lightweight discriminant enum (e.g., `Brightness`,
+  `Saturation`) derived from `Transformation` — it identifies which pipeline to
+  use without carrying parameter values.
 - `PipelineCache::get_or_create(device, kind)` compiles the shader and pipeline on
   first access, returning a reference to the cached entry.
-- `Renderer::new` no longer compiles any transform pipelines. It initializes only the
-  ingest and present pipelines (which are always needed) and an empty `PipelineCache`.
+- `Renderer::new` no longer compiles any transform pipelines. It initializes only
+  the ingest and present pipelines (which are always needed) and an empty
+  `PipelineCache`.
 
 **Resolves:** "Monolithic Pipeline Initialization" item in `specs/tech_debt.md`.
 
 ### Step 3: Write Saturation Shader
+**PR 2** — Lands together with Steps 2 and 4.
 
 **File:** `bdip_core/src/gpu/saturation.wgsl`
 
@@ -104,12 +134,14 @@ saturation). At `0.0`, the image is unchanged.
 **Uniform struct:** `SaturationParams { saturation_offset: f32, _padding: [f32; 3] }`
 
 The bind group layout matches the existing brightness contract:
-- `@group(0) @binding(0)`: Source texture (`texture_storage_2d<rgba16float, read>`)
+- `@group(0) @binding(0)`: Source texture
+  (`texture_storage_2d<rgba16float, read>`)
 - `@group(0) @binding(1)`: Destination texture
   (`texture_storage_2d<rgba16float, write>`)
 - `@group(1) @binding(0)`: Uniforms
 
 ### Step 4: Generalized Transform Dispatch
+**PR 2** — Lands together with Steps 2 and 3.
 
 **File:** `bdip_core/src/gpu/pipeline.rs`
 
@@ -133,47 +165,7 @@ Internally, this method:
 
 The old `apply_brightness` method is removed. All callers use `apply` instead.
 
-### Step 5: Multi-Transform Pipeline Chaining
-
-**File:** `bdip/src/main.rs`
-
-Update the headless execution loop to iterate over the full `Vec<Transformation>`
-and chain `apply` calls:
-
-```rust
-let mut current_texture = renderer.ingest(&engine, &uploaded_texture);
-for transform in &transforms {
-    current_texture = renderer.apply(&engine, &current_texture, transform);
-}
-let output_buffer = renderer.present(&engine, &current_texture);
-```
-
-This already supports arbitrary ordering and repetition by construction.
-
-### Step 6: CLI Parsing for Saturation
-
-**File:** `bdip/src/main.rs` (in `parse_transform`)
-
-Add a `"saturation"` match arm in the transform parser, mirroring the brightness
-pattern. Example usage:
-```
-bdip --headless --input in.png --output out.png \
-    --apply brightness:0.3 --apply saturation:-0.5
-```
-
-Pipeline files also support `saturation:<f32>` lines.
-
-### Step 7: Update UI Spike
-
-**File:** `bdip/src/ui_spike.rs`
-
-Update the UI spike to use the new `apply` method instead of `apply_brightness`.
-No new UI controls are needed — this is a mechanical update to keep the spike
-compiling.
-
-### Step 8: Tests
-
-**New tests in `bdip_core`:**
+**PR 2 tests:**
 - `test_saturation_zero_is_identity` — saturation offset 0.0 produces unchanged
   output.
 - `test_saturation_negative_one_produces_grayscale` — full desaturation matches
@@ -191,10 +183,60 @@ compiling.
   non-neutral images).
 - `test_multiple_same_transform` — applying brightness twice accumulates.
 
-**Integration test in `bdip`:**
-- `test_headless_multi_apply` — end-to-end CLI test with `--apply brightness:0.3
-  --apply saturation:-0.5`, verifying the output file is created and differs from
-  the input.
+**Verification:** All existing brightness tests pass through the new `apply()`
+path. All new saturation and caching tests pass. `cargo clippy` clean.
+
+### Step 5: Multi-Transform Pipeline Chaining
+**PR 3** — Lands together with Step 6.
+
+**File:** `bdip/src/main.rs`
+
+Update the headless execution loop to iterate over the full `Vec<Transformation>`
+and chain `apply` calls:
+
+```rust
+let mut current_texture = renderer.ingest(&engine, &uploaded_texture);
+for transform in &transforms {
+    current_texture = renderer.apply(&engine, &current_texture, transform);
+}
+let output_buffer = renderer.present(&engine, &current_texture);
+```
+
+This already supports arbitrary ordering and repetition by construction.
+
+### Step 6: CLI Parsing for Saturation
+**PR 3** — Lands together with Step 5.
+
+**File:** `bdip/src/main.rs` (in `parse_transform`)
+
+Add a `"saturation"` match arm in the transform parser, mirroring the brightness
+pattern. Example usage:
+```
+bdip --headless --input in.png --output out.png \
+    --apply brightness:0.3 --apply saturation:-0.5
+```
+
+Pipeline files also support `saturation:<f32>` lines.
+
+**PR 3 tests:**
+- `test_headless_multi_apply` — end-to-end CLI test with
+  `--apply brightness:0.3 --apply saturation:-0.5`, verifying the output file is
+  created and differs from the input.
+
+**Verification:** Full headless pipeline works with arbitrary ordered combinations
+of both transforms. Pipeline files with mixed lines work. `cargo clippy` clean.
+
+### Step 7: Update UI Spike
+**PR 4** — Standalone mechanical update.
+
+**File:** `bdip/src/ui_spike.rs`
+
+Update the UI spike to use the new `apply` method instead of `apply_brightness`.
+No new UI controls are needed — this is a mechanical update to keep the spike
+compiling.
+
+**Verification:** UI spike compiles and displays a loaded image with brightness
+applied. `cargo clippy` clean.
 
 ---
 
@@ -202,13 +244,13 @@ compiling.
 
 | Item | Status |
 |------|--------|
-| Generic Parameter Structs (`ParamsUniform`) | Resolved in Step 1 |
-| Generic Shader Naming (`shader.wgsl`) | Resolved in Step 1 |
-| Monolithic Pipeline Initialization | Resolved in Step 2 |
+| Generic Parameter Structs (`ParamsUniform`) | Resolved in PR 1 (Step 1) |
+| Generic Shader Naming (`shader.wgsl`) | Resolved in PR 1 (Step 1) |
+| Monolithic Pipeline Initialization | Resolved in PR 2 (Step 2) |
 
 ---
 
-## Verification Criteria
+## Verification Criteria (Phase Complete)
 - `cargo clippy` passes with no warnings.
 - All existing tests continue to pass.
 - All new tests pass.
