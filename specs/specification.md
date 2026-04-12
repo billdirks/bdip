@@ -72,16 +72,32 @@ Transformations are stored as lightweight standardized structs (e.g., `Brightnes
    * Build a minimal application window in `bdip` using the chosen UI framework (e.g., `iced` or `slint`).
    * Validate the **CPU Bridge** integration strategy: reading an `RgbaImage` from `bdip_core`'s headless pipeline and displaying it in a standard image widget.
    * *Verified when*: A window successfully displays a loaded image with a brightness adjustment applied, validating the framework's ergonomics and rendering pipeline before committing to full UI controls.
-4. **Full UI Integration**:
+4. **Pipeline Generalization & Second Shader (Saturation)**:
+   * Resolve tech debt: rename `shader.wgsl` → `brightness.wgsl`, rename
+     `ParamsUniform` → `BrightnessParams`, and refactor monolithic pipeline
+     initialization into a lazy-loading `PipelineCache`.
+   * Implement the Saturation compute shader with its own `SaturationParams`
+     uniform struct.
+   * Replace the single `apply_brightness` method with a generalized `apply`
+     method that dispatches any `Transformation` variant through the cache.
+   * Update headless CLI to support arbitrary ordered combinations of transforms:
+     `--apply brightness:0.3 --apply saturation:-0.5 --apply brightness:-0.1`.
+   * *Verified when*: `$ bdip --headless test.jpg --output out.png --apply
+     saturation:-1.0` produces a grayscale image, and multi-transform pipelines
+     with both shaders produce correct ordered results.
+   * *Full plan*: [2shader_plan.md](./2shader_plan.md)
+5. **Full UI Integration**:
    * Implement file open/save dialogs (`rfd` crate).
    * Construct the sidebar layout with slider controls for each V1 transformation.
    * Wire slider state changes to the transformation pipeline in `bdip_core`.
    * Bind keyboard shortcuts for undo/redo (Cmd+Z / Cmd+Shift+Z).
-   * *Verified when*: A user can open an image, adjust brightness/contrast/saturation via sliders, undo/redo changes, and save the result.
-5. **V1 Completion & Polish**:
-   * Implement remaining V1 shaders: Contrast, Saturation, Grayscale, Invert.
+   * *Verified when*: A user can open an image, adjust brightness/saturation via
+     sliders, undo/redo changes, and save the result.
+6. **V1 Completion & Polish**:
+   * Implement remaining V1 shaders: Contrast, Grayscale, Invert.
    * End-to-end testing of both CLI and UI workflows.
-   * *Verified when*: All V1 transformations work in both headless CLI and interactive UI modes.
+   * *Verified when*: All V1 transformations work in both headless CLI and
+     interactive UI modes.
 
 **Future Considerations (Selection and Extensibility)**:
 When dramatic UI layouts are requested, only the UI layer in `bdip` requires modification, while the transformation logic inside `bdip_core` remains perfectly sealed and safe. Building Region-Selection tools natively fits into this structure; a user selection merely provides an alpha-channel Mask texture to the Core Library. Because of the headless/binary separation constraints, this capability to apply transformations strictly against a mask will inherently be supported visually in the UI and pragmatically across the Command Line (e.g. passing a bounding box logic payload to the batch processor).

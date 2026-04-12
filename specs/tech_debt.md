@@ -7,23 +7,39 @@ This document tracks known architectural shortcuts, generic naming, and structur
 
 ## Generalization Blockers (GPU Pipeline)
 
-### Generic Parameter Structs
+### Generic Parameter Structs — **[SCHEDULED: Phase 4]**
 - **Location:** `bdip_core/src/gpu/pipeline.rs`
 - **Current Pattern:** The GPU parameter mapping struct is generically named `ParamsUniform`.
-- **Refactor Goal:** Prevent a "Monster Struct" pattern where a single giant struct holds unused parameters for *all* possible transformations, which wastes GPU memory alignment space and causes developer confusion.
-- **Suggested Remediation:** Rename `ParamsUniform` to `BrightnessUniform` (or `BrightnessParams`). Moving forward, create dedicated, tightly packed, and specifically named parameter structs for *each* discrete transformation (e.g., `ContrastUniform`, `SaturationUniform`).
+- **Refactor Goal:** Prevent a "Monster Struct" pattern where a single giant struct holds unused
+  parameters for *all* possible transformations, which wastes GPU memory alignment space and causes
+  developer confusion.
+- **Suggested Remediation:** Rename `ParamsUniform` to `BrightnessParams`. Create
+  `SaturationParams` for the new Saturation shader. Moving forward, create dedicated, tightly
+  packed, and specifically named parameter structs for *each* discrete transformation.
+- **Resolution Plan:** `specs/2shader_plan.md`, Step 1.
 
-### Generic Shader Naming
+### Generic Shader Naming — **[SCHEDULED: Phase 4]**
 - **Location:** `bdip_core/src/gpu/shader.wgsl`
-- **Current Pattern:** The core compute shader file is generically named `shader.wgsl` despite only handling the Brightness algorithm.
-- **Refactor Goal:** Avoid confusion and filename collision when managing multiple shaders handling different calculations on the GPU.
-- **Suggested Remediation:** Rename `shader.wgsl` to something explicitly descriptive like `brightness.wgsl`. Future shaders should follow this specific isolated naming convention (`contrast.wgsl`, `saturation.wgsl`) to keep the pipeline renderer modular.
+- **Current Pattern:** The core compute shader file is generically named `shader.wgsl` despite
+  only handling the Brightness algorithm.
+- **Refactor Goal:** Avoid confusion and filename collision when managing multiple shaders
+  handling different calculations on the GPU.
+- **Suggested Remediation:** Rename `shader.wgsl` to `brightness.wgsl`. Future shaders follow
+  this naming convention (`saturation.wgsl`, `contrast.wgsl`, etc.).
+- **Resolution Plan:** `specs/2shader_plan.md`, Step 1.
 
-### Monolithic Pipeline Initialization
+### Monolithic Pipeline Initialization — **[SCHEDULED: Phase 4]**
 - **Location:** `bdip_core/src/gpu/pipeline.rs` (`Renderer::new`)
-- **Current Pattern:** The `Renderer::new` constructor eagerly compiles the shader module and statically generates the `ComputePipeline` directly inside the startup sequence.
-- **Refactor Goal:** Prevent a "Monster Initialization" bottleneck. As the application grows to support dozens of transformations, globally compiling all shaders and building all pipelines at startup will aggressively bottleneck application launch times and waste GPU resources for transformations the user may never actually click.
-- **Suggested Remediation:** Refactor the `Renderer` (or create a dedicated `PipelineCache`) to implement a **Lazy-Loading** pattern. Shaders and their corresponding pipelines should safely JIT (Just-In-Time) compile upon their first invocation during an `apply_*` call, and then be stored in a HashMap/cache for rapid re-use.
+- **Current Pattern:** The `Renderer::new` constructor eagerly compiles the shader module and
+  statically generates the `ComputePipeline` directly inside the startup sequence.
+- **Refactor Goal:** Prevent a "Monster Initialization" bottleneck. As the application grows to
+  support dozens of transformations, globally compiling all shaders and building all pipelines at
+  startup will bottleneck application launch times and waste GPU resources for transformations the
+  user may never actually use.
+- **Suggested Remediation:** Introduce a `PipelineCache` with lazy-loading. Shaders and their
+  corresponding pipelines JIT-compile upon first invocation and are stored in a HashMap for
+  re-use. Ingest/present pipelines remain eagerly initialized (always needed).
+- **Resolution Plan:** `specs/2shader_plan.md`, Step 2.
 
 ## UI Responsiveness
 
