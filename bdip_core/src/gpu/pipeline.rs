@@ -28,7 +28,9 @@ struct ParamsUniform {
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 struct PresentParams {
     width: u32,
-    _padding: [u32; 3], // WebGPU uniforms require 16-byte alignment
+    y_offset: u32,
+    tile_height: u32,
+    _padding: u32, // WebGPU uniforms require 16-byte alignment
 }
 
 /// Shared bind group layout for passes that bind one source texture and one
@@ -251,74 +253,121 @@ impl Renderer {
     }
 
     /// Converts linear-light values in `src_texture` to sRGB-encoded u16 values
-    /// packed into a tightly packed storage buffer (2 u32s per pixel, no row padding).
-    /// Must be the last pass before `download_presentation_buffer`.
+    /// packed into a tightly packed storage buffer (2 u32s per pixel, no row
+    /// padding). Must be the last pass before `download_presentation_buffer`.
+    ///
+    /// For images whose full buffer exceeds `max_storage_buffer_binding_size`,
+    /// the dispatch is split into row-tiles. Each tile writes to a
+    /// binding-sized buffer, which is then copied into the correct offset of
+    /// the full output buffer. The shader's `y_offset` uniform shifts texture
+    /// reads so each tile processes the correct rows.
     pub fn present(&self, engine: &GpuEngine, src_texture: &wgpu::Texture) -> wgpu::Buffer {
-        let (width, height) = (src_texture.width(), src_texture.height());
+        let max_binding = engine.device.limits().max_storage_buffer_binding_size;
+        self.present_with_max_binding(engine, src_texture, max_binding)
+    }
 
-        // Tightly packed output: 4 channels × 2 bytes = 8 bytes per pixel, no row padding.
-        let dst_buffer = engine.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("present_dst_buffer"),
-            size: (width * height * 8) as wgpu::BufferAddress,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+    /// Inner implementation of `present` that accepts an explicit binding-size
+    /// limit. Tests use this to force tiling on small images.
+    pub(crate) fn present_with_max_binding(
+        &self,
+        engine: &GpuEngine,
+        src_texture: &wgpu::Texture,
+        max_binding_size: u64,
+    ) -> wgpu::Buffer {
+        let (width, height) = (src_texture.width(), src_texture.height());
+        let pixel_size: u64 = 8; // 4 channels × 2 bytes
+        let full_size = width as u64 * height as u64 * pixel_size;
+
+        let max_rows = (max_binding_size / (width as u64 * pixel_size)).min(height as u64) as u32;
+
+        let output_buffer = engine.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("present_output_buffer"),
+            size: full_size,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
 
-        let params = PresentParams {
-            width,
-            _padding: [0; 3],
-        };
-        let params_buffer = engine
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("present_params_buffer"),
-                contents: bytemuck::cast_slice(&[params]),
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            });
-
         let src_view = src_texture.create_view(&TextureViewDescriptor::default());
-
-        let texture_bind_group = engine.device.create_bind_group(&BindGroupDescriptor {
-            label: Some("Present Texture Bind Group"),
-            layout: &self.present_texture_bind_group_layout,
-            entries: &[
-                BindGroupEntry {
-                    binding: 0,
-                    resource: BindingResource::TextureView(&src_view),
-                },
-                BindGroupEntry {
-                    binding: 1,
-                    resource: dst_buffer.as_entire_binding(),
-                },
-            ],
-        });
-
-        let params_bind_group = engine.device.create_bind_group(&BindGroupDescriptor {
-            label: Some("Present Params Bind Group"),
-            layout: &self.present_params_bind_group_layout,
-            entries: &[BindGroupEntry {
-                binding: 0,
-                resource: params_buffer.as_entire_binding(),
-            }],
-        });
-
         let mut encoder = engine
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-        {
-            let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: None,
-                timestamp_writes: None,
+
+        let mut y_offset: u32 = 0;
+        while y_offset < height {
+            let tile_height = max_rows.min(height - y_offset);
+            let tile_size = width as u64 * tile_height as u64 * pixel_size;
+
+            let tile_buffer = engine.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("present_tile_buffer"),
+                size: tile_size,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
             });
-            cpass.set_pipeline(&self.present_pipeline);
-            cpass.set_bind_group(0, &texture_bind_group, &[]);
-            cpass.set_bind_group(1, &params_bind_group, &[]);
-            cpass.dispatch_workgroups(width.div_ceil(16), height.div_ceil(16), 1);
+
+            let params = PresentParams {
+                width,
+                y_offset,
+                tile_height,
+                _padding: 0,
+            };
+            let params_buffer =
+                engine
+                    .device
+                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("present_params_buffer"),
+                        contents: bytemuck::cast_slice(&[params]),
+                        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                    });
+
+            let texture_bind_group = engine.device.create_bind_group(&BindGroupDescriptor {
+                label: Some("Present Texture Bind Group"),
+                layout: &self.present_texture_bind_group_layout,
+                entries: &[
+                    BindGroupEntry {
+                        binding: 0,
+                        resource: BindingResource::TextureView(&src_view),
+                    },
+                    BindGroupEntry {
+                        binding: 1,
+                        resource: tile_buffer.as_entire_binding(),
+                    },
+                ],
+            });
+
+            let params_bind_group = engine.device.create_bind_group(&BindGroupDescriptor {
+                label: Some("Present Params Bind Group"),
+                layout: &self.present_params_bind_group_layout,
+                entries: &[BindGroupEntry {
+                    binding: 0,
+                    resource: params_buffer.as_entire_binding(),
+                }],
+            });
+
+            {
+                let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: None,
+                    timestamp_writes: None,
+                });
+                cpass.set_pipeline(&self.present_pipeline);
+                cpass.set_bind_group(0, &texture_bind_group, &[]);
+                cpass.set_bind_group(1, &params_bind_group, &[]);
+                cpass.dispatch_workgroups(width.div_ceil(16), tile_height.div_ceil(16), 1);
+            }
+
+            encoder.copy_buffer_to_buffer(
+                &tile_buffer,
+                0,
+                &output_buffer,
+                y_offset as u64 * width as u64 * pixel_size,
+                tile_size,
+            );
+
+            y_offset += tile_height;
         }
 
         engine.queue.submit(Some(encoder.finish()));
 
-        dst_buffer
+        output_buffer
     }
 
     /// Dispatches a single-pass color-space conversion shader that reads a source
@@ -785,6 +834,80 @@ mod tests {
                 px[2]
             );
             assert_eq!(px[3], 65535, "Row 1, col {x}: A should be 65535");
+        }
+    }
+
+    #[test]
+    fn test_present_tiling_one_row_per_tile() {
+        let engine = GpuEngine::new().unwrap();
+        let renderer = Renderer::new(&engine);
+
+        // 4×4 image with distinct per-row colors to detect row-offset bugs.
+        let mut img = crate::Rgba16Image::new(4, 4);
+        let row_values: [u16; 4] = [0, 16384, 49152, 65535];
+        for y in 0..4u32 {
+            for x in 0..4u32 {
+                let v = row_values[y as usize];
+                img.put_pixel(x, y, image::Rgba([v, v, v, 65535]));
+            }
+        }
+
+        let upload = upload_texture(&engine.device, &engine.queue, &img);
+        let linear = renderer.ingest(&engine, &upload);
+
+        // Force 1 row per tile: limit = width * 8 bytes (one row exactly).
+        let one_row = 4u64 * 8;
+        let tiled_buf = renderer.present_with_max_binding(&engine, &linear, one_row);
+        let tiled_img =
+            download_presentation_buffer(&engine.device, &engine.queue, &tiled_buf, 4, 4).unwrap();
+
+        // Compare against the non-tiled path (uses real device limit → single tile).
+        let ref_buf = renderer.present(&engine, &linear);
+        let ref_img =
+            download_presentation_buffer(&engine.device, &engine.queue, &ref_buf, 4, 4).unwrap();
+
+        for y in 0..4u32 {
+            for x in 0..4u32 {
+                let tp = tiled_img.get_pixel(x, y);
+                let rp = ref_img.get_pixel(x, y);
+                assert_eq!(tp, rp, "Pixel ({x},{y}) mismatch: tiled={tp:?}, ref={rp:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn test_present_tiling_uneven_rows() {
+        let engine = GpuEngine::new().unwrap();
+        let renderer = Renderer::new(&engine);
+
+        // 3×5 image — 5 rows don't divide evenly into 2-row tiles.
+        let mut img = crate::Rgba16Image::new(3, 5);
+        for y in 0..5u32 {
+            let v = (y * 16384).min(65535) as u16;
+            for x in 0..3u32 {
+                img.put_pixel(x, y, image::Rgba([v, v, v, 65535]));
+            }
+        }
+
+        let upload = upload_texture(&engine.device, &engine.queue, &img);
+        let linear = renderer.ingest(&engine, &upload);
+
+        // Force 2 rows per tile: tiles of 2, 2, 1 rows.
+        let two_rows = 3u64 * 2 * 8;
+        let tiled_buf = renderer.present_with_max_binding(&engine, &linear, two_rows);
+        let tiled_img =
+            download_presentation_buffer(&engine.device, &engine.queue, &tiled_buf, 3, 5).unwrap();
+
+        let ref_buf = renderer.present(&engine, &linear);
+        let ref_img =
+            download_presentation_buffer(&engine.device, &engine.queue, &ref_buf, 3, 5).unwrap();
+
+        for y in 0..5u32 {
+            for x in 0..3u32 {
+                let tp = tiled_img.get_pixel(x, y);
+                let rp = ref_img.get_pixel(x, y);
+                assert_eq!(tp, rp, "Pixel ({x},{y}) mismatch: tiled={tp:?}, ref={rp:?}");
+            }
         }
     }
 }
