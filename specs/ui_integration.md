@@ -30,8 +30,9 @@ three main zones:
    sections:
 
    **a. Transform Component (Top)**
-   - A `pick_list` dropdown to select a transformation type. Options:
-     `Brightness`, `Contrast`, `Saturation`, `Grayscale`, `Invert`.
+   - A `pick_list` dropdown to select a transformation type. Initially
+     populated with `Brightness` and `Saturation` (the two existing shaders).
+     `Contrast`, `Grayscale`, and `Invert` are added in Phase 6 (PRs 6–8).
    - Based on the selected variant, one of two secondary widgets appears:
      - **Parameterized transforms** (Brightness, Contrast, Saturation): An
        `iced::widget::slider` with range `-1.0..=1.0` and default `0.0`. A text
@@ -228,10 +229,14 @@ bdip/src/
 it can coexist — `main.rs` can be switched to call `ui::run()` instead of
 `ui_spike::run()` as the final integration step.
 
-## 7. V1 Shader Completion (Contrast, Grayscale, Invert)
+## 7. V1 Shader Completion — Phase 6 (Contrast, Grayscale, Invert)
 
-Phase 5 requires all five V1 transformations to be functional. Currently only
-Brightness and Saturation have GPU shaders. Three more must be implemented:
+Three V1 transformations remain unimplemented as GPU shaders: Contrast,
+Grayscale, and Invert. These are Phase 6 work (PRs 6–8), sequenced after
+Phase 5 (UI integration) is complete. Each shader is an independent unit of
+work. The `Transformation` enum variants already exist in `bdip_core`; only
+the GPU shaders, pipeline wiring, CLI parsing, and UI `pick_list` entries
+need to be added.
 
 ### 7.1. Contrast Shader
 - **File:** `bdip_core/src/gpu/contrast.wgsl`
@@ -260,10 +265,10 @@ Brightness and Saturation have GPU shaders. Three more must be implemented:
 ### 7.4. CLI Parity
 
 `parse_transform()` in `bdip/src/main.rs` currently only handles `brightness` and
-`saturation`. It must be extended to handle all five V1 transforms:
-- `contrast:<f32>` → `Transformation::Contrast(val)`
-- `grayscale` → `Transformation::Grayscale`
-- `invert` → `Transformation::Invert`
+`saturation`. Each Phase 6 shader PR adds its own CLI parsing:
+- PR 6: `contrast:<f32>` → `Transformation::Contrast(val)`
+- PR 7: `grayscale` → `Transformation::Grayscale`
+- PR 8: `invert` → `Transformation::Invert`
 
 ## 8. Rendering Pipeline Integration Detail
 
@@ -319,50 +324,25 @@ self-contained: it compiles, passes `cargo clippy`, and existing tests continue
 to pass. PRs are ordered by dependency — later PRs may depend on earlier ones
 being merged.
 
----
+PRs 1–5 are **Phase 5** (UI integration) and use only the two existing shaders
+(Brightness, Saturation). PRs 6–8 are **Phase 6** (V1 shader completion) and are
+independent of each other — they can be implemented and reviewed in parallel.
 
-### PR 1: V1 Shader Completion (Contrast, Grayscale, Invert)
+### Dependency Graph
 
-**Goal:** Implement the three remaining V1 GPU shaders so the full transformation
-set is available before UI work begins.
-
-**Scope:**
-- Add `contrast.wgsl`, `grayscale.wgsl`, `invert.wgsl` shader files in
-  `bdip_core/src/gpu/`.
-- Add uniform param structs (`ContrastParams`, `GrayscaleParams`, `InvertParams`)
-  in `pipeline.rs`.
-- Add `TransformKind` variants and `From<&Transformation>` match arms.
-- Add `PipelineCache::compile()` match arms for each new shader.
-- Add `Renderer::apply()` match arms for each new shader.
-- Extend `parse_transform()` in `bdip/src/main.rs` to handle `contrast`, 
-  `grayscale`, and `invert`.
-- Unit tests for each shader (identity/neutral case, extreme values).
-- Integration test: multi-transform pipeline including new shaders.
-
-**Key files:**
-- `bdip_core/src/gpu/contrast.wgsl` (new)
-- `bdip_core/src/gpu/grayscale.wgsl` (new)
-- `bdip_core/src/gpu/invert.wgsl` (new)
-- `bdip_core/src/gpu/pipeline.rs` (modify)
-- `bdip/src/main.rs` (modify `parse_transform`)
-
-**References:**
-- `specs/adding_a_shader.md` — the 4-point checklist for each shader.
-- `specs/transformations_reference.md` — algorithm details.
-- Section 7 of this document for shader specs.
-
-**Verification:**
 ```
-$ bdip --headless test.jpg --output out.png --apply contrast:0.5
-$ bdip --headless test.jpg --output out.png --apply grayscale
-$ bdip --headless test.jpg --output out.png --apply invert
-$ cargo test -p bdip_core
-$ cargo clippy --workspace
+PR 1 (UI Scaffold) ──┬──→ PR 2 (Transform Controls) ──→ PR 3 (History & Undo/Redo)
+                      │
+                      └──→ PR 4 (Save & Error Handling)
+                                                            ↓
+                                                   PR 5 (Polish & Integration Testing)
+                                                            ↓
+                                          PR 6, PR 7, PR 8 (independent, parallel)
 ```
 
 ---
 
-### PR 2: UI Module Scaffold & Application Shell
+### PR 1: UI Module Scaffold & Application Shell
 
 **Goal:** Replace the `ui_spike.rs` with the new `ui/` module structure. Wire up
 the `BdipApp` struct with async initialization, dark theme, and the three-zone
@@ -414,20 +394,30 @@ zone. No GPU integration yet beyond what's needed to display a loaded image.
 
 ---
 
-### PR 3: Transform Controls & Live Preview
+### PR 2: Transform Controls & Live Preview
 
 **Goal:** Wire the transform picker and slider to the GPU pipeline for live
 preview and committed transforms. This is the core interactive editing flow.
+This PR only needs to support Brightness and Saturation (the two existing
+shaders). Contrast, Grayscale, and Invert are added in PRs 6–8 and will
+automatically appear in the `pick_list` once their shaders exist.
 
-**Depends on:** PR 1 (all V1 shaders), PR 2 (UI scaffold).
+**Depends on:** PR 1 (UI scaffold).
 
 **Scope:**
 - Implement `TransformOption` enum and `pick_list` integration in sidebar.
+  Initially populated with `Brightness` and `Saturation` only. Design the
+  enum so that adding new variants later is trivial (Contrast, Grayscale,
+  Invert will be added in PRs 6–8).
 - Implement dynamic widget switching: slider for parameterized transforms,
-  "Apply" button for parameterless transforms.
+  "Apply" button for parameterless transforms. The "Apply" button path can
+  be stubbed or built proactively — there are no parameterless transforms
+  yet, but the code path should exist so PRs 6–8 only need to add enum
+  variants.
 - Wire `SliderChanged` → live preview pipeline (Section 8.3).
 - Wire `SliderReleased` → commit to `HistoryManager` (Section 8.2).
-- Wire `ApplyParameterless` → commit Grayscale/Invert (Section 8.2).
+- Wire `ApplyParameterless` → commit flow (Section 8.2). May be untestable
+  until Grayscale/Invert are added, but the handler should exist.
 - Implement the GPU texture caching strategy (Section 2): upload + ingest
   once on load, replay from cached texture on every edit.
 - Display current slider value as formatted text.
@@ -446,18 +436,17 @@ preview and committed transforms. This is the core interactive editing flow.
 **Verification:**
 - Select "Brightness" → slider appears → dragging updates canvas in real time.
 - Release slider → transform committed, slider resets to 0.
-- Select "Invert" → "Apply" button appears → clicking inverts the image.
-- All five V1 transforms work via the UI.
+- Select "Saturation" → same slider behavior, visually correct result.
 - `cargo clippy --workspace` passes.
 
 ---
 
-### PR 4: History UI & Undo/Redo
+### PR 3: History UI & Undo/Redo
 
 **Goal:** Implement the history list visualization and undo/redo controls,
 including keyboard shortcuts.
 
-**Depends on:** PR 3 (transforms must be committable to test history).
+**Depends on:** PR 2 (transforms must be committable to test history).
 
 **Scope:**
 - Implement history list widget in sidebar (Section 1.3b): scrollable,
@@ -495,12 +484,12 @@ including keyboard shortcuts.
 
 ---
 
-### PR 5: Save Workflow & Error Handling
+### PR 4: Save Workflow & Error Handling
 
 **Goal:** Implement the save file dialog and comprehensive error handling
 throughout the UI.
 
-**Depends on:** PR 2 (UI scaffold with load working).
+**Depends on:** PR 1 (UI scaffold with load working).
 
 **Scope:**
 - Wire `SaveImagePressed` → `rfd::AsyncFileDialog` (save mode) → background
@@ -532,33 +521,158 @@ throughout the UI.
 
 ---
 
-### PR 6: Polish & Integration Testing
+### PR 5: UI Polish & Integration Testing
 
-**Goal:** Final cleanup, visual polish, and end-to-end validation of both CLI
-and UI workflows.
+**Goal:** Final cleanup, visual polish, and end-to-end validation of the UI
+and CLI workflows using the two existing shaders (Brightness, Saturation).
+This PR closes out Phase 5.
 
-**Depends on:** All previous PRs.
+**Depends on:** PRs 1–4.
 
 **Scope:**
 - Visual polish: consistent spacing, padding, font sizes in sidebar/menu bar.
 - Verify dark theme consistency across all widgets.
-- Add/update integration tests for CLI with all 5 V1 transforms.
+- Add/update integration tests for CLI with Brightness and Saturation.
 - Manual end-to-end test checklist (documented in PR description):
   - Cold launch → empty canvas.
   - Load PNG, JPG, TIFF, GIF → each displays correctly.
-  - Apply each of the 5 transforms → visual result is correct.
+  - Apply Brightness and Saturation → visual result is correct.
   - Stack multiple transforms → result is correct.
   - Undo/Redo full stack → canvas matches expectations.
   - Save as PNG, JPG, TIFF → output file is valid.
-  - CLI headless mode with all transforms → output is correct.
+  - CLI headless mode with existing transforms → output is correct.
 - Clean up any remaining references to `ui_spike` in comments or docs.
 - Run `cargo clippy --workspace` and `rustfmt` on all files.
 
 **Key files:**
 - Various UI files (minor adjustments)
-- `bdip/tests/e2e_cli_pipeline.rs` (modify — add new transform tests)
+- `bdip/tests/e2e_cli_pipeline.rs` (modify — add/verify transform tests)
 
 **Verification:**
 - All automated tests pass: `cargo test --workspace`.
 - `cargo clippy --workspace` clean.
 - Manual checklist completed and documented in PR.
+
+---
+
+### PR 6: Contrast Shader (Phase 6)
+
+**Goal:** Implement the Contrast GPU shader and wire it into both CLI and UI.
+
+**Depends on:** PR 5 (Phase 5 complete). Independent of PRs 7 and 8.
+
+**Scope:**
+- Add `contrast.wgsl` in `bdip_core/src/gpu/`.
+- Add `ContrastParams` uniform struct in `pipeline.rs`.
+- Add `TransformKind::Contrast` variant, `From` impl, `compile()` match arm,
+  `apply()` match arm (per `specs/adding_a_shader.md`).
+- Add `contrast:<f32>` parsing to `parse_transform()` in `bdip/src/main.rs`.
+- Add `TransformOption::Contrast` to the UI `pick_list` in
+  `bdip/src/ui/sidebar.rs` (or `message.rs`).
+- Unit tests: identity case (`contrast:0.0` unchanged), extreme values.
+- Integration test: multi-transform pipeline including contrast.
+
+**Key files:**
+- `bdip_core/src/gpu/contrast.wgsl` (new)
+- `bdip_core/src/gpu/pipeline.rs` (modify)
+- `bdip/src/main.rs` (modify `parse_transform`)
+- `bdip/src/ui/sidebar.rs` or `bdip/src/ui/message.rs` (modify — add variant)
+
+**References:**
+- `specs/adding_a_shader.md` — the 4-point checklist.
+- `specs/transformations_reference.md` — algorithm details.
+- Section 7.1 of this document for contrast shader spec.
+
+**Verification:**
+```
+$ bdip --headless test.jpg --output out.png --apply contrast:0.5
+$ bdip --headless test.jpg --output out.png --apply contrast:0.0
+  (output matches input)
+$ cargo test -p bdip_core
+$ cargo clippy --workspace
+```
+- UI: Select "Contrast" → slider appears → dragging previews, release commits.
+
+---
+
+### PR 7: Grayscale Shader (Phase 6)
+
+**Goal:** Implement the Grayscale GPU shader and wire it into both CLI and UI.
+
+**Depends on:** PR 5 (Phase 5 complete). Independent of PRs 6 and 8.
+
+**Scope:**
+- Add `grayscale.wgsl` in `bdip_core/src/gpu/`.
+- Add `GrayscaleParams` dummy uniform struct in `pipeline.rs` (16-byte aligned,
+  no user-facing parameters — exists only to satisfy the bind group layout).
+- Add `TransformKind::Grayscale` variant, `From` impl, `compile()` match arm,
+  `apply()` match arm.
+- Add `grayscale` parsing to `parse_transform()` in `bdip/src/main.rs`.
+- Add `TransformOption::Grayscale` to the UI `pick_list`. This is a
+  parameterless transform — verify the "Apply" button path built in PR 2
+  works correctly.
+- Unit tests: grayscale produces equal R=G=B channels, preserves alpha.
+- Integration test: grayscale in a multi-transform pipeline.
+
+**Key files:**
+- `bdip_core/src/gpu/grayscale.wgsl` (new)
+- `bdip_core/src/gpu/pipeline.rs` (modify)
+- `bdip/src/main.rs` (modify `parse_transform`)
+- `bdip/src/ui/sidebar.rs` or `bdip/src/ui/message.rs` (modify — add variant)
+
+**References:**
+- `specs/adding_a_shader.md` — the 4-point checklist.
+- `specs/transformations_reference.md` — algorithm details.
+- Section 7.2 of this document for grayscale shader spec.
+
+**Verification:**
+```
+$ bdip --headless test.jpg --output out.png --apply grayscale
+  (output is visually grayscale)
+$ bdip --headless test.jpg --output out.png --apply saturation:-1.0
+  vs --apply grayscale  (results should be very similar)
+$ cargo test -p bdip_core
+$ cargo clippy --workspace
+```
+- UI: Select "Grayscale" → "Apply" button appears → clicking converts to gray.
+
+---
+
+### PR 8: Invert Shader (Phase 6)
+
+**Goal:** Implement the Invert GPU shader and wire it into both CLI and UI.
+
+**Depends on:** PR 5 (Phase 5 complete). Independent of PRs 6 and 7.
+
+**Scope:**
+- Add `invert.wgsl` in `bdip_core/src/gpu/`.
+- Add `InvertParams` dummy uniform struct in `pipeline.rs` (same approach as
+  Grayscale — exists only to satisfy the bind group layout).
+- Add `TransformKind::Invert` variant, `From` impl, `compile()` match arm,
+  `apply()` match arm.
+- Add `invert` parsing to `parse_transform()` in `bdip/src/main.rs`.
+- Add `TransformOption::Invert` to the UI `pick_list`. Parameterless — uses
+  the "Apply" button path.
+- Unit tests: double invert restores original, preserves alpha.
+- Integration test: invert in a multi-transform pipeline.
+
+**Key files:**
+- `bdip_core/src/gpu/invert.wgsl` (new)
+- `bdip_core/src/gpu/pipeline.rs` (modify)
+- `bdip/src/main.rs` (modify `parse_transform`)
+- `bdip/src/ui/sidebar.rs` or `bdip/src/ui/message.rs` (modify — add variant)
+
+**References:**
+- `specs/adding_a_shader.md` — the 4-point checklist.
+- `specs/transformations_reference.md` — algorithm details.
+- Section 7.3 of this document for invert shader spec.
+
+**Verification:**
+```
+$ bdip --headless test.jpg --output out.png --apply invert
+$ bdip --headless test.jpg --output out.png --apply invert --apply invert
+  (double invert output matches input)
+$ cargo test -p bdip_core
+$ cargo clippy --workspace
+```
+- UI: Select "Invert" → "Apply" button appears → clicking inverts colors.
