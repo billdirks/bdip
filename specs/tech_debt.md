@@ -35,20 +35,21 @@ This document tracks known architectural shortcuts, generic naming, and structur
   spike.
 
 ### Synchronous Readback Blocks UI Thread
-- **Location:** `bdip_core/src/gpu/texture.rs` (`download_texture`), call sites in `bdip/src/`
-- **Current Pattern:** `download_texture()` calls `device.poll(wait_indefinitely)`, which blocks the
-  calling thread until the GPU finishes and the PCIe transfer (on discrete GPUs) completes. If called
-  on the UI thread, the window freezes for the duration of the operation.
-- **Risk:** On Apple Silicon (UMA) this is 1–4 ms and imperceptible. On discrete GPU hardware with
-  large images (24MP+), it can approach 15–20 ms per edit — noticeable as stutter during rapid edits.
+- **Location:** `bdip_core/src/gpu/texture.rs` (`download_presentation_buffer`), call sites in
+  `bdip/src/ui/app.rs`
+- **Current Pattern:** `download_presentation_buffer()` calls `device.poll(wait_indefinitely)`, which
+  blocks the calling thread until the GPU finishes and the PCIe transfer completes. This is currently
+  called on the UI thread during both the initial image load (to generate the UI handle) and during
+  transform adjustments.
+- **Risk:** While fast on Apple Silicon (1–4ms), on discrete GPUs or with very large images (40MP+),
+  this blocking call causes the UI to freeze momentarily. This is particularly noticeable after the
+  initial file load completes, where the app stays "busy" for another few hundred milliseconds while
+  the GPU prepares the preview.
 - **Suggested Remediation:** Move the full pipeline invocation (compute shader dispatch +
-  `download_texture`) onto a background thread using `std::thread::spawn`. `wgpu::Device` and
-  `wgpu::Queue` are `Send + Sync` and can be moved freely. Send the resulting `RgbaImage` back to
-  the UI thread via an `std::sync::mpsc` channel. The UI thread polls the channel and refreshes the
-  image widget when the result arrives, remaining fully responsive during processing. No `async/await`
-  or external async runtime is required.
-- **Priority:** Low for V1 (Apple Silicon target, typical image sizes are fast). Revisit before
-  shipping on non-Apple or supporting very large (50MP+) images.
+  `download_presentation_buffer`) into an `iced::Task`. Once the readback completes, send the
+  resulting `Rgba16Image` back to the UI state via a `Message`. This keeps the UI event loop fully
+  responsive with a "loading" state instead of freezing.
+- **Priority:** **Medium.** Important for maintaining a premium feel on high-resolution imagery.
 
 ### CPU Upload Pixel Conversion Loop
 - **Location:** `bdip_core/src/gpu/texture.rs` (`upload_texture`)

@@ -2,7 +2,6 @@ use std::path::PathBuf;
 
 /// UI-only enum used for the transform `pick_list`. Maps to
 /// `bdip_core::Transformation` variants but carries no parameter values.
-/// Contrast/Grayscale/Invert variants are wired to the pick_list in PRs 6–8.
 #[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TransformOption {
@@ -25,8 +24,6 @@ impl std::fmt::Display for TransformOption {
     }
 }
 
-/// Variants beyond LoadImagePressed/ImageLoaded/TransformSelected/Noop are
-/// wired in PRs 2–4.
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub enum Message {
