@@ -451,7 +451,10 @@ including keyboard shortcuts.
 **Scope:**
 - Implement history list widget in sidebar (Section 1.3b): scrollable,
   reverse-chronological, max ~5 visible items.
-- Display transform name + value for each history entry.
+- Display transform name + value for each history entry. This requires
+  adding a `std::fmt::Display` impl for `Transformation` in
+  `bdip_core/src/transformation.rs`. Format: `"Brightness: 0.35"` for
+  parameterized variants, `"Grayscale"` for parameterless variants.
 - Style active entries with normal text, undone entries with dimmed text.
 - Wire Undo/Redo buttons to `HistoryManager::undo()` / `redo()` + pipeline
   replay (Section 8.4).
@@ -466,6 +469,7 @@ including keyboard shortcuts.
 - `bdip/src/ui/sidebar.rs` (modify — history list)
 - `bdip/src/ui/app.rs` (modify — undo/redo handlers, subscription)
 - `bdip/src/ui/style.rs` (modify — dimmed text style for undone items)
+- `bdip_core/src/transformation.rs` (modify — add `Display` impl)
 - `bdip_core/src/history.rs` (modify — add `can_undo()`, `can_redo()`,
   and `redo_transforms()` accessors)
 
@@ -564,13 +568,16 @@ This PR closes out Phase 5.
 **Scope:**
 - Add `contrast.wgsl` in `bdip_core/src/gpu/`.
 - Add `ContrastParams` uniform struct in `pipeline.rs`.
+- Note: `Transformation::Contrast(f32)` already exists in
+  `bdip_core/src/transformation.rs` — no changes to that file are needed.
 - Add `TransformKind::Contrast` variant, `From` impl, `compile()` match arm,
   `apply()` match arm (per `specs/adding_a_shader.md`).
 - Add `contrast:<f32>` parsing to `parse_transform()` in `bdip/src/main.rs`.
 - Add `TransformOption::Contrast` to the UI `pick_list` in
   `bdip/src/ui/sidebar.rs` (or `message.rs`).
 - Unit tests: identity case (`contrast:0.0` unchanged), extreme values.
-- Integration test: multi-transform pipeline including contrast.
+- Integration test: multi-transform pipeline including contrast chained with
+  an existing shader (e.g., brightness then contrast).
 
 **Key files:**
 - `bdip_core/src/gpu/contrast.wgsl` (new)
@@ -603,16 +610,22 @@ $ cargo clippy --workspace
 
 **Scope:**
 - Add `grayscale.wgsl` in `bdip_core/src/gpu/`.
+- Note: `Transformation::Grayscale` already exists in
+  `bdip_core/src/transformation.rs` — no changes to that file are needed.
 - Add `GrayscaleParams` dummy uniform struct in `pipeline.rs` (16-byte aligned,
   no user-facing parameters — exists only to satisfy the bind group layout).
 - Add `TransformKind::Grayscale` variant, `From` impl, `compile()` match arm,
-  `apply()` match arm.
+  `apply()` match arm. Because `Transformation::Grayscale` carries no payload,
+  the `apply()` arm must create the params buffer from a zeroed
+  `GrayscaleParams` directly: `GrayscaleParams { _unused: [0.0; 4] }`.
 - Add `grayscale` parsing to `parse_transform()` in `bdip/src/main.rs`.
 - Add `TransformOption::Grayscale` to the UI `pick_list`. This is a
   parameterless transform — verify the "Apply" button path built in PR 2
   works correctly.
-- Unit tests: grayscale produces equal R=G=B channels, preserves alpha.
-- Integration test: grayscale in a multi-transform pipeline.
+- Unit tests: grayscale produces equal R=G=B channels, preserves alpha,
+  extreme input values (all-white, all-black) produce correct luminance.
+- Integration test: grayscale chained with an existing shader (e.g.,
+  brightness then grayscale).
 
 **Key files:**
 - `bdip_core/src/gpu/grayscale.wgsl` (new)
@@ -646,15 +659,21 @@ $ cargo clippy --workspace
 
 **Scope:**
 - Add `invert.wgsl` in `bdip_core/src/gpu/`.
+- Note: `Transformation::Invert` already exists in
+  `bdip_core/src/transformation.rs` — no changes to that file are needed.
 - Add `InvertParams` dummy uniform struct in `pipeline.rs` (same approach as
   Grayscale — exists only to satisfy the bind group layout).
 - Add `TransformKind::Invert` variant, `From` impl, `compile()` match arm,
-  `apply()` match arm.
+  `apply()` match arm. Because `Transformation::Invert` carries no payload,
+  the `apply()` arm must create the params buffer from a zeroed
+  `InvertParams` directly: `InvertParams { _unused: [0.0; 4] }`.
 - Add `invert` parsing to `parse_transform()` in `bdip/src/main.rs`.
 - Add `TransformOption::Invert` to the UI `pick_list`. Parameterless — uses
   the "Apply" button path.
-- Unit tests: double invert restores original, preserves alpha.
-- Integration test: invert in a multi-transform pipeline.
+- Unit tests: double invert restores original, preserves alpha, single invert
+  produces `1.0 - x` per channel.
+- Integration test: invert chained with an existing shader (e.g.,
+  brightness then invert).
 
 **Key files:**
 - `bdip_core/src/gpu/invert.wgsl` (new)
