@@ -76,8 +76,8 @@ struct BdipApp {
     image_handle: Option<iced::widget::image::Handle>,  // 8-bit display handle
 
     // --- GPU state ---
-    engine: GpuEngine,
-    renderer: Renderer,
+    engine: Option<GpuEngine>,                   // None if GPU init failed
+    renderer: Option<Renderer>,                  // None if GPU init failed
     cached_base_texture: Option<wgpu::Texture>,  // Ingested linear texture
 
     // --- Transform state ---
@@ -154,6 +154,9 @@ enum Message {
 
     // --- Error handling ---
     DismissError,
+
+    // --- Misc ---
+    Noop,  // No-op for cancelled file pickers, etc.
 }
 ```
 
@@ -369,6 +372,221 @@ zone. No GPU integration yet beyond what's needed to display a loaded image.
 - Update `main.rs` to call `ui::run()` instead of `ui_spike::run()`.
 - Delete `ui_spike.rs`.
 
+#### Application Entry Point (`ui/mod.rs`)
+
+The `run()` function uses the function-based `iced::application` API established
+in the spike. It must set the dark theme:
+
+```rust
+pub fn run(input: Option<PathBuf>) -> anyhow::Result<()> {
+    iced::application(
+        move || BdipApp::new(input.clone()),
+        BdipApp::update,
+        BdipApp::view,
+    )
+    .title("bdip")
+    .theme(|_| iced::Theme::Dark)
+    .subscription(BdipApp::subscription)
+    .run()
+    .context("Failed to run iced application")?;
+    Ok(())
+}
+```
+
+The `subscription` method is wired here for keyboard shortcuts (used in PR 3).
+It can return `Subscription::none()` in this PR.
+
+#### Constructor (`BdipApp::new`)
+
+`GpuEngine::new()` uses `pollster::block_on` internally and completes in under
+1ms — it is safe to call synchronously in the constructor. `Renderer::new()`
+is also synchronous and cheap. Both are initialized here, not deferred.
+
+If GPU init fails, store the error in `error_message` and set `engine` /
+`renderer` to `None` (change the struct field types to `Option<GpuEngine>` and
+`Option<Renderer>` accordingly). All transform and load operations check these
+are `Some` before proceeding.
+
+If a CLI path is provided, the constructor dispatches a load task immediately
+(same code path as `LoadImagePressed`, see below).
+
+```rust
+fn new(input_path: Option<PathBuf>) -> (Self, Task<Message>) {
+    let (engine, renderer, error) = match GpuEngine::new() {
+        Ok(e) => {
+            let r = Renderer::new(&e);
+            (Some(e), Some(r), None)
+        }
+        Err(e) => (None, None, Some(format!("GPU init failed: {e}"))),
+    };
+
+    let task = match input_path {
+        Some(path) => load_image_task(path),  // reusable helper
+        None => Task::none(),
+    };
+
+    (BdipApp {
+        base_image: None,
+        image_handle: None,
+        engine,
+        renderer,
+        cached_base_texture: None,
+        history: HistoryManager::new(),
+        selected_transform: TransformOption::Brightness,
+        preview_value: 0.0,
+        is_previewing: false,
+        error_message: error,
+        is_loading: input_path.is_some(),
+        is_saving: false,
+    }, task)
+}
+```
+
+#### Async Image Loading
+
+The load flow has two trigger points that share the same task helper:
+
+1. **"Load Image" button** → `LoadImagePressed` opens the file picker first,
+   then loads.
+2. **CLI preload path** → skips the file picker, loads directly.
+
+The shared helper for the actual I/O:
+```rust
+fn load_image_task(path: PathBuf) -> Task<Message> {
+    Task::perform(
+        async move {
+            // This closure runs on a background thread.
+            // bdip_core::io::load_image is synchronous/blocking — that's fine
+            // inside Task::perform.
+            let img = bdip_core::io::load_image(&path)
+                .map_err(|e| e.to_string())?;
+            Ok((path, img))
+        },
+        Message::ImageLoaded,
+    )
+}
+```
+
+For the file-picker path (`LoadImagePressed`):
+```rust
+Message::LoadImagePressed => {
+    Task::perform(
+        async {
+            let handle = rfd::AsyncFileDialog::new()
+                .add_filter("Images", &["png", "jpg", "jpeg", "gif", "tif", "tiff"])
+                .pick_file()
+                .await;
+            match handle {
+                Some(h) => {
+                    let path = h.path().to_path_buf();
+                    let img = bdip_core::io::load_image(&path)
+                        .map_err(|e| e.to_string())?;
+                    Ok((path, img))
+                }
+                None => Err("cancelled".into()),
+            }
+        },
+        |result: Result<_, String>| match result {
+            Ok(pair) => Message::ImageLoaded(Ok(pair)),
+            Err(e) if e == "cancelled" => Message::Noop,
+            Err(e) => Message::ImageLoaded(Err(e)),
+        },
+    )
+}
+```
+
+**Note on `Message::Noop`:** Add a `Noop` variant to `Message` for cases like
+a cancelled file picker where no action is needed. The update handler simply
+returns `Task::none()`.
+
+#### `ImageLoaded` Handler
+
+When the async load completes successfully, the handler performs GPU upload and
+ingest synchronously (this is fast — see Section 8.5):
+
+```rust
+Message::ImageLoaded(Ok((path, img))) => {
+    let (w, h) = img.dimensions();
+    // GPU upload + ingest (synchronous, ~1-4ms on Apple Silicon)
+    if let (Some(engine), Some(renderer)) = (&self.engine, &mut self.renderer) {
+        let uploaded = upload_texture(&engine.device, &engine.queue, &img);
+        let linear = renderer.ingest(engine, &uploaded);
+        // Present the unmodified image for initial display
+        let buf = renderer.present(engine, &linear);
+        let handle = presentation_to_handle(engine, &buf, w, h);
+        self.cached_base_texture = Some(linear);
+        self.image_handle = handle;
+    }
+    self.base_image = Some(img);
+    self.history.clear();
+    self.is_loading = false;
+    self.error_message = None;
+    Task::none()
+}
+```
+
+#### 16-bit → 8-bit Conversion Helper
+
+The spike (lines 75–81 of `ui_spike.rs`) contains the pattern for converting a
+presentation buffer to an iced image handle. This will be called on every render
+(load, commit, preview, undo/redo), so extract it as a reusable function in
+`canvas.rs` or `app.rs`:
+
+```rust
+fn presentation_to_handle(
+    engine: &GpuEngine,
+    buf: &wgpu::Buffer,
+    width: u32,
+    height: u32,
+) -> Option<iced::widget::image::Handle> {
+    let img16 = download_presentation_buffer(
+        &engine.device, &engine.queue, buf, width, height,
+    ).ok()?;
+    let img8 = bdip_core::image::DynamicImage::ImageRgba16(img16).into_rgba8();
+    let (w, h) = img8.dimensions();
+    let pixels = img8.into_raw();
+    Some(iced::widget::image::Handle::from_rgba(w, h, pixels))
+}
+```
+
+This helper is reused extensively in PRs 2–4 whenever the canvas needs updating.
+
+#### `view()` Layout Composition
+
+The top-level `view()` builds the three-zone layout:
+
+```rust
+fn view(&self) -> Element<'_, Message> {
+    let menu = menu_bar::view(self);   // Row: [Load] [Save]
+    let sidebar = sidebar::view(self); // Column: pick_list, "History"
+    let canvas = canvas::view(self);   // Image or placeholder
+
+    let content = row![
+        container(sidebar).width(Length::Fixed(250.0)),
+        container(canvas).width(Length::Fill).height(Length::Fill),
+    ];
+
+    column![menu, content]
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
+}
+```
+
+#### Module Responsibilities
+
+Each file has a focused role:
+
+| File | Exports | Responsibility |
+|------|---------|----------------|
+| `mod.rs` | `pub fn run(...)` | Application entry point, iced wiring |
+| `app.rs` | `BdipApp`, `new()`, `update()`, `view()`, `subscription()` | State struct, message dispatch, layout composition |
+| `message.rs` | `Message`, `TransformOption` | Enum definitions. `Message` must derive `Debug, Clone`. |
+| `sidebar.rs` | `pub fn view(app: &BdipApp) -> Element<Message>` | Transform picker + placeholder history |
+| `canvas.rs` | `pub fn view(app: &BdipApp) -> Element<Message>`, `presentation_to_handle()` | Image display, placeholder text, error overlay (PR 4) |
+| `menu_bar.rs` | `pub fn view(app: &BdipApp) -> Element<Message>` | Load/Save buttons |
+| `style.rs` | (empty or minimal in PR 1) | Custom styling, used more heavily in PRs 3–4 |
+
 **Key files:**
 - `bdip/src/ui/mod.rs` (new)
 - `bdip/src/ui/app.rs` (new)
@@ -385,11 +603,18 @@ zone. No GPU integration yet beyond what's needed to display a loaded image.
 - Section 1 (layout), Section 2 (state model), Section 3 (messages),
   Section 4 (async I/O), Section 6 (module structure) of this document.
 - `specs/tech_debt.md` — the two Phase 5 required items.
+- `bdip/src/ui_spike.rs` — working iced application pattern and 16-bit → 8-bit
+  conversion code to reference (but not copy verbatim — the spike has the
+  problems this PR is fixing).
 
 **Verification:**
 - App launches in dark mode with empty canvas and menu bar.
 - "Load Image" opens a file picker; selected image appears on canvas.
-- No panics on startup, even with invalid CLI paths.
+- `bdip foo.jpg` (CLI preload) launches the app and displays the image after
+  a brief empty-canvas flash.
+- `bdip` (no args) launches with placeholder text, no errors.
+- Invalid CLI path (e.g., `bdip nonexistent.jpg`) shows an error message in
+  the UI, does not panic.
 - `cargo clippy --workspace` passes.
 
 ---
