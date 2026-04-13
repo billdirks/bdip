@@ -4,6 +4,15 @@ use std::process::Command;
 const TEST_TRANSFORMS: &[&str] = &["brightness:0.2", "brightness:0.3"];
 const INITIAL_LUMINANCE: u8 = 100;
 
+/// Returns true if at least one pixel in `path` differs from `[r, g, b, a]`.
+fn any_pixel_differs(path: &Path, r: u8, g: u8, b: u8, a: u8) -> bool {
+    let img = image::open(path)
+        .expect("Failed to open output image")
+        .into_rgba8();
+    img.pixels()
+        .any(|p| p[0] != r || p[1] != g || p[2] != b || p[3] != a)
+}
+
 fn setup_test_image(tmp_dir: &tempfile::TempDir) -> PathBuf {
     let in_path = tmp_dir.path().join("test_in.png");
     let mut img = image::RgbaImage::new(16, 16);
@@ -162,5 +171,48 @@ fn test_cli_16bit_precision_preserved() {
         (avg_r as i64 - 32768_i64).abs() < 128,
         "Expected ~32768, got {}",
         avg_r
+    );
+}
+
+#[test]
+fn test_headless_multi_apply() {
+    let tmp_dir = tempfile::tempdir().unwrap();
+
+    // Use a saturated red image so that the saturation transform has a visible effect.
+    let in_path = tmp_dir.path().join("test_in_color.png");
+    let mut img = image::RgbaImage::new(16, 16);
+    for pixel in img.pixels_mut() {
+        *pixel = image::Rgba([200, 80, 80, 255]);
+    }
+    img.save(&in_path).unwrap();
+
+    let out_path = tmp_dir.path().join("test_out_multi.png");
+
+    let cargo_bin = assert_cmd::cargo::cargo_bin("bdip");
+    let output = Command::new(cargo_bin)
+        .arg("--headless")
+        .arg(&in_path)
+        .arg("--output")
+        .arg(&out_path)
+        .arg("--apply")
+        .arg("brightness:0.3")
+        .arg("--apply")
+        .arg("saturation:-0.5")
+        .output()
+        .expect("Failed to execute bdip");
+
+    if !output.status.success() {
+        panic!(
+            "CLI multi-apply failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    assert!(out_path.exists());
+    // The output must differ from the original [200, 80, 80, 255] pixels — both brightness
+    // and saturation transforms alter the values.
+    assert!(
+        any_pixel_differs(&out_path, 200, 80, 80, 255),
+        "Output image should differ from the input after applying brightness + saturation"
     );
 }
