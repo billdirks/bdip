@@ -3,7 +3,7 @@ use bdip_core::{Transformation, gpu::engine::GpuEngine, gpu::pipeline::Renderer}
 use clap::Parser;
 
 mod cli;
-mod ui_spike;
+mod ui;
 
 fn parse_transform(s: &str) -> anyhow::Result<Transformation> {
     let parts: Vec<&str> = s.split(':').collect();
@@ -87,8 +87,7 @@ fn main() -> anyhow::Result<()> {
         bdip_core::io::save_image(&img, &output_path)?;
         println!("Saved output to {:?}", output_path);
     } else {
-        println!("Starting UI Spike...");
-        ui_spike::run(args.input)?;
+        ui::run(args.input)?;
     }
 
     Ok(())

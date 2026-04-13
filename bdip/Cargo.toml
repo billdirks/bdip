@@ -8,6 +8,7 @@ bdip_core = { path = "../bdip_core" }
 anyhow = "1"
 clap = { version = "4.6.0", features = ["derive"] }
 iced = { version = "0.14.0", features = ["image"] }
+rfd = "0.15"
 
 [dev-dependencies]
 assert_cmd = "2.2.0"
