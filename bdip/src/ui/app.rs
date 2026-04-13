@@ -1,7 +1,7 @@
-use bdip_core::HistoryManager;
 use bdip_core::gpu::engine::GpuEngine;
 use bdip_core::gpu::pipeline::Renderer;
 use bdip_core::gpu::texture::upload_texture;
+use bdip_core::{HistoryManager, Transformation};
 use iced::widget::{column, container, row};
 use iced::{Element, Length, Subscription, Task};
 use std::path::PathBuf;
@@ -25,10 +25,10 @@ pub struct BdipApp {
     // Transform state
     pub history: HistoryManager,
     pub selected_transform: TransformOption,
-    // Used in PR 2 (live preview).
-    #[allow(dead_code)]
+    /// Current slider display value. During a drag this is the live position;
+    /// otherwise it equals the last committed value for the selected transform
+    /// (derived from the trailing run in history).
     pub preview_value: f32,
-    #[allow(dead_code)]
     pub is_previewing: bool,
 
     // UI state
@@ -116,6 +116,8 @@ impl BdipApp {
                 }
                 self.base_image = Some(img);
                 self.history.clear();
+                self.preview_value = 0.0;
+                self.is_previewing = false;
                 self.is_loading = false;
                 self.error_message = None;
                 Task::none()
@@ -135,12 +137,44 @@ impl BdipApp {
             Message::ImageSaved(_) => Task::none(),
 
             Message::TransformSelected(opt) => {
+                self.preview_value = slider_value_for_type(&opt, self.history.applied_transforms());
                 self.selected_transform = opt;
+                self.is_previewing = false;
                 Task::none()
             }
 
-            Message::SliderChanged(_) | Message::SliderReleased | Message::ApplyParameterless => {
-                // Implemented in PR 2.
+            Message::SliderChanged(val) => {
+                self.preview_value = val;
+                self.is_previewing = true;
+                if self.cached_base_texture.is_some() {
+                    let preview = make_transform(&self.selected_transform, val);
+                    self.image_handle = self.render_to_handle(Some(&preview));
+                }
+                Task::none()
+            }
+
+            Message::SliderReleased => {
+                if !self.is_previewing {
+                    return Task::none();
+                }
+                let t = make_transform(&self.selected_transform, self.preview_value);
+                self.history.apply(t);
+                self.is_previewing = false;
+                // preview_value stays at its current position — the slider
+                // does not reset.
+                if self.cached_base_texture.is_some() {
+                    self.image_handle = self.render_to_handle(None);
+                }
+                Task::none()
+            }
+
+            Message::ApplyParameterless => {
+                if self.cached_base_texture.is_none() {
+                    return Task::none();
+                }
+                let t = make_transform(&self.selected_transform, 0.0);
+                self.history.apply(t);
+                self.image_handle = self.render_to_handle(None);
                 Task::none()
             }
 
@@ -177,6 +211,54 @@ impl BdipApp {
     pub fn subscription(&self) -> Subscription<Message> {
         Subscription::none()
     }
+
+    /// Replays the collapsed transform stack from `cached_base_texture` and
+    /// returns an updated iced image handle. If `preview` is `Some`, it is
+    /// treated as a tentative value for the currently selected transform type.
+    fn render_to_handle(
+        &mut self,
+        preview: Option<&Transformation>,
+    ) -> Option<iced::widget::image::Handle> {
+        let committed: Vec<Transformation> = self.history.applied_transforms().to_vec();
+        let collapsed = collapse_adjacent(&committed);
+
+        // Build the final render list: collapse the committed history, then
+        // either replace the trailing entry of the same type as the preview
+        // or append the preview.
+        let render_list = match preview {
+            Some(p) => {
+                let preview_kind = TransformOption::from_transformation(p);
+                let mut list = collapsed;
+                if let Some(last) = list.last()
+                    && TransformOption::from_transformation(last) == preview_kind
+                {
+                    // Replace the trailing entry of the same type.
+                    list.pop();
+                }
+                list.push(p.clone());
+                list
+            }
+            None => collapsed,
+        };
+
+        let (w, h) = self.base_image.as_ref()?.dimensions();
+        let engine = self.engine.as_ref()?;
+        let renderer = self.renderer.as_mut()?;
+        let base = self.cached_base_texture.as_ref()?;
+
+        let mut current: Option<bdip_core::wgpu::Texture> = None;
+        for t in &render_list {
+            let new_tex = {
+                let src = current.as_ref().unwrap_or(base);
+                renderer.apply(engine, src, t)
+            };
+            current = Some(new_tex);
+        }
+
+        let final_tex = current.as_ref().unwrap_or(base);
+        let buf = renderer.present(engine, final_tex);
+        canvas::presentation_to_handle(engine, &buf, w, h)
+    }
 }
 
 fn load_image_task(path: PathBuf) -> Task<Message> {
@@ -187,4 +269,160 @@ fn load_image_task(path: PathBuf) -> Task<Message> {
         },
         Message::ImageLoaded,
     )
+}
+
+/// Constructs a `Transformation` from a `TransformOption` and a parameter value.
+/// For parameterless variants (Grayscale, Invert), the `val` argument is ignored.
+fn make_transform(opt: &TransformOption, val: f32) -> Transformation {
+    match opt {
+        TransformOption::Brightness => Transformation::Brightness(val),
+        TransformOption::Saturation => Transformation::Saturation(val),
+        TransformOption::Contrast => Transformation::Contrast(val),
+        TransformOption::Grayscale => Transformation::Grayscale,
+        TransformOption::Invert => Transformation::Invert,
+    }
+}
+
+/// Collapses adjacent runs of the same transform type, keeping only the last
+/// entry in each run.
+///
+/// Example: `[B(0.3), B(0.7), S(0.5), S(0.3), B(0.1)]`
+///       -> `[B(0.7), S(0.3), B(0.1)]`
+fn collapse_adjacent(transforms: &[Transformation]) -> Vec<Transformation> {
+    let mut result: Vec<Transformation> = Vec::new();
+    for t in transforms {
+        if let Some(last) = result.last()
+            && TransformOption::from_transformation(last) == TransformOption::from_transformation(t)
+        {
+            // Same type as previous — replace it.
+            *result.last_mut().unwrap() = t.clone();
+            continue;
+        }
+        result.push(t.clone());
+    }
+    result
+}
+
+/// Returns the slider value for `opt` by examining the trailing run of the
+/// history. If the last entry in `history` is of type `opt`, returns that
+/// value. Otherwise returns 0.0 (the type was interrupted by a different
+/// transform, or history is empty).
+fn slider_value_for_type(opt: &TransformOption, history: &[Transformation]) -> f32 {
+    let Some(last) = history.last() else {
+        return 0.0;
+    };
+    if TransformOption::from_transformation(last) != *opt {
+        return 0.0;
+    }
+    match last {
+        Transformation::Brightness(v)
+        | Transformation::Saturation(v)
+        | Transformation::Contrast(v) => *v,
+        Transformation::Grayscale | Transformation::Invert => 0.0,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bdip_core::Transformation;
+
+    #[test]
+    fn test_collapse_adjacent_empty() {
+        assert!(collapse_adjacent(&[]).is_empty());
+    }
+
+    #[test]
+    fn test_collapse_adjacent_no_duplicates() {
+        let input = vec![
+            Transformation::Brightness(0.3),
+            Transformation::Saturation(0.5),
+        ];
+        let result = collapse_adjacent(&input);
+        assert_eq!(result, input);
+    }
+
+    #[test]
+    fn test_collapse_adjacent_consecutive_same_type() {
+        let input = vec![
+            Transformation::Brightness(0.3),
+            Transformation::Brightness(0.7),
+            Transformation::Saturation(0.5),
+            Transformation::Saturation(0.3),
+            Transformation::Brightness(0.1),
+        ];
+        let result = collapse_adjacent(&input);
+        assert_eq!(
+            result,
+            vec![
+                Transformation::Brightness(0.7),
+                Transformation::Saturation(0.3),
+                Transformation::Brightness(0.1),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_collapse_adjacent_single_entry() {
+        let input = vec![Transformation::Brightness(0.5)];
+        assert_eq!(collapse_adjacent(&input), input);
+    }
+
+    #[test]
+    fn test_collapse_adjacent_all_same_type() {
+        let input = vec![
+            Transformation::Brightness(0.1),
+            Transformation::Brightness(0.5),
+            Transformation::Brightness(0.9),
+        ];
+        assert_eq!(
+            collapse_adjacent(&input),
+            vec![Transformation::Brightness(0.9)]
+        );
+    }
+
+    #[test]
+    fn test_slider_value_trailing_run_matches() {
+        let history = vec![
+            Transformation::Brightness(0.3),
+            Transformation::Saturation(0.5),
+        ];
+        assert_eq!(
+            slider_value_for_type(&TransformOption::Saturation, &history),
+            0.5
+        );
+    }
+
+    #[test]
+    fn test_slider_value_trailing_run_interrupted() {
+        let history = vec![
+            Transformation::Brightness(0.3),
+            Transformation::Saturation(0.5),
+        ];
+        assert_eq!(
+            slider_value_for_type(&TransformOption::Brightness, &history),
+            0.0
+        );
+    }
+
+    #[test]
+    fn test_slider_value_empty_history() {
+        assert_eq!(
+            slider_value_for_type(&TransformOption::Brightness, &[]),
+            0.0
+        );
+    }
+
+    #[test]
+    fn test_slider_value_multiple_trailing_same_type() {
+        let history = vec![
+            Transformation::Brightness(0.3),
+            Transformation::Saturation(0.2),
+            Transformation::Saturation(0.5),
+        ];
+        assert_eq!(
+            slider_value_for_type(&TransformOption::Saturation, &history),
+            0.5
+        );
+    }
 }

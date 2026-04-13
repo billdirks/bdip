@@ -24,6 +24,19 @@ impl std::fmt::Display for TransformOption {
     }
 }
 
+impl TransformOption {
+    /// Returns the `TransformOption` that corresponds to a `Transformation`.
+    pub fn from_transformation(t: &bdip_core::Transformation) -> Self {
+        match t {
+            bdip_core::Transformation::Brightness(_) => Self::Brightness,
+            bdip_core::Transformation::Saturation(_) => Self::Saturation,
+            bdip_core::Transformation::Contrast(_) => Self::Contrast,
+            bdip_core::Transformation::Grayscale => Self::Grayscale,
+            bdip_core::Transformation::Invert => Self::Invert,
+        }
+    }
+}
+
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub enum Message {
