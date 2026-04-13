@@ -5,32 +5,9 @@ This document tracks known architectural shortcuts, generic naming, and structur
 > [!CAUTION]
 > **To Future AI Contexts / Agents:** The remediations proposed below are *suggestions* based on the state of the codebase at the time they were documented. Do NOT execute them blindly. Always cross-reference these suggestions with the *current* state of the code and evaluate if a better, more modern pattern is appropriate before executing refactors.
 
-## Generalization Blockers (GPU Pipeline)
-
-### Generic Parameter Structs — **[RESOLVED: Phase 4, PR 1]**
-- **Resolution:** `ParamsUniform` renamed to `BrightnessParams` in both
-  `pipeline.rs` (Rust struct) and `brightness.wgsl` (WGSL struct).
-
-### Generic Shader Naming — **[RESOLVED: Phase 4, PR 1]**
-- **Resolution:** `shader.wgsl` renamed to `brightness.wgsl`. Future shaders
-  follow this naming convention (`saturation.wgsl`, `contrast.wgsl`, etc.).
-
-### Monolithic Pipeline Initialization — **[RESOLVED: Phase 4, PR 2]**
-- **Location:** `bdip_core/src/gpu/pipeline.rs` (`Renderer::new`)
-- **Current Pattern:** The `Renderer::new` constructor eagerly compiles the shader module and
-  statically generates the `ComputePipeline` directly inside the startup sequence.
-- **Refactor Goal:** Prevent a "Monster Initialization" bottleneck. As the application grows to
-  support dozens of transformations, globally compiling all shaders and building all pipelines at
-  startup will bottleneck application launch times and waste GPU resources for transformations the
-  user may never actually use.
-- **Suggested Remediation:** Introduce a `PipelineCache` with lazy-loading. Shaders and their
-  corresponding pipelines JIT-compile upon first invocation and are stored in a HashMap for
-  re-use. Ingest/present pipelines remain eagerly initialized (always needed).
-- **Resolution Plan:** `specs/2shader_plan.md`, Step 2.
-
 ## UI Responsiveness
 
-### [PHASE 4 REQUIREMENT] Synchronous Disk I/O Blocks UI Initialization
+### [PHASE 5 REQUIREMENT] Synchronous Disk I/O Blocks UI Initialization
 - **Location:** `bdip/src/ui_spike.rs` (`SpikeApp::new`)
 - **Current Pattern:** The `io::load_image` function is called directly within the application
   initialization logic on the main thread.
@@ -43,7 +20,7 @@ This document tracks known architectural shortcuts, generic naming, and structur
   back to the event loop natively via an `Update` message to render the scene.
 - **Priority:** **High.** Mandatory for delivering a seamless, native-feeling user experience.
 
-### [PHASE 4 REQUIREMENT] Panic-on-Failure in Application Constructor
+### [PHASE 5 REQUIREMENT] Panic-on-Failure in Application Constructor
 - **Location:** `bdip/src/ui_spike.rs` (`SpikeApp::new`)
 - **Current Pattern:** The constructor uses `expect()` for all fallible operations (image loading,
   GPU init, texture download). The `iced` application constructor returns `(Self, Task<Message>)`,
