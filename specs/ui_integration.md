@@ -40,25 +40,32 @@ three main zones:
        decimal places (e.g., "0.35").
      - **Parameterless transforms** (Grayscale, Invert): An "Apply" button.
    - **Slider interaction model:**
-     - `on_change`: Updates an ephemeral preview value and triggers a GPU pipeline
-       replay with the *tentative* transformation appended to the committed history
-       stack. The result is displayed on the canvas immediately (live preview).
-     - `on_release`: Commits the transformation. Calls
-       `HistoryManager::apply(...)`, clears the ephemeral preview value, resets the
-       slider to `0.0`, and re-renders the canvas from the committed stack.
+     - `on_change`: Updates `preview_value` and triggers a GPU pipeline replay
+       showing the tentative result. The canvas updates immediately (live preview).
+       Nothing is pushed to `HistoryManager`.
+     - `on_release`: Pushes an absolute value entry to `HistoryManager` and
+       re-renders from the collapsed committed stack. The slider stays at its
+       released position — it does not reset to `0.0`.
+     - See Section 2.1 for the full slider/history model with examples.
    - The "Apply" button for parameterless transforms is equivalent to an immediate
      commit — it pushes to `HistoryManager` and re-renders.
 
    **b. History Component (Bottom)**
    - A header row containing **Undo** and **Redo** text buttons with keyboard
      shortcut hints: "Undo (⌘Z)" and "Redo (⌘⇧Z)".
-   - A scrollable, reverse-chronological list of applied transformations (most
-     recent on top). Each entry displays the transformation name and, for
-     parameterized variants, the value (e.g., "Brightness: 0.35").
+   - A scrollable list of transformations drawn from the **raw** history (not the
+     collapsed render list). The raw history is shown because each entry represents
+     a distinct user action and can be individually undone. Displayed in
+     reverse-chronological order (most recent on top).
+   - Each entry displays the transformation name and, for parameterized variants,
+     the value (e.g., "Brightness: 0.35").
    - **Styling:**
-     - Active (applied) entries use normal text color.
-     - Undone entries (in the redo buffer) are displayed with dimmed/grayed text
-       below the active entries, separated by a subtle visual divider.
+     - Active entries (`history.applied_transforms()`, newest first) use normal
+       text color.
+     - A subtle visual divider separates active from undone entries.
+     - Undone entries (`history.redo_transforms()`, in redo order) appear below
+       the divider with dimmed/grayed text. They are shown so the user can see
+       what would be restored by Redo.
    - **Size constraint:** The history list area has a fixed max height designed to
      show approximately 5 items. If the list exceeds this, an `iced::widget::scrollable`
      enables traversal, preserving screen real estate for the Transform component.
@@ -83,7 +90,7 @@ struct BdipApp {
     // --- Transform state ---
     history: HistoryManager,
     selected_transform: TransformOption,      // Currently selected pick_list item
-    preview_value: f32,                       // Ephemeral slider value (live preview)
+    preview_value: f32,                       // Current slider display value (see §2.1)
     is_previewing: bool,                      // Whether a slider drag is in progress
 
     // --- UI state ---
@@ -110,17 +117,37 @@ enum TransformOption {
 When an image is loaded, the full-resolution base image is uploaded to the GPU and
 ingested (sRGB → linear) exactly once. The resulting `wgpu::Texture` is cached in
 `cached_base_texture`. On every render (commit or preview), the pipeline replays
-the committed transform stack (and optionally the preview transform) starting from
-this cached texture — avoiding the expensive upload and ingest on every edit.
+the *collapsed* transform list starting from this cached texture — avoiding the
+expensive upload and ingest on every edit. See Section 2.1 for how the collapsed
+list is derived from the raw history.
 
-The replay loop is:
+The render helper (`render_to_handle`) signature:
 ```
-let mut tex = cached_base_texture.clone();
-for t in history.applied_transforms() {
+fn render_to_handle(&mut self, preview: Option<&Transformation>)
+    -> Option<iced::widget::image::Handle>
+```
+
+The replay loop:
+```
+let committed = history.applied_transforms().to_vec();
+let collapsed = collapse_adjacent(&committed);
+
+let render_list = match preview {
+    Some(p) => {
+        // Replace the trailing entry of the same type, or append.
+        if collapsed.last() has same type as p {
+            collapsed.pop(); collapsed.push(p.clone())
+        } else {
+            collapsed.push(p.clone())
+        }
+        collapsed
+    }
+    None => collapsed,
+};
+
+let mut tex = &cached_base_texture;
+for t in &render_list {
     tex = renderer.apply(&engine, &tex, t);
-}
-if is_previewing {
-    tex = renderer.apply(&engine, &tex, &preview_transform);
 }
 let buf = renderer.present(&engine, &tex);
 let img = download_presentation_buffer(..., &buf, w, h)?;
@@ -131,6 +158,111 @@ let img = download_presentation_buffer(..., &buf, w, h)?;
 the pipeline starts from `cached_base_texture` (a reference) and produces new
 intermediate textures via `renderer.apply()`. The cached texture is never consumed
 or moved.
+
+## 2.1. Slider/History Model
+
+This section is the authoritative specification of how parameterized slider
+transforms interact with history, preview, and rendering.
+
+### Core Principles
+
+**History stores absolute slider values.** Each slider release pushes the
+current slider position as an absolute value to `HistoryManager`. Releasing at
+0.7 records `Brightness(0.7)`, not a delta from the previous release.
+
+**Render collapses adjacent runs.** Before applying transforms to the GPU, the
+raw history is collapsed: consecutive entries of the same type are reduced to
+the last entry in each run. The raw history is the source of truth for undo/redo;
+the collapsed list is only used for rendering.
+
+```
+Raw:      [B(0.3), B(0.7), S(0.5), S(0.3), B(0.1)]
+Collapsed: [B(0.7), S(0.3), B(0.1)]
+```
+
+**Slider stays where released.** After `SliderReleased`, `preview_value` is not
+reset to `0.0`. The slider shows the committed position. Moving back to `0.0`
+means "no brightness adjustment at this point in the stack."
+
+**Slider resets when a different transform interrupts.** When switching back to a
+transform type, the slider shows the last committed value only if the trailing
+entry in history is of that type. If a different type was applied after it, the
+slider resets to `0.0`, because the subsequent transform has changed the image
+relative to which the original adjustment was made.
+
+### Slider Position on Transform Switch
+
+`slider_value_for_type(opt, history)` returns:
+- The value of `history.last()` if its type matches `opt`.
+- `0.0` otherwise (history is empty, or the last entry is a different type).
+
+```
+history = [B(0.7), S(0.3)]
+switch to Saturation  → last is S(0.3), matches → slider shows 0.3
+switch to Brightness  → last is S(0.3), no match → slider shows 0.0
+
+history = [B(0.3), B(0.7)]
+switch to Brightness  → last is B(0.7), matches → slider shows 0.7
+switch to Saturation  → last is B(0.7), no match → slider shows 0.0
+```
+
+### Live Preview Render List
+
+During a drag, the render uses the collapsed history but replaces the trailing
+entry of the same type as the active slider (or appends if the type differs):
+
+```
+history = [B(0.7), S(0.2)], dragging S to 0.4
+  collapsed = [B(0.7), S(0.2)]
+  last is S, matches preview type → replace → render [B(0.7), S(0.4)]
+
+history = [B(0.7), S(0.2)], switched to B, dragging to 0.3
+  collapsed = [B(0.7), S(0.2)]
+  last is S, does not match B → append → render [B(0.7), S(0.2), B(0.3)]
+```
+
+### Worked Examples
+
+**Example 1 — Fine-tuning brightness:**
+```
+User drags B slider to 0.5, releases → history: [B(0.5)], slider: 0.5
+User drags B slider to 0.7, releases → history: [B(0.5), B(0.7)], slider: 0.7
+  render (collapsed): [B(0.7)]        ← only latest B in the trailing run
+Undo → history: [B(0.5)], slider: 0.5
+  render (collapsed): [B(0.5)]
+Redo → history: [B(0.5), B(0.7)], slider: 0.7
+```
+
+**Example 2 — Interleaved transforms:**
+```
+Drag B to 0.7, release → history: [B(0.7)]
+Drag S to 0.4, release → history: [B(0.7), S(0.4)]
+  render (collapsed): [B(0.7), S(0.4)]
+Switch to Brightness → last entry is S(0.4), not B → slider resets to 0.0
+Drag B to 0.3, release → history: [B(0.7), S(0.4), B(0.3)]
+  render (collapsed): [B(0.7), S(0.4), B(0.3)]
+Undo → history: [B(0.7), S(0.4)]
+  render (collapsed): [B(0.7), S(0.4)]
+  switch to Brightness now → last is S(0.4), slider resets to 0.0
+```
+
+**Example 3 — Preview during drag on trailing-same-type:**
+```
+history = [B(0.7), S(0.2)], currently viewing S slider at 0.2
+User drags S to 0.4 (not released yet):
+  preview render list: [B(0.7), S(0.4)]   ← S(0.2) replaced by preview
+User releases at 0.4:
+  history: [B(0.7), S(0.2), S(0.4)]
+  render (collapsed): [B(0.7), S(0.4)]    ← S(0.2) collapsed away
+  slider stays at 0.4
+```
+
+**Example 4 — Why non-additive shaders require absolute values:**
+Saturation uses `mix(gray, color, 1.0 + offset)`, which is multiplicative.
+Applying `S(0.5)` (scale 1.5×) then `S(0.3)` (scale 1.3×) gives 1.95×, not
+the 1.8× implied by a slider at 0.8. By collapsing adjacent entries and using
+only the latest value (`S(0.8)`), the render applies exactly one pass at 1.8×,
+which matches what the slider shows.
 
 ## 3. Message Enum
 
@@ -288,37 +420,62 @@ addressing the "CPU Bridge" architecture from the main spec.
    create `image::Handle` → store as `image_handle`.
 6. Clear `HistoryManager`.
 
-### 8.2. On Transform Commit (slider release or Apply button)
-1. Push transformation onto `HistoryManager`.
-2. Replay full stack from `cached_base_texture`:
-   - For each `t` in `history.applied_transforms()`:
-     `current = renderer.apply(&engine, &current, &t)`
-3. `renderer.present()` → `download_presentation_buffer()` → update
+### 8.2. On Transform Commit (slider release)
+1. Push the absolute slider value as a `Transformation` onto `HistoryManager`.
+   The slider position does NOT reset — `preview_value` stays at its released
+   value.
+2. Clear `is_previewing`.
+3. Build the collapsed render list from the now-updated history (see Section 2.1).
+4. Replay `render_to_handle(None)` from `cached_base_texture` → update
    `image_handle`.
-4. Reset slider to `0.0`, clear `is_previewing`.
+
+For parameterless transforms (Apply button), the flow is identical except the
+pushed value is always the fixed parameterless transform (e.g., `Grayscale`).
 
 ### 8.3. On Slider Drag (live preview)
 1. Set `is_previewing = true`, `preview_value = slider_value`.
-2. Replay committed stack from `cached_base_texture` (same as 8.2).
-3. Apply one additional tentative transform with the preview value.
+2. Do NOT push to `HistoryManager` — this is ephemeral.
+3. Build the render list via `render_to_handle(Some(&preview_transform))`:
+   - Collapse the committed history.
+   - If the collapsed list's last entry is the same type as the active slider,
+     replace it with the preview value. Otherwise, append.
 4. `renderer.present()` → `download_presentation_buffer()` → update
    `image_handle`.
-5. Do NOT push to `HistoryManager` — this is ephemeral.
+
+The net effect: the canvas reflects exactly what the final committed result would
+look like if the user released at the current drag position.
 
 ### 8.4. On Undo / Redo
 1. Call `history.undo()` or `history.redo()`.
-2. Replay the now-current committed stack from `cached_base_texture`.
-3. `renderer.present()` → `download_presentation_buffer()` → update
+2. Update `preview_value` by calling `slider_value_for_type` on the updated
+   history so the slider reflects the new last committed value for the selected
+   transform type (or 0.0 if that type is no longer the trailing entry).
+3. Build the collapsed render list from the updated history.
+4. `renderer.present()` → `download_presentation_buffer()` → update
    `image_handle`.
 
 ### 8.5. Performance Consideration
 
-Every slider movement triggers a full-stack replay. For V1 this is acceptable:
-individual shader dispatches are sub-millisecond on Apple Silicon, and the
-presentation + readback adds 1–4ms. With a typical stack depth of <20 transforms,
-total latency stays well under 16ms (60fps). If this becomes a bottleneck with
-very deep stacks, intermediate texture checkpointing (noted in the main spec §4.3)
-can be introduced without changing the external API.
+Every slider movement triggers a full-stack replay. Measured on Apple Silicon
+(release build, large TIFF):
+
+| Stage | Typical latency |
+|---|---|
+| Shader dispatch per transform (`renderer.apply`) | ~1–3ms |
+| `renderer.present` | ~1–3ms |
+| `download_presentation_buffer` (GPU readback) | ~40–55ms |
+| `into_rgba8` conversion | ~10–15ms |
+| **Total per drag event** | **~65–75ms** |
+
+At ~70ms per event the UI is responsive enough for interactive dragging in
+release builds. Debug builds are substantially slower (~700ms) due to
+unoptimized `into_rgba8` — always test slider performance in release mode.
+
+The `download_presentation_buffer` cost is the known tech debt item from
+`specs/tech_debt.md` (synchronous GPU readback blocks the UI thread). If
+latency becomes perceptible with very large images or future shaders with
+higher dispatch costs, moving the readback into an `iced::Task` is the
+remediation path — see that document for details.
 
 ## 9. Implementation PRs
 
@@ -644,24 +801,35 @@ automatically appear in the `pick_list` once their shaders exist.
 - Wire `ApplyParameterless` → commit flow (Section 8.2). May be untestable
   until Grayscale/Invert are added, but the handler should exist.
 - Implement the GPU texture caching strategy (Section 2): upload + ingest
-  once on load, replay from cached texture on every edit.
+  once on load, replay collapsed history from cached texture on every edit.
+- Implement `collapse_adjacent` and `slider_value_for_type` per Section 2.1.
+  Add `TransformOption::from_transformation()` to `message.rs`.
 - Display current slider value as formatted text.
-- Reset slider to `0.0` after commit.
+- Slider step size must be set to `0.01` — iced's default step for `f32` is
+  `1.0`, which produces only -1, 0, and 1 as values.
+- Slider stays at its released position — does NOT reset to `0.0`.
+- `TransformSelected` loads the slider position from history via
+  `slider_value_for_type` (Section 2.1).
 
 **Key files:**
 - `bdip/src/ui/sidebar.rs` (modify — transform picker + slider)
-- `bdip/src/ui/app.rs` (modify — update handler for transform messages)
-- `bdip/src/ui/message.rs` (modify — add transform-related messages if not
-  already present)
+- `bdip/src/ui/app.rs` (modify — update handler for transform messages,
+  `collapse_adjacent`, `slider_value_for_type`, `render_to_handle`)
+- `bdip/src/ui/message.rs` (modify — add `TransformOption::from_transformation`)
 
 **References:**
-- Section 1.3a (transform component), Section 2 (caching strategy),
+- Section 1.3a (transform component), Section 2.1 (slider/history model),
   Section 8.2–8.3 (pipeline integration) of this document.
 
 **Verification:**
 - Select "Brightness" → slider appears → dragging updates canvas in real time.
-- Release slider → transform committed, slider resets to 0.
-- Select "Saturation" → same slider behavior, visually correct result.
+- Release slider at 0.35 → transform committed, slider stays at 0.35.
+- Drag slider from 0.35 to 0.70, release → history has two entries; canvas
+  shows result of brightness at 0.70 (adjacent collapse).
+- Switch to "Saturation", drag and release → slider shows saturation value.
+- Switch back to "Brightness" → slider shows 0.0 (interrupted by Saturation).
+- Switch back to "Saturation" → slider shows last Saturation value.
+- Select "Saturation" with no prior saturation commits → slider at 0.0.
 - `cargo clippy --workspace` passes.
 
 ---
@@ -683,12 +851,20 @@ including keyboard shortcuts.
 - Style active entries with normal text, undone entries with dimmed text.
 - Wire Undo/Redo buttons to `HistoryManager::undo()` / `redo()` + pipeline
   replay (Section 8.4).
+- After undo/redo, update `preview_value` via `slider_value_for_type` so the
+  active slider reflects the new trailing committed value (or 0.0 if the type
+  is no longer the trailing entry). This keeps the slider in sync with history
+  without requiring the user to switch transforms.
 - Disable Undo when applied stack is empty; disable Redo when redo stack is
   empty.
 - Implement `iced::keyboard::on_key_press` subscription for ⌘Z / ⌘⇧Z.
-- Expose redo stack length from `HistoryManager` (currently only
-  `applied_transforms()` is public — `redo_stack` needs a read accessor, or
-  at minimum a `can_redo() -> bool` method).
+- Expose redo and undo state from `HistoryManager`. Currently only
+  `applied_transforms()` is public. Add:
+  - `can_undo() -> bool` — true when the applied stack is non-empty.
+  - `can_redo() -> bool` — true when the redo stack is non-empty.
+  - `redo_transforms() -> &[Transformation]` — the redo stack in redo order
+    (index 0 is the next item to be re-applied by Redo). Used by the sidebar
+    to render dimmed undone entries below the divider.
 
 **Key files:**
 - `bdip/src/ui/sidebar.rs` (modify — history list)
@@ -698,17 +874,27 @@ including keyboard shortcuts.
 - `bdip_core/src/history.rs` (modify — add `can_undo()`, `can_redo()`,
   and `redo_transforms()` accessors)
 
+**Already implemented in PR 2 — do not re-implement:**
+- `render_to_handle(preview: Option<&Transformation>)` in `app.rs` — call
+  this with `None` after undo/redo to re-render from the updated history.
+- `slider_value_for_type(opt, history)` in `app.rs` — call this after
+  undo/redo to sync `preview_value` with the new history state.
+- `collapse_adjacent` in `app.rs` — used internally by `render_to_handle`.
+- `TransformOption::from_transformation` in `message.rs`.
+
 **References:**
-- Section 1.3b (history component), Section 5 (keyboard shortcuts),
-  Section 8.4 (undo/redo pipeline) of this document.
+- Section 1.3b (history component), Section 2.1 (slider/history model),
+  Section 5 (keyboard shortcuts), Section 8.4 (undo/redo pipeline).
 
 **Verification:**
 - Apply 3 transforms → history list shows all 3 in reverse order.
-- Click Undo → top item grays out, canvas reverts.
-- Click Redo → item re-activates, canvas re-applies.
+- Apply B(0.3) then B(0.7) → list shows both; canvas shows B(0.7) result.
+- Undo → top item grays out, canvas reverts to B(0.3), slider moves to 0.3.
+- Redo → item re-activates, canvas shows B(0.7), slider moves to 0.7.
 - ⌘Z and ⌘⇧Z work.
 - Apply 6+ transforms → scrollbar appears in history.
 - Undo all → Undo button disabled. Redo all → Redo button disabled.
+- Undo past a type boundary → slider for active transform resets to 0.0.
 - `cargo clippy --workspace` passes.
 
 ---
