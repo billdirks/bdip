@@ -12,6 +12,7 @@ const TRANSFORM_OPTIONS: &[TransformOption] = &[
     TransformOption::Saturation,
     TransformOption::Contrast,
     TransformOption::Grayscale,
+    TransformOption::Invert,
 ];
 
 pub fn view(app: &BdipApp) -> Element<'_, Message> {

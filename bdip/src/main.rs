@@ -36,6 +36,7 @@ fn parse_transform(s: &str) -> anyhow::Result<Transformation> {
             Ok(Transformation::Contrast(val))
         }
         "grayscale" => Ok(Transformation::Grayscale),
+        "invert" => Ok(Transformation::Invert),
         _ => Err(anyhow::anyhow!(
             "Unsupported or unknown transformation: {}",
             parts[0]

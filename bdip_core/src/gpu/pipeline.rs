@@ -39,6 +39,12 @@ struct GrayscaleParams {
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+struct InvertParams {
+    _unused: [f32; 4], // WebGPU uniforms require 16-byte alignment; no user params
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 struct PresentParams {
     width: u32,
     y_offset: u32,
@@ -56,6 +62,7 @@ enum TransformKind {
     Saturation,
     Contrast,
     Grayscale,
+    Invert,
 }
 
 impl From<&Transformation> for TransformKind {
@@ -65,7 +72,7 @@ impl From<&Transformation> for TransformKind {
             Transformation::Saturation(_) => TransformKind::Saturation,
             Transformation::Contrast(_) => TransformKind::Contrast,
             Transformation::Grayscale => TransformKind::Grayscale,
-            other => panic!("TransformKind not implemented for {:?}", other),
+            Transformation::Invert => TransformKind::Invert,
         }
     }
 }
@@ -140,6 +147,14 @@ impl PipelineCache {
                 "Grayscale Texture BGL",
                 "Grayscale Params BGL",
                 "Grayscale Pipeline Layout",
+            ),
+            TransformKind::Invert => (
+                include_str!("invert.wgsl"),
+                "Invert Shader",
+                "Invert Pipeline",
+                "Invert Texture BGL",
+                "Invert Params BGL",
+                "Invert Pipeline Layout",
             ),
         };
 
@@ -667,7 +682,16 @@ impl Renderer {
                         usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                     })
             }
-            other => panic!("apply: unsupported transformation {:?}", other),
+            Transformation::Invert => {
+                let p = InvertParams { _unused: [0.0; 4] };
+                engine
+                    .device
+                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("Apply Params Buffer"),
+                        contents: bytemuck::cast_slice(&[p]),
+                        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                    })
+            }
         };
 
         let params_bind_group = engine.device.create_bind_group(&BindGroupDescriptor {
@@ -1671,6 +1695,66 @@ mod tests {
                 pixel[1],
                 pixel[2]
             );
+        }
+    }
+
+    // ========== Invert correctness tests ==========
+
+    #[test]
+    fn test_invert_shader() {
+        let engine = GpuEngine::new().unwrap();
+        let mut renderer = Renderer::new(&engine);
+
+        // 50% gray in sRGB -> inverted should still be valid. Let's use custom color.
+        // 10000 / 65535, inverted is 55535 / 65535.
+        // Note: linear-light invert means 1.0 - linear_value.
+        let img = make_solid_image(2, 2, 0, 65535, 32767);
+        let out_img = roundtrip(&mut renderer, &engine, &img, &[Transformation::Invert]);
+
+        for pixel in out_img.pixels() {
+            // R: 0 -> inverted -> 65535
+            assert!(
+                (pixel[0] as i32 - 65535).abs() <= 100,
+                "R: expected ~65535, got {}",
+                pixel[0]
+            );
+            // G: 65535 -> inverted -> 0
+            assert!(pixel[1] <= 100, "G: expected ~0, got {}", pixel[1]);
+            // Alpha preserved
+            assert_eq!(pixel[3], 65535);
+        }
+    }
+
+    #[test]
+    fn test_double_invert_restores_original() {
+        let engine = GpuEngine::new().unwrap();
+        let mut renderer = Renderer::new(&engine);
+
+        let img = make_solid_image(2, 2, 10794, 25700, 51400);
+        let out_img = roundtrip(
+            &mut renderer,
+            &engine,
+            &img,
+            &[Transformation::Invert, Transformation::Invert],
+        );
+
+        for pixel in out_img.pixels() {
+            assert!(
+                (pixel[0] as i32 - 10794).abs() <= 128,
+                "R: expected ~10794, got {}",
+                pixel[0]
+            );
+            assert!(
+                (pixel[1] as i32 - 25700).abs() <= 128,
+                "G: expected ~25700, got {}",
+                pixel[1]
+            );
+            assert!(
+                (pixel[2] as i32 - 51400).abs() <= 128,
+                "B: expected ~51400, got {}",
+                pixel[2]
+            );
+            assert_eq!(pixel[3], 65535);
         }
     }
 }
