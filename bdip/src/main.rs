@@ -35,6 +35,7 @@ fn parse_transform(s: &str) -> anyhow::Result<Transformation> {
             let val = parts[1].parse::<f32>()?;
             Ok(Transformation::Contrast(val))
         }
+        "grayscale" => Ok(Transformation::Grayscale),
         _ => Err(anyhow::anyhow!(
             "Unsupported or unknown transformation: {}",
             parts[0]

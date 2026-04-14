@@ -38,7 +38,11 @@ three main zones:
        `iced::widget::slider` with range `-1.0..=1.0` and default `0.0`. A text
        label beside or below the slider shows the current value formatted to two
        decimal places (e.g., "0.35").
-     - **Parameterless transforms** (Grayscale, Invert): An "Apply" button.
+     - **Parameterless transforms** (Grayscale, Invert): An "Apply" label
+       followed by an `iced::widget::toggler`. The toggle is ON when the
+       selected parameterless transform is the most recent entry in
+       `HistoryManager`; OFF otherwise. Switching ON pushes the transform and
+       re-renders; switching OFF calls `history.undo()` and re-renders.
    - **Slider interaction model:**
      - `on_change`: Updates `preview_value` and triggers a GPU pipeline replay
        showing the tentative result. The canvas updates immediately (live preview).
@@ -47,8 +51,8 @@ three main zones:
        re-renders from the collapsed committed stack. The slider stays at its
        released position — it does not reset to `0.0`.
      - See Section 2.1 for the full slider/history model with examples.
-   - The "Apply" button for parameterless transforms is equivalent to an immediate
-     commit — it pushes to `HistoryManager` and re-renders.
+   - The toggle for parameterless transforms pushes to `HistoryManager` when
+     turned ON and calls `undo()` when turned OFF; re-renders after either.
 
    **b. History Component (Bottom)**
    - A header row containing **Undo** and **Redo** text buttons with keyboard
@@ -280,7 +284,7 @@ enum Message {
     TransformSelected(TransformOption),
     SliderChanged(f32),
     SliderReleased,
-    ApplyParameterless,
+    ToggleParameterless,
 
     // --- History ---
     Undo,
@@ -431,8 +435,9 @@ addressing the "CPU Bridge" architecture from the main spec.
 4. Replay `render_to_handle(None)` from `cached_base_texture` → update
    `image_handle`.
 
-For parameterless transforms (Apply button), the flow is identical except the
-pushed value is always the fixed parameterless transform (e.g., `Grayscale`).
+For parameterless transforms (toggle), switching ON follows the same push +
+re-render flow. Switching OFF calls `history.undo()` instead of pushing, then
+re-renders.
 
 ### 8.3. On Slider Drag (live preview)
 1. Set `is_previewing = true`, `preview_value = slider_value`.
@@ -794,14 +799,14 @@ automatically appear in the `pick_list` once their shaders exist.
   enum so that adding new variants later is trivial (Contrast, Grayscale,
   Invert will be added in PRs 6–8).
 - Implement dynamic widget switching: slider for parameterized transforms,
-  "Apply" button for parameterless transforms. The "Apply" button path can
+  "Apply" label + toggler for parameterless transforms. The toggle path can
   be stubbed or built proactively — there are no parameterless transforms
   yet, but the code path should exist so PRs 6–8 only need to add enum
   variants.
 - Wire `SliderChanged` → live preview pipeline (Section 8.3).
 - Wire `SliderReleased` → commit to `HistoryManager` (Section 8.2).
-- Wire `ApplyParameterless` → commit flow (Section 8.2). May be untestable
-  until Grayscale/Invert are added, but the handler should exist.
+- Wire `ToggleParameterless` → push/undo flow (Section 8.2). May be
+  untestable until Grayscale/Invert are added, but the handler should exist.
 - Implement the GPU texture caching strategy (Section 2): upload + ingest
   once on load, replay collapsed history from cached texture on every edit.
 - Implement `collapse_adjacent` and `slider_value_for_type` per Section 2.1.
@@ -1033,8 +1038,8 @@ $ cargo clippy --workspace
   `GrayscaleParams` directly: `GrayscaleParams { _unused: [0.0; 4] }`.
 - Add `grayscale` parsing to `parse_transform()` in `bdip/src/main.rs`.
 - Add `TransformOption::Grayscale` to the UI `pick_list`. This is a
-  parameterless transform — verify the "Apply" button path built in PR 2
-  works correctly.
+  parameterless transform — verify the toggle path built in PR 2 works
+  correctly.
 - Unit tests: grayscale produces equal R=G=B channels, preserves alpha,
   extreme input values (all-white, all-black) produce correct luminance.
 - Integration test: grayscale chained with an existing shader (e.g.,
@@ -1060,7 +1065,8 @@ $ bdip --headless test.jpg --output out.png --apply saturation:-1.0
 $ cargo test -p bdip_core
 $ cargo clippy --workspace
 ```
-- UI: Select "Grayscale" → "Apply" button appears → clicking converts to gray.
+- UI: Select "Grayscale" → "Apply" toggle appears → switching ON converts to
+  gray, switching OFF reverts.
 
 ---
 
@@ -1082,7 +1088,7 @@ $ cargo clippy --workspace
   `InvertParams` directly: `InvertParams { _unused: [0.0; 4] }`.
 - Add `invert` parsing to `parse_transform()` in `bdip/src/main.rs`.
 - Add `TransformOption::Invert` to the UI `pick_list`. Parameterless — uses
-  the "Apply" button path.
+  the toggle path.
 - Unit tests: double invert restores original, preserves alpha, single invert
   produces `1.0 - x` per channel.
 - Integration test: invert chained with an existing shader (e.g.,

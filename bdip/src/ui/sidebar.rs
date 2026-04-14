@@ -1,4 +1,6 @@
-use iced::widget::{button, column, container, pick_list, rule, scrollable, slider, text};
+use iced::widget::{
+    button, column, container, pick_list, row, rule, scrollable, slider, text, toggler,
+};
 use iced::{Element, Length};
 
 use super::app::BdipApp;
@@ -9,6 +11,7 @@ const TRANSFORM_OPTIONS: &[TransformOption] = &[
     TransformOption::Brightness,
     TransformOption::Saturation,
     TransformOption::Contrast,
+    TransformOption::Grayscale,
 ];
 
 pub fn view(app: &BdipApp) -> Element<'_, Message> {
@@ -50,7 +53,21 @@ fn transform_view(app: &BdipApp) -> Element<'_, Message> {
             column![s, value_label].spacing(4).into()
         }
         TransformOption::Grayscale | TransformOption::Invert => {
-            button("Apply").on_press(Message::ApplyParameterless).into()
+            // The toggle is ON when the selected parameterless transform is the
+            // most recently committed entry in history.
+            let is_active = app
+                .history
+                .applied_transforms()
+                .last()
+                .map(|t| TransformOption::from_transformation(t) == app.selected_transform)
+                .unwrap_or(false);
+            row![
+                text("Apply"),
+                toggler(is_active).on_toggle(|_| Message::ToggleParameterless),
+            ]
+            .spacing(8)
+            .align_y(iced::Alignment::Center)
+            .into()
         }
     };
 

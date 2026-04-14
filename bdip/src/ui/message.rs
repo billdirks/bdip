@@ -50,7 +50,7 @@ pub enum Message {
     TransformSelected(TransformOption),
     SliderChanged(f32),
     SliderReleased,
-    ApplyParameterless,
+    ToggleParameterless,
 
     // History
     Undo,

@@ -33,6 +33,12 @@ struct ContrastParams {
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+struct GrayscaleParams {
+    _unused: [f32; 4], // WebGPU uniforms require 16-byte alignment; no user params
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 struct PresentParams {
     width: u32,
     y_offset: u32,
@@ -49,6 +55,7 @@ enum TransformKind {
     Brightness,
     Saturation,
     Contrast,
+    Grayscale,
 }
 
 impl From<&Transformation> for TransformKind {
@@ -57,6 +64,7 @@ impl From<&Transformation> for TransformKind {
             Transformation::Brightness(_) => TransformKind::Brightness,
             Transformation::Saturation(_) => TransformKind::Saturation,
             Transformation::Contrast(_) => TransformKind::Contrast,
+            Transformation::Grayscale => TransformKind::Grayscale,
             other => panic!("TransformKind not implemented for {:?}", other),
         }
     }
@@ -124,6 +132,14 @@ impl PipelineCache {
                 "Contrast Texture BGL",
                 "Contrast Params BGL",
                 "Contrast Pipeline Layout",
+            ),
+            TransformKind::Grayscale => (
+                include_str!("grayscale.wgsl"),
+                "Grayscale Shader",
+                "Grayscale Pipeline",
+                "Grayscale Texture BGL",
+                "Grayscale Params BGL",
+                "Grayscale Pipeline Layout",
             ),
         };
 
@@ -633,6 +649,16 @@ impl Renderer {
                     contrast_offset: *val,
                     _padding: [0.0; 3],
                 };
+                engine
+                    .device
+                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("Apply Params Buffer"),
+                        contents: bytemuck::cast_slice(&[p]),
+                        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                    })
+            }
+            Transformation::Grayscale => {
+                let p = GrayscaleParams { _unused: [0.0; 4] };
                 engine
                     .device
                     .create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -1517,6 +1543,134 @@ mod tests {
                 pixel[0]
             );
             assert_eq!(pixel[3], 65535);
+        }
+    }
+
+    // ========== Grayscale correctness tests ==========
+
+    #[test]
+    fn test_grayscale_produces_equal_rgb_channels() {
+        let engine = GpuEngine::new().unwrap();
+        let mut renderer = Renderer::new(&engine);
+
+        // Colored input: channels are distinct, so any non-trivial operation is detectable.
+        let img = make_solid_image(2, 2, 32767, 16384, 8192);
+        let out_img = roundtrip(&mut renderer, &engine, &img, &[Transformation::Grayscale]);
+
+        // After grayscale, R, G, and B must all equal the luminance value.
+        for pixel in out_img.pixels() {
+            assert!(
+                (pixel[0] as i32 - pixel[1] as i32).abs() <= 64,
+                "R and G should be equal: R={}, G={}",
+                pixel[0],
+                pixel[1]
+            );
+            assert!(
+                (pixel[1] as i32 - pixel[2] as i32).abs() <= 64,
+                "G and B should be equal: G={}, B={}",
+                pixel[1],
+                pixel[2]
+            );
+        }
+    }
+
+    #[test]
+    fn test_grayscale_alpha_preserved() {
+        let engine = GpuEngine::new().unwrap();
+        let mut renderer = Renderer::new(&engine);
+
+        let img = make_solid_image(2, 2, 32767, 16384, 8192);
+        let out_img = roundtrip(&mut renderer, &engine, &img, &[Transformation::Grayscale]);
+
+        for pixel in out_img.pixels() {
+            assert_eq!(pixel[3], 65535, "alpha must be unchanged by grayscale");
+        }
+    }
+
+    #[test]
+    fn test_grayscale_all_black_stays_black() {
+        let engine = GpuEngine::new().unwrap();
+        let mut renderer = Renderer::new(&engine);
+
+        // Pure black: all channels 0 linear → luminance = 0 → output stays 0.
+        let img = make_solid_image(2, 2, 0, 0, 0);
+        let out_img = roundtrip(&mut renderer, &engine, &img, &[Transformation::Grayscale]);
+
+        for pixel in out_img.pixels() {
+            assert_eq!(
+                pixel[0], 0,
+                "R: black input should produce 0, got {}",
+                pixel[0]
+            );
+            assert_eq!(
+                pixel[1], 0,
+                "G: black input should produce 0, got {}",
+                pixel[1]
+            );
+            assert_eq!(
+                pixel[2], 0,
+                "B: black input should produce 0, got {}",
+                pixel[2]
+            );
+        }
+    }
+
+    #[test]
+    fn test_grayscale_all_white_stays_white() {
+        let engine = GpuEngine::new().unwrap();
+        let mut renderer = Renderer::new(&engine);
+
+        // Pure white: all channels 1.0 linear → luminance = 0.2126+0.7152+0.0722 = 1.0 → white.
+        let img = make_solid_image(2, 2, 65535, 65535, 65535);
+        let out_img = roundtrip(&mut renderer, &engine, &img, &[Transformation::Grayscale]);
+
+        for pixel in out_img.pixels() {
+            assert!(
+                (pixel[0] as i32 - 65535).abs() <= 64,
+                "R: white input should stay white, got {}",
+                pixel[0]
+            );
+            assert!(
+                (pixel[1] as i32 - 65535).abs() <= 64,
+                "G: white input should stay white, got {}",
+                pixel[1]
+            );
+            assert!(
+                (pixel[2] as i32 - 65535).abs() <= 64,
+                "B: white input should stay white, got {}",
+                pixel[2]
+            );
+        }
+    }
+
+    #[test]
+    fn test_grayscale_chained_with_brightness() {
+        let engine = GpuEngine::new().unwrap();
+        let mut renderer = Renderer::new(&engine);
+
+        // Apply brightness first to shift the values, then grayscale.
+        // The result must still have equal R=G=B channels.
+        let img = make_solid_image(2, 2, 32767, 16384, 8192);
+        let out_img = roundtrip(
+            &mut renderer,
+            &engine,
+            &img,
+            &[Transformation::Brightness(0.2), Transformation::Grayscale],
+        );
+
+        for pixel in out_img.pixels() {
+            assert!(
+                (pixel[0] as i32 - pixel[1] as i32).abs() <= 64,
+                "R and G should be equal after brightness+grayscale: R={}, G={}",
+                pixel[0],
+                pixel[1]
+            );
+            assert!(
+                (pixel[1] as i32 - pixel[2] as i32).abs() <= 64,
+                "G and B should be equal after brightness+grayscale: G={}, B={}",
+                pixel[1],
+                pixel[2]
+            );
         }
     }
 }

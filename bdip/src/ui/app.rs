@@ -203,12 +203,22 @@ impl BdipApp {
                 Task::none()
             }
 
-            Message::ApplyParameterless => {
+            Message::ToggleParameterless => {
                 if self.cached_base_texture.is_none() {
                     return Task::none();
                 }
-                let t = make_transform(&self.selected_transform, 0.0);
-                self.history.apply(t);
+                let is_active = self
+                    .history
+                    .applied_transforms()
+                    .last()
+                    .map(|t| TransformOption::from_transformation(t) == self.selected_transform)
+                    .unwrap_or(false);
+                if is_active {
+                    self.history.undo();
+                } else {
+                    let t = make_transform(&self.selected_transform, 0.0);
+                    self.history.apply(t);
+                }
                 self.image_handle = self.render_to_handle(None);
                 Task::none()
             }

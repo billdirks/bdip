@@ -192,8 +192,12 @@ slice in `sidebar.rs`. The sidebar already handles the two control paths:
   `0.01`. The `app.rs` `update()` handler converts `SliderReleased` into
   a `Transformation::Example(preview_value)` push to `HistoryManager`.
 - **Parameterless transforms**: add the variant to the `pick_list` and the
-  `Apply` button match arm in `sidebar.rs`. `ApplyParameterless` in
-  `app.rs` pushes `Transformation::Grayscale` (or equivalent) directly.
+  toggle match arm in `sidebar.rs`. The toggle displays an "Apply" label on
+  the left and an `iced::widget::toggler` on the right. Its active state
+  reflects whether the selected transform is the most recent entry in
+  `HistoryManager`. The `ToggleParameterless` message in `app.rs` checks the
+  current active state: if ON it calls `history.undo()`; if OFF it pushes the
+  transform via `history.apply()`.
 
 `TransformOption` is defined in `bdip/src/ui/message.rs`. Add the variant
 there too, along with its `Display` and `from_transformation` arms.
@@ -215,8 +219,19 @@ fn transform_view(app: &BdipApp) -> Element<'_, Message> {
         | TransformOption::Saturation
         | TransformOption::Contrast
         | TransformOption::Example => { /* slider widget */ }
-        // parameterless → Apply button
-        TransformOption::Grayscale | TransformOption::Invert => { /* button widget */ }
+        // parameterless → "Apply" label + toggler
+        TransformOption::Grayscale | TransformOption::Invert => {
+            let is_active = app.history.applied_transforms().last()
+                .map(|t| TransformOption::from_transformation(t) == app.selected_transform)
+                .unwrap_or(false);
+            row![
+                text("Apply"),
+                toggler(is_active).on_toggle(|_| Message::ToggleParameterless),
+            ]
+            .spacing(8)
+            .align_y(iced::Alignment::Center)
+            .into()
+        }
     };
     // ...
 }
@@ -230,11 +245,9 @@ match arm there if the new variant is parameterized:
 TransformOption::Example => Transformation::Example(self.preview_value),
 ```
 
-For parameterless variants, the `ApplyParameterless` handler maps them:
-
-```rust
-TransformOption::Grayscale => Some(Transformation::Grayscale),
-```
+For parameterless variants, the `ToggleParameterless` handler derives the
+action from the current history state — no additional match arms are needed
+there.
 
 ### 9. Write tests
 
