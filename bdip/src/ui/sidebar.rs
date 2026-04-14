@@ -5,13 +5,29 @@ use super::app::BdipApp;
 use super::message::{Message, TransformOption};
 use super::style;
 
-/// Approximate height to show ~5 history entries (each ~28px including spacing).
-const HISTORY_MAX_HEIGHT: f32 = 155.0;
-
 const TRANSFORM_OPTIONS: &[TransformOption] =
     &[TransformOption::Brightness, TransformOption::Saturation];
 
 pub fn view(app: &BdipApp) -> Element<'_, Message> {
+    let transform_section = transform_view(app);
+    let history_section = history_view(app);
+
+    // Each section gets half the sidebar height.
+    column![
+        container(transform_section)
+            .width(Length::Fill)
+            .height(Length::FillPortion(1)),
+        rule::horizontal(1),
+        container(history_section)
+            .width(Length::Fill)
+            .height(Length::FillPortion(1)),
+    ]
+    .width(Length::Fill)
+    .height(Length::Fill)
+    .into()
+}
+
+fn transform_view(app: &BdipApp) -> Element<'_, Message> {
     let transform_picker = pick_list(
         TRANSFORM_OPTIONS,
         Some(app.selected_transform.clone()),
@@ -35,9 +51,7 @@ pub fn view(app: &BdipApp) -> Element<'_, Message> {
         }
     };
 
-    let history_section = history_view(app);
-
-    column![transform_picker, transform_control, history_section]
+    column![transform_picker, transform_control]
         .spacing(16)
         .padding(8)
         .width(Length::Fill)
@@ -86,12 +100,13 @@ fn history_view(app: &BdipApp) -> Element<'_, Message> {
         }
     }
 
-    let history_scroll =
-        container(scrollable(list.width(Length::Fill)).height(Length::Fixed(HISTORY_MAX_HEIGHT)))
-            .width(Length::Fill);
+    // The scrollable expands to fill whatever height the container gives this section.
+    let history_scroll = scrollable(list.width(Length::Fill)).height(Length::Fill);
 
     column![controls, history_scroll]
         .spacing(8)
+        .padding(8)
         .width(Length::Fill)
+        .height(Length::Fill)
         .into()
 }

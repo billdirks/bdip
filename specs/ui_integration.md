@@ -66,9 +66,11 @@ three main zones:
      - Undone entries (`history.redo_transforms()`, in redo order) appear below
        the divider with dimmed/grayed text. They are shown so the user can see
        what would be restored by Redo.
-   - **Size constraint:** The history list area has a fixed max height designed to
-     show approximately 5 items. If the list exceeds this, an `iced::widget::scrollable`
-     enables traversal, preserving screen real estate for the Transform component.
+   - **Size constraint:** The sidebar is split evenly between the Transform component
+     (top half) and the History component (bottom half), each receiving
+     `Length::FillPortion(1)` of the panel height. The history list is wrapped in an
+     `iced::widget::scrollable` that expands to fill its half, enabling traversal when
+     the list grows beyond the visible area.
    - **Undo** is disabled when the applied stack is empty. **Redo** is disabled
      when the redo stack is empty.
 
