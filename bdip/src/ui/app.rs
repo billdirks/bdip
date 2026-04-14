@@ -280,13 +280,12 @@ impl BdipApp {
         })
     }
 
-    /// Replays the collapsed transform stack from `cached_base_texture` and
-    /// returns an updated iced image handle. If `preview` is `Some`, it is
-    /// treated as a tentative value for the currently selected transform type.
-    fn render_to_handle(
+    /// Executes the transformation pipeline on the GPU and returns the final presentation buffer
+    /// along with the image dimensions.
+    fn render_pipeline(
         &mut self,
         preview: Option<&Transformation>,
-    ) -> Option<iced::widget::image::Handle> {
+    ) -> Option<(bdip_core::wgpu::Buffer, u32, u32)> {
         let committed: Vec<Transformation> = self.history.applied_transforms().to_vec();
         let collapsed = collapse_adjacent(&committed);
 
@@ -325,6 +324,18 @@ impl BdipApp {
 
         let final_tex = current.as_ref().unwrap_or(base);
         let buf = renderer.present(engine, final_tex);
+        Some((buf, w, h))
+    }
+
+    /// Replays the collapsed transform stack from `cached_base_texture` and
+    /// returns an updated iced image handle. If `preview` is `Some`, it is
+    /// treated as a tentative value for the currently selected transform type.
+    fn render_to_handle(
+        &mut self,
+        preview: Option<&Transformation>,
+    ) -> Option<iced::widget::image::Handle> {
+        let (buf, w, h) = self.render_pipeline(preview)?;
+        let engine = self.engine.as_ref()?;
         canvas::presentation_to_handle(engine, &buf, w, h)
     }
 
@@ -332,25 +343,8 @@ impl BdipApp {
     /// returns the result as a 16-bit RGBA image suitable for saving. Uses the
     /// same GPU pipeline as `render_to_handle` but skips the 8-bit conversion.
     fn render_to_rgba16(&mut self) -> Option<bdip_core::Rgba16Image> {
-        let committed: Vec<Transformation> = self.history.applied_transforms().to_vec();
-        let collapsed = collapse_adjacent(&committed);
-
-        let (w, h) = self.base_image.as_ref()?.dimensions();
+        let (buf, w, h) = self.render_pipeline(None)?;
         let engine = self.engine.as_ref()?;
-        let renderer = self.renderer.as_mut()?;
-        let base = self.cached_base_texture.as_ref()?;
-
-        let mut current: Option<bdip_core::wgpu::Texture> = None;
-        for t in &collapsed {
-            let new_tex = {
-                let src = current.as_ref().unwrap_or(base);
-                renderer.apply(engine, src, t)
-            };
-            current = Some(new_tex);
-        }
-
-        let final_tex = current.as_ref().unwrap_or(base);
-        let buf = renderer.present(engine, final_tex);
         bdip_core::gpu::texture::download_presentation_buffer(
             &engine.device,
             &engine.queue,
