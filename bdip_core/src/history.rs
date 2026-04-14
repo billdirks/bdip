@@ -20,6 +20,9 @@ impl HistoryManager {
     }
 
     pub fn apply(&mut self, t: Transformation) {
+        if self.applied_transforms.last() == Some(&t) {
+            return;
+        }
         self.applied_transforms.push(t);
         self.redo_stack.clear();
     }
@@ -160,6 +163,26 @@ mod tests {
         hm.undo();
         hm.apply(Transformation::Grayscale);
         assert!(!hm.can_redo());
+    }
+
+    #[test]
+    fn test_apply_duplicate_top_is_ignored() {
+        let mut hm = HistoryManager::new();
+        hm.apply(Transformation::Brightness(0.8));
+        hm.apply(Transformation::Brightness(0.8));
+        assert_eq!(hm.applied_transforms().len(), 1);
+    }
+
+    #[test]
+    fn test_apply_duplicate_does_not_clear_redo() {
+        let mut hm = HistoryManager::new();
+        hm.apply(Transformation::Brightness(0.8));
+        hm.apply(Transformation::Saturation(0.5));
+        hm.undo();
+        // Redo stack now has S(0.5). Pushing the same B(0.8) that is on top should
+        // be a no-op and must not wipe the redo stack.
+        hm.apply(Transformation::Brightness(0.8));
+        assert!(hm.can_redo());
     }
 
     #[test]
