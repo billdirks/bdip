@@ -3,6 +3,7 @@ use bdip_core::{Transformation, gpu::engine::GpuEngine, gpu::pipeline::Renderer}
 use clap::Parser;
 
 mod cli;
+mod timing;
 mod ui;
 
 fn parse_transform(s: &str) -> anyhow::Result<Transformation> {
@@ -72,18 +73,24 @@ fn main() -> anyhow::Result<()> {
             .input
             .ok_or_else(|| anyhow::anyhow!("An input file is required in headless mode"))?;
         println!("Running headless processing on {:?}", input_path);
+
+        let mut timer = timing::PipelineTimer::new(args.timings);
+
         let mut img = bdip_core::io::load_image(&input_path)?;
+        timer.lap("disk read");
 
         let engine = GpuEngine::new()?;
         let mut renderer = Renderer::new(&engine);
 
         let uploaded_texture = upload_texture(&engine.device, &engine.queue, &img);
-        let mut current_texture = renderer.ingest(&engine, &uploaded_texture);
+        timer.lap("gpu upload");
 
+        let mut current_texture = renderer.ingest(&engine, &uploaded_texture);
         for transform in &transforms {
             println!("Applying {:?}", transform);
             current_texture = renderer.apply(&engine, &current_texture, transform);
         }
+        timer.lap("gpu execute");
 
         let presentation_buffer = renderer.present(&engine, &current_texture);
         let (width, height) = img.dimensions();
@@ -94,8 +101,12 @@ fn main() -> anyhow::Result<()> {
             width,
             height,
         )?;
+        timer.lap("gpu readback");
 
         bdip_core::io::save_image(&img, &output_path)?;
+        timer.lap("disk write");
+
+        timer.report();
         println!("Saved output to {:?}", output_path);
     } else {
         ui::run(args.input)?;

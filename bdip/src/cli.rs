@@ -22,4 +22,8 @@ pub struct Cli {
     /// Path to a text file containing line-by-line transformations
     #[arg(short, long)]
     pub pipeline: Option<PathBuf>,
+
+    /// Print per-stage pipeline timings to stderr after headless processing
+    #[arg(long, default_value_t = false)]
+    pub timings: bool,
 }

@@ -1757,4 +1757,81 @@ mod tests {
             assert_eq!(pixel[3], 65535);
         }
     }
+
+    // ========== Performance benchmark ==========
+
+    /// Times the GPU-critical path (upload → ingest → apply → present → readback)
+    /// on a 24 MP synthetic image — the primary target size from perf_goal_1.md.
+    ///
+    /// This test is ignored by default so it does not run in CI. Run it manually:
+    ///   cargo perf-test
+    ///
+    /// Baseline measurements on Apple Silicon (warm start, 2026-04):
+    ///   gpu warmup:    ~2 ms   (creates context, compiles shaders, 1x1 ingest/apply/present)
+    ///   gpu upload:    ~73 ms  (CPU f16 conversion loop; see tech_debt.md)
+    ///   gpu execute:   ~0.6 ms (shader execution strictly; pipeline is already warm)
+    ///   gpu readback:  ~55 ms  (staging buffer alloc + memcpy; see tech_debt.md)
+    ///   critical path: ~55.6 ms (execute + readback)
+    ///     *Note: Upload is excluded from the critical path because interactive editing
+    ///      (e.g., dragging a slider) re-executes transformations against texture data
+    ///      that is already cached in GPU VRAM, requiring only execution and readback.*
+    ///
+    /// Target once known bottlenecks are resolved (warm, interactive): 8–20 ms total.
+    /// When the target is reliably met, add an assertion and remove #[ignore].
+    #[test]
+    #[ignore = "performance benchmark: run manually to avoid slowing CI"]
+    fn test_perf_gpu_roundtrip_24mp() {
+        use std::time::Instant;
+
+        let engine = GpuEngine::new().unwrap();
+        let mut renderer = Renderer::new(&engine);
+
+        // Warmup step: Run a tiny workload to force shader compilation and pipeline creation.
+        // This ensures the main benchmark measures true "warm" execution time.
+        let t_warmup = Instant::now();
+        let warmup_img = make_solid_image(1, 1, 32767, 32767, 32767);
+        let warmup_uploaded = upload_texture(&engine.device, &engine.queue, &warmup_img);
+        let warmup_ingested = renderer.ingest(&engine, &warmup_uploaded);
+        let warmup_transformed =
+            renderer.apply(&engine, &warmup_ingested, &Transformation::Brightness(0.1));
+        let _warmup_present = renderer.present(&engine, &warmup_transformed);
+        let warmup_ms = t_warmup.elapsed().as_secs_f64() * 1000.0;
+
+        // 5000×4800 = 24,000,000 pixels (~24 MP), matching the primary benchmark
+        // target in perf_goal_1.md. Generated synthetically — no test asset needed.
+        let img = make_solid_image(5000, 4800, 32767, 32767, 32767);
+
+        let t_upload = Instant::now();
+        let uploaded = upload_texture(&engine.device, &engine.queue, &img);
+        let upload_ms = t_upload.elapsed().as_secs_f64() * 1000.0;
+
+        let t_execute = Instant::now();
+        let ingested = renderer.ingest(&engine, &uploaded);
+        let transformed = renderer.apply(&engine, &ingested, &Transformation::Brightness(0.1));
+        let present_buf = renderer.present(&engine, &transformed);
+        let execute_ms = t_execute.elapsed().as_secs_f64() * 1000.0;
+
+        let t_readback = Instant::now();
+        let _result = download_presentation_buffer(
+            &engine.device,
+            &engine.queue,
+            &present_buf,
+            img.width(),
+            img.height(),
+        )
+        .unwrap();
+        let readback_ms = t_readback.elapsed().as_secs_f64() * 1000.0;
+
+        let critical_ms = execute_ms + readback_ms;
+        eprintln!("--- 24 MP GPU roundtrip ---");
+        eprintln!("  gpu warmup:    {:>8.2} ms", warmup_ms);
+        eprintln!("  gpu upload:    {:>8.2} ms", upload_ms);
+        eprintln!("  gpu execute:   {:>8.2} ms", execute_ms);
+        eprintln!("  gpu readback:  {:>8.2} ms", readback_ms);
+        eprintln!(
+            "  critical path: {:>8.2} ms  (target: 8–20 ms warm)",
+            critical_ms
+        );
+        eprintln!("----------------------------------");
+    }
 }

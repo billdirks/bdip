@@ -53,6 +53,17 @@ cargo headless input.jpg --output out.png --apply brightness:0.3 --apply brightn
 cargo headless input.jpg --output out.png --pipeline transforms.txt
 ```
 
+**Inspect pipeline stage timings**
+Add `--timings` to any headless invocation to print per-stage wall-clock durations to stderr.
+Use the release build for numbers comparable to the targets in `specs/perf_goal_1.md`:
+```bash
+cargo headless-release path/to/your/image.jpg --output out.png --apply brightness:0.5 --timings
+```
+
+Output reports five stages: `disk read`, `gpu upload`, `gpu execute`, `gpu readback`, and
+`disk write`. The interactive latency goal covers `gpu execute` + `gpu readback` (target:
+8–20 ms on Apple Silicon for a 24 MP image).
+
 ### Development Commands
 
 Run the following commands before finalizing any edits to ensure code quality:
@@ -74,6 +85,20 @@ Run the core library unit tests and the end-to-end CLI flow tests:
 ```bash
 cargo test --workspace
 ```
+
+### Performance Benchmarking
+
+**Run the GPU roundtrip benchmark**
+Times the full GPU-critical path (CPU→GPU upload, shader execution, GPU→CPU readback) on a
+synthetically generated 24 MP image. This is the primary signal for tracking progress toward
+the sub-20 ms latency goal in `specs/perf_goal_1.md`. Always run in release mode — debug mode
+adds significant overhead unrelated to the pipeline itself:
+```bash
+cargo perf-test
+```
+
+The test prints per-stage timings and always passes. As performance improves toward the 8–20 ms
+target, the thresholds in the test will be tightened and it will become gating.
 
 ## Documentation & Performance
 `bdip` has strict, predefined requirements targeting the commercial photo editing space. For detailed

@@ -1,8 +1,10 @@
 # Workflow Constraints
 - Always read in all the `specs/*goal*` files before making any changes.
 - Always run `cargo clippy` and handle/fix all the issues it highlights.
-- Always run `rustfmt` on all Rust files before being finished with edits (this can happen as
-  the last step).
+- Always format Rust files before being finished with edits (this can happen as the last step).
+  Use the `cargo format` alias (`cargo fmt --all`) to format the whole workspace. When
+  formatting individual files with `rustfmt` directly, always pass `--edition 2024` — omitting
+  it defaults to an older edition and will error on this codebase.
 
 # General Constraints
 - Non-code file formatting, including documentation and this rules file, must be hard-wrapped to a
