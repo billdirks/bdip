@@ -34,8 +34,6 @@ pub struct BdipApp {
     // UI state
     pub error_message: Option<String>,
     pub is_loading: bool,
-    // Used in PR 4 (save flow).
-    #[allow(dead_code)]
     pub is_saving: bool,
 }
 
@@ -130,11 +128,48 @@ impl BdipApp {
             }
 
             Message::SaveImagePressed => {
-                // Implemented in PR 4.
-                Task::none()
+                if self.is_saving || self.base_image.is_none() {
+                    return Task::none();
+                }
+                let Some(img) = self.render_to_rgba16() else {
+                    return Task::none();
+                };
+                self.is_saving = true;
+                Task::perform(
+                    async move {
+                        let handle = rfd::AsyncFileDialog::new()
+                            .add_filter("Images", &["png", "jpg", "jpeg", "tif", "tiff"])
+                            .save_file()
+                            .await;
+                        match handle {
+                            Some(h) => {
+                                let path = h.path().to_path_buf();
+                                bdip_core::io::save_image(&img, &path)
+                                    .map_err(|e| e.to_string())?;
+                                Ok(path)
+                            }
+                            None => Err("cancelled".to_string()),
+                        }
+                    },
+                    |result: Result<PathBuf, String>| match result {
+                        Ok(path) => Message::ImageSaved(Ok(path)),
+                        Err(e) if e == "cancelled" => {
+                            Message::ImageSaved(Err("cancelled".to_string()))
+                        }
+                        Err(e) => Message::ImageSaved(Err(e)),
+                    },
+                )
             }
 
-            Message::ImageSaved(_) => Task::none(),
+            Message::ImageSaved(result) => {
+                self.is_saving = false;
+                match result {
+                    Ok(_) => {}                      // File saved — no banner needed.
+                    Err(e) if e == "cancelled" => {} // User cancelled — not an error.
+                    Err(e) => self.error_message = Some(e),
+                }
+                Task::none()
+            }
 
             Message::TransformSelected(opt) => {
                 self.preview_value = slider_value_for_type(&opt, self.history.applied_transforms());
@@ -291,6 +326,39 @@ impl BdipApp {
         let final_tex = current.as_ref().unwrap_or(base);
         let buf = renderer.present(engine, final_tex);
         canvas::presentation_to_handle(engine, &buf, w, h)
+    }
+
+    /// Renders the committed transform stack from `cached_base_texture` and
+    /// returns the result as a 16-bit RGBA image suitable for saving. Uses the
+    /// same GPU pipeline as `render_to_handle` but skips the 8-bit conversion.
+    fn render_to_rgba16(&mut self) -> Option<bdip_core::Rgba16Image> {
+        let committed: Vec<Transformation> = self.history.applied_transforms().to_vec();
+        let collapsed = collapse_adjacent(&committed);
+
+        let (w, h) = self.base_image.as_ref()?.dimensions();
+        let engine = self.engine.as_ref()?;
+        let renderer = self.renderer.as_mut()?;
+        let base = self.cached_base_texture.as_ref()?;
+
+        let mut current: Option<bdip_core::wgpu::Texture> = None;
+        for t in &collapsed {
+            let new_tex = {
+                let src = current.as_ref().unwrap_or(base);
+                renderer.apply(engine, src, t)
+            };
+            current = Some(new_tex);
+        }
+
+        let final_tex = current.as_ref().unwrap_or(base);
+        let buf = renderer.present(engine, final_tex);
+        bdip_core::gpu::texture::download_presentation_buffer(
+            &engine.device,
+            &engine.queue,
+            &buf,
+            w,
+            h,
+        )
+        .ok()
     }
 }
 

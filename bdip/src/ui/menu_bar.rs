@@ -7,8 +7,9 @@ use super::message::Message;
 pub fn view(app: &BdipApp) -> Element<'_, Message> {
     let load_btn = button("Load Image").on_press(Message::LoadImagePressed);
 
-    // Save is only active when an image is loaded.
-    let save_btn = if app.image_handle.is_some() {
+    // Save is only active when an image is loaded and a save is not already
+    // in progress.
+    let save_btn = if app.image_handle.is_some() && !app.is_saving {
         button("Save Image").on_press(Message::SaveImagePressed)
     } else {
         button("Save Image")
