@@ -255,6 +255,10 @@ pub struct Renderer {
 
     // Transform pipelines are compiled on first use.
     pipeline_cache: PipelineCache,
+
+    // Cached staging buffer for readback. Reused across `download` calls to
+    // avoid per-call OS allocation of a large MAP_READ buffer.
+    staging_buffer: Option<(wgpu::Buffer, u64)>, // (buffer, byte_size)
 }
 
 impl Renderer {
@@ -376,6 +380,7 @@ impl Renderer {
             present_texture_bind_group_layout,
             present_params_bind_group_layout,
             pipeline_cache: PipelineCache::new(),
+            staging_buffer: None,
         }
     }
 
@@ -507,6 +512,79 @@ impl Renderer {
         engine.queue.submit(Some(encoder.finish()));
 
         output_buffer
+    }
+
+    fn ensure_staging_buffer(&mut self, engine: &GpuEngine, buffer_size: u64) -> &wgpu::Buffer {
+        let needs_alloc = match &self.staging_buffer {
+            Some((_, sz)) => *sz < buffer_size,
+            None => true,
+        };
+
+        if needs_alloc {
+            let buf = engine.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("presentation_staging_buffer"),
+                size: buffer_size,
+                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            self.staging_buffer = Some((buf, buffer_size));
+        }
+
+        &self.staging_buffer.as_ref().unwrap().0
+    }
+
+    /// Downloads the output of `present` from a GPU storage buffer into a
+    /// CPU-side `Rgba16Image`. Reuses a cached `MAP_READ` staging buffer across
+    /// calls to avoid the per-call OS allocation cost (~15–30 ms for a 192 MB
+    /// buffer on Apple Silicon).
+    ///
+    /// Use `bdip_core::gpu::texture::download_presentation_buffer` for one-shot
+    /// callers (headless CLI, tests) that do not hold a `Renderer` across calls.
+    pub fn download(
+        &mut self,
+        engine: &GpuEngine,
+        src_buffer: &wgpu::Buffer,
+        width: u32,
+        height: u32,
+    ) -> Result<crate::Rgba16Image, crate::error::BdipError> {
+        // Tightly packed: 4 channels × 2 bytes = 8 bytes per pixel, no row padding.
+        let buffer_size = width as u64 * height as u64 * 8;
+
+        let staging_buffer = self.ensure_staging_buffer(engine, buffer_size);
+
+        let mut encoder = engine
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        encoder.copy_buffer_to_buffer(src_buffer, 0, staging_buffer, 0, buffer_size);
+        engine.queue.submit(Some(encoder.finish()));
+
+        let buffer_slice = staging_buffer.slice(..buffer_size);
+        let (tx, rx) = std::sync::mpsc::channel();
+        buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
+            tx.send(result).unwrap();
+        });
+
+        engine
+            .device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .unwrap();
+
+        if rx.recv().unwrap().is_err() {
+            return Err(crate::error::BdipError::Gpu(
+                "Failed to map presentation buffer for reading".into(),
+            ));
+        }
+
+        let data = buffer_slice.get_mapped_range();
+        // Cast raw bytes to u16. The buffer layout (R|G packed into the first u32,
+        // B|A into the second) produces interleaved [R, G, B, A, R, G, B, A, ...]
+        // as u16 values on little-endian hardware — exactly what Rgba16Image expects.
+        let pixel_vec: Vec<u16> = bytemuck::cast_slice::<u8, u16>(&data).to_vec();
+        drop(data);
+        staging_buffer.unmap();
+
+        crate::Rgba16Image::from_raw(width, height, pixel_vec)
+            .ok_or_else(|| crate::error::BdipError::Gpu("Presentation buffer size mismatch".into()))
     }
 
     /// Dispatches a single-pass color-space conversion shader that reads a source
@@ -1760,23 +1838,34 @@ mod tests {
 
     // ========== Performance benchmark ==========
 
-    /// Times the GPU-critical path (upload → ingest → apply → present → readback)
-    /// on a 24 MP synthetic image — the primary target size from perf_goal_1.md.
+    /// Times the GPU-critical path on a 24 MP synthetic image — the primary target
+    /// size from perf_goal_1.md.
+    ///
+    /// Two runs are measured to isolate warm-pipeline performance from one-time
+    /// startup costs:
+    ///
+    /// - **Run 1 (cold)**: upload → ingest → apply → present → readback.
+    ///   Includes shader compilation and initial staging buffer allocation.
+    /// - **Run 2 (warm)**: apply → present → readback, reusing the ingested
+    ///   base texture and the cached staging buffer from run 1. This matches
+    ///   the interactive editing path, where upload+ingest happen once and are
+    ///   cached across slider changes.
+    ///
+    /// Run 2 is the number to compare against the 8–20 ms target.
     ///
     /// This test is ignored by default so it does not run in CI. Run it manually:
     ///   cargo perf-test
     ///
-    /// Baseline measurements on Apple Silicon (warm start, 2026-04):
-    ///   gpu warmup:    ~2 ms   (creates context, compiles shaders, 1x1 ingest/apply/present)
-    ///   gpu upload:    ~73 ms  (CPU f16 conversion loop; see tech_debt.md)
-    ///   gpu execute:   ~0.6 ms (shader execution strictly; pipeline is already warm)
-    ///   gpu readback:  ~55 ms  (staging buffer alloc + memcpy; see tech_debt.md)
-    ///   critical path: ~55.6 ms (execute + readback)
-    ///     *Note: Upload is excluded from the critical path because interactive editing
-    ///      (e.g., dragging a slider) re-executes transformations against texture data
-    ///      that is already cached in GPU VRAM, requiring only execution and readback.*
+    /// Measurements on Apple M4 Pro (2026-04):
+    ///   gpu upload:              ~75.58 ms  (CPU f16 conversion loop; see tech_debt.md)
+    ///   run 1 execute:           ~1.71 ms
+    ///   run 1 readback:          ~64.36 ms  (staging buffer alloc + memcpy)
+    ///   run 1 critical path:     ~66.07 ms
+    ///   run 2 execute:           ~0.76 ms
+    ///   run 2 readback:          ~34.28 ms (used previously alloced buffer)
+    ///   run 2 critical path:     ~35.04 ms
     ///
-    /// Target once known bottlenecks are resolved (warm, interactive): 8–20 ms total.
+    /// Target once all known bottlenecks are resolved (warm, interactive): 8–20 ms.
     /// When the target is reliably met, add an assertion and remove #[ignore].
     #[test]
     #[ignore = "performance benchmark: run manually to avoid slowing CI"]
@@ -1786,17 +1875,6 @@ mod tests {
         let engine = GpuEngine::new().unwrap();
         let mut renderer = Renderer::new(&engine);
 
-        // Warmup step: Run a tiny workload to force shader compilation and pipeline creation.
-        // This ensures the main benchmark measures true "warm" execution time.
-        let t_warmup = Instant::now();
-        let warmup_img = make_solid_image(1, 1, 32767, 32767, 32767);
-        let warmup_uploaded = upload_texture(&engine.device, &engine.queue, &warmup_img);
-        let warmup_ingested = renderer.ingest(&engine, &warmup_uploaded);
-        let warmup_transformed =
-            renderer.apply(&engine, &warmup_ingested, &Transformation::Brightness(0.1));
-        let _warmup_present = renderer.present(&engine, &warmup_transformed);
-        let warmup_ms = t_warmup.elapsed().as_secs_f64() * 1000.0;
-
         // 5000×4800 = 24,000,000 pixels (~24 MP), matching the primary benchmark
         // target in perf_goal_1.md. Generated synthetically — no test asset needed.
         let img = make_solid_image(5000, 4800, 32767, 32767, 32767);
@@ -1805,32 +1883,52 @@ mod tests {
         let uploaded = upload_texture(&engine.device, &engine.queue, &img);
         let upload_ms = t_upload.elapsed().as_secs_f64() * 1000.0;
 
-        let t_execute = Instant::now();
+        // --- Run 1: cold (shader compilation + initial staging buffer allocation) ---
+        let t_execute_1 = Instant::now();
         let ingested = renderer.ingest(&engine, &uploaded);
-        let transformed = renderer.apply(&engine, &ingested, &Transformation::Brightness(0.1));
-        let present_buf = renderer.present(&engine, &transformed);
-        let execute_ms = t_execute.elapsed().as_secs_f64() * 1000.0;
+        let transformed_1 = renderer.apply(&engine, &ingested, &Transformation::Brightness(0.1));
+        let present_buf_1 = renderer.present(&engine, &transformed_1);
+        let execute_ms_1 = t_execute_1.elapsed().as_secs_f64() * 1000.0;
 
-        let t_readback = Instant::now();
-        let _result = download_presentation_buffer(
-            &engine.device,
-            &engine.queue,
-            &present_buf,
-            img.width(),
-            img.height(),
-        )
-        .unwrap();
-        let readback_ms = t_readback.elapsed().as_secs_f64() * 1000.0;
+        let t_readback_1 = Instant::now();
+        let _result_1 = renderer
+            .download(&engine, &present_buf_1, img.width(), img.height())
+            .unwrap();
+        let readback_ms_1 = t_readback_1.elapsed().as_secs_f64() * 1000.0;
 
-        let critical_ms = execute_ms + readback_ms;
+        // --- Run 2: warm (shaders compiled, staging buffer reused) ---
+        // Reuses `ingested` directly — matching interactive editing where the base
+        // texture is cached in VRAM across slider changes.
+        let t_execute_2 = Instant::now();
+        let transformed_2 = renderer.apply(&engine, &ingested, &Transformation::Brightness(0.1));
+        let present_buf_2 = renderer.present(&engine, &transformed_2);
+        let execute_ms_2 = t_execute_2.elapsed().as_secs_f64() * 1000.0;
+
+        let t_readback_2 = Instant::now();
+        let _result_2 = renderer
+            .download(&engine, &present_buf_2, img.width(), img.height())
+            .unwrap();
+        let readback_ms_2 = t_readback_2.elapsed().as_secs_f64() * 1000.0;
+
         eprintln!("--- 24 MP GPU roundtrip ---");
-        eprintln!("  gpu warmup:    {:>8.2} ms", warmup_ms);
-        eprintln!("  gpu upload:    {:>8.2} ms", upload_ms);
-        eprintln!("  gpu execute:   {:>8.2} ms", execute_ms);
-        eprintln!("  gpu readback:  {:>8.2} ms", readback_ms);
+        eprintln!("  gpu upload:                   {:>8.2} ms", upload_ms);
         eprintln!(
-            "  critical path: {:>8.2} ms  (target: 8–20 ms warm)",
-            critical_ms
+            "  run 1 execute (ingest+apply+present): {:>8.2} ms",
+            execute_ms_1
+        );
+        eprintln!("  run 1 readback:               {:>8.2} ms", readback_ms_1);
+        eprintln!(
+            "  run 1 critical path:          {:>8.2} ms",
+            execute_ms_1 + readback_ms_1
+        );
+        eprintln!(
+            "  run 2 execute (apply+present):        {:>8.2} ms",
+            execute_ms_2
+        );
+        eprintln!("  run 2 readback:               {:>8.2} ms", readback_ms_2);
+        eprintln!(
+            "  run 2 critical path:          {:>8.2} ms  (target: 8–20 ms warm)",
+            execute_ms_2 + readback_ms_2
         );
         eprintln!("----------------------------------");
     }

@@ -109,7 +109,7 @@ impl BdipApp {
                     let uploaded = upload_texture(&engine.device, &engine.queue, &img);
                     let linear = renderer.ingest(engine, &uploaded);
                     let buf = renderer.present(engine, &linear);
-                    self.image_handle = presentation_to_handle(engine, &buf, w, h);
+                    self.image_handle = presentation_to_handle(renderer, engine, &buf, w, h);
                     self.cached_base_texture = Some(linear);
                 }
                 self.base_image = Some(img);
@@ -335,7 +335,8 @@ impl BdipApp {
     ) -> Option<iced::widget::image::Handle> {
         let (buf, w, h) = self.render_pipeline(preview)?;
         let engine = self.engine.as_ref()?;
-        canvas::presentation_to_handle(engine, &buf, w, h)
+        let renderer = self.renderer.as_mut()?;
+        canvas::presentation_to_handle(renderer, engine, &buf, w, h)
     }
 
     /// Renders the committed transform stack from `cached_base_texture` and
@@ -344,14 +345,8 @@ impl BdipApp {
     fn render_to_rgba16(&mut self) -> Option<bdip_core::Rgba16Image> {
         let (buf, w, h) = self.render_pipeline(None)?;
         let engine = self.engine.as_ref()?;
-        bdip_core::gpu::texture::download_presentation_buffer(
-            &engine.device,
-            &engine.queue,
-            &buf,
-            w,
-            h,
-        )
-        .ok()
+        let renderer = self.renderer.as_mut()?;
+        renderer.download(engine, &buf, w, h).ok()
     }
 
     /// Checks if the provided `TransformOption` represents the most recently applied transformation.

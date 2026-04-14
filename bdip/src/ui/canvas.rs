@@ -1,5 +1,5 @@
 use bdip_core::gpu::engine::GpuEngine;
-use bdip_core::gpu::texture::download_presentation_buffer;
+use bdip_core::gpu::pipeline::Renderer;
 use iced::widget::{button, column, container, image, row, text};
 use iced::{ContentFit, Element, Length};
 
@@ -10,13 +10,13 @@ use super::style;
 /// Converts the output of `Renderer::present` to an iced image handle. Called
 /// on every render (load, commit, preview, undo/redo).
 pub fn presentation_to_handle(
+    renderer: &mut Renderer,
     engine: &GpuEngine,
     buf: &bdip_core::wgpu::Buffer,
     width: u32,
     height: u32,
 ) -> Option<image::Handle> {
-    let img16 =
-        download_presentation_buffer(&engine.device, &engine.queue, buf, width, height).ok()?;
+    let img16 = renderer.download(engine, buf, width, height).ok()?;
     let img8 = bdip_core::image::DynamicImage::ImageRgba16(img16).into_rgba8();
     let (w, h) = img8.dimensions();
     let pixels = img8.into_raw();
