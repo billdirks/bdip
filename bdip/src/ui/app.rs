@@ -178,8 +178,25 @@ impl BdipApp {
                 Task::none()
             }
 
-            Message::Undo | Message::Redo => {
-                // Implemented in PR 3.
+            Message::Undo => {
+                if self.history.undo().is_some() && self.cached_base_texture.is_some() {
+                    self.preview_value = slider_value_for_type(
+                        &self.selected_transform,
+                        self.history.applied_transforms(),
+                    );
+                    self.image_handle = self.render_to_handle(None);
+                }
+                Task::none()
+            }
+
+            Message::Redo => {
+                if self.history.redo().is_some() && self.cached_base_texture.is_some() {
+                    self.preview_value = slider_value_for_type(
+                        &self.selected_transform,
+                        self.history.applied_transforms(),
+                    );
+                    self.image_handle = self.render_to_handle(None);
+                }
                 Task::none()
             }
 
@@ -209,7 +226,23 @@ impl BdipApp {
     }
 
     pub fn subscription(&self) -> Subscription<Message> {
-        Subscription::none()
+        use iced::keyboard::Event;
+        use iced::keyboard::Key;
+
+        iced::keyboard::listen().map(|event| match event {
+            Event::KeyPressed { key, modifiers, .. } => {
+                // ⌘Z → Undo,  ⌘⇧Z → Redo
+                if modifiers.command() && key.as_ref() == Key::Character("z") {
+                    if modifiers.shift() {
+                        return Message::Redo;
+                    } else {
+                        return Message::Undo;
+                    }
+                }
+                Message::Noop
+            }
+            _ => Message::Noop,
+        })
     }
 
     /// Replays the collapsed transform stack from `cached_base_texture` and
