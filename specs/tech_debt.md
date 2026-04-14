@@ -121,3 +121,12 @@ This document tracks known architectural shortcuts, generic naming, and structur
 
 ## Future Considerations
 *(Add new items here as they are discovered during development)*
+
+## Potential Improvements
+
+### Proxy Resolution During Live Preview
+- **Goal:** Processing a downscaled proxy during interaction and applying the full-resolution pipeline only on slider release to reduce live-preview latency.
+- **Rationale:** While full-resolution processing hits our targets on Apple Silicon, very large images (50MP+) or discrete GPUs with slower PCIe readback may benefit from a 4-10x latency reduction.
+- **Priority:** **Lowest.** (We will see if we can hit sub-20ms goals on primary target hardware without this complexity).
+- **Suggested Remediation:** 
+  During active slider interaction (the `is_previewing` state), the pipeline should be dispatched against a downscaled proxy texture (e.g., a display-resolution proxy of ~2–5MP) rather than the full-resolution source (e.g., 24MP+). On slider release, the full-resolution result is computed once to ensure the final preview and history entries are high-fidelity. The internal `Renderer::apply` and `Renderer::present` methods are already resolution-independent, so this primarily requires managing the lifecycle of the proxy texture in `BdipApp`.
