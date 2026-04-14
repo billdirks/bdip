@@ -172,7 +172,7 @@ impl BdipApp {
             }
 
             Message::TransformSelected(opt) => {
-                self.preview_value = slider_value_for_type(&opt, self.history.applied_transforms());
+                self.preview_value = self.active_transform_value(&opt);
                 self.selected_transform = opt;
                 self.is_previewing = false;
                 Task::none()
@@ -207,12 +207,7 @@ impl BdipApp {
                 if self.cached_base_texture.is_none() {
                     return Task::none();
                 }
-                let is_active = self
-                    .history
-                    .applied_transforms()
-                    .last()
-                    .map(|t| TransformOption::from_transformation(t) == self.selected_transform)
-                    .unwrap_or(false);
+                let is_active = self.is_transform_active(&self.selected_transform);
                 if is_active {
                     self.history.undo();
                 } else {
@@ -225,10 +220,7 @@ impl BdipApp {
 
             Message::Undo => {
                 if self.history.undo().is_some() && self.cached_base_texture.is_some() {
-                    self.preview_value = slider_value_for_type(
-                        &self.selected_transform,
-                        self.history.applied_transforms(),
-                    );
+                    self.preview_value = self.active_transform_value(&self.selected_transform);
                     self.image_handle = self.render_to_handle(None);
                 }
                 Task::none()
@@ -236,10 +228,7 @@ impl BdipApp {
 
             Message::Redo => {
                 if self.history.redo().is_some() && self.cached_base_texture.is_some() {
-                    self.preview_value = slider_value_for_type(
-                        &self.selected_transform,
-                        self.history.applied_transforms(),
-                    );
+                    self.preview_value = self.active_transform_value(&self.selected_transform);
                     self.image_handle = self.render_to_handle(None);
                 }
                 Task::none()
@@ -364,6 +353,34 @@ impl BdipApp {
         )
         .ok()
     }
+
+    /// Checks if the provided `TransformOption` represents the most recently applied transformation.
+    pub fn is_transform_active(&self, opt: &TransformOption) -> bool {
+        self.history
+            .applied_transforms()
+            .last()
+            .map(|t| TransformOption::from_transformation(t) == *opt)
+            .unwrap_or(false)
+    }
+
+    /// Returns the slider value for `opt` by examining the trailing run of the
+    /// history. If the last entry in `history` is of type `opt`, returns that
+    /// value. Otherwise returns 0.0 (the type was interrupted by a different
+    /// transform, or history is empty).
+    pub fn active_transform_value(&self, opt: &TransformOption) -> f32 {
+        let Some(last) = self.history.applied_transforms().last() else {
+            return 0.0;
+        };
+        if TransformOption::from_transformation(last) != *opt {
+            return 0.0;
+        }
+        match last {
+            Transformation::Brightness(v)
+            | Transformation::Saturation(v)
+            | Transformation::Contrast(v) => *v,
+            Transformation::Grayscale | Transformation::Invert => 0.0,
+        }
+    }
 }
 
 fn load_image_task(path: PathBuf) -> Task<Message> {
@@ -406,25 +423,6 @@ fn collapse_adjacent(transforms: &[Transformation]) -> Vec<Transformation> {
         result.push(t.clone());
     }
     result
-}
-
-/// Returns the slider value for `opt` by examining the trailing run of the
-/// history. If the last entry in `history` is of type `opt`, returns that
-/// value. Otherwise returns 0.0 (the type was interrupted by a different
-/// transform, or history is empty).
-fn slider_value_for_type(opt: &TransformOption, history: &[Transformation]) -> f32 {
-    let Some(last) = history.last() else {
-        return 0.0;
-    };
-    if TransformOption::from_transformation(last) != *opt {
-        return 0.0;
-    }
-    match last {
-        Transformation::Brightness(v)
-        | Transformation::Saturation(v)
-        | Transformation::Contrast(v) => *v,
-        Transformation::Grayscale | Transformation::Invert => 0.0,
-    }
 }
 
 #[cfg(test)]
@@ -488,45 +486,43 @@ mod tests {
 
     #[test]
     fn test_slider_value_trailing_run_matches() {
-        let history = vec![
-            Transformation::Brightness(0.3),
-            Transformation::Saturation(0.5),
-        ];
+        let (mut app, _) = BdipApp::new(None);
+        app.history.apply(Transformation::Brightness(0.3));
+        app.history.apply(Transformation::Saturation(0.5));
         assert_eq!(
-            slider_value_for_type(&TransformOption::Saturation, &history),
+            app.active_transform_value(&TransformOption::Saturation),
             0.5
         );
     }
 
     #[test]
     fn test_slider_value_trailing_run_interrupted() {
-        let history = vec![
-            Transformation::Brightness(0.3),
-            Transformation::Saturation(0.5),
-        ];
+        let (mut app, _) = BdipApp::new(None);
+        app.history.apply(Transformation::Brightness(0.3));
+        app.history.apply(Transformation::Saturation(0.5));
         assert_eq!(
-            slider_value_for_type(&TransformOption::Brightness, &history),
+            app.active_transform_value(&TransformOption::Brightness),
             0.0
         );
     }
 
     #[test]
     fn test_slider_value_empty_history() {
+        let (app, _) = BdipApp::new(None);
         assert_eq!(
-            slider_value_for_type(&TransformOption::Brightness, &[]),
+            app.active_transform_value(&TransformOption::Brightness),
             0.0
         );
     }
 
     #[test]
     fn test_slider_value_multiple_trailing_same_type() {
-        let history = vec![
-            Transformation::Brightness(0.3),
-            Transformation::Saturation(0.2),
-            Transformation::Saturation(0.5),
-        ];
+        let (mut app, _) = BdipApp::new(None);
+        app.history.apply(Transformation::Brightness(0.3));
+        app.history.apply(Transformation::Saturation(0.2));
+        app.history.apply(Transformation::Saturation(0.5));
         assert_eq!(
-            slider_value_for_type(&TransformOption::Saturation, &history),
+            app.active_transform_value(&TransformOption::Saturation),
             0.5
         );
     }

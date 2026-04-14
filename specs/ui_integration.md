@@ -198,7 +198,7 @@ relative to which the original adjustment was made.
 
 ### Slider Position on Transform Switch
 
-`slider_value_for_type(opt, history)` returns:
+`app.active_transform_value(&opt)` returns:
 - The value of `history.last()` if its type matches `opt`.
 - `0.0` otherwise (history is empty, or the last entry is a different type).
 
@@ -454,8 +454,8 @@ look like if the user released at the current drag position.
 
 ### 8.4. On Undo / Redo
 1. Call `history.undo()` or `history.redo()`.
-2. Update `preview_value` by calling `slider_value_for_type` on the updated
-   history so the slider reflects the new last committed value for the selected
+2. Update `preview_value` by calling `active_transform_value` so the slider
+   reflects the new last committed value for the selected
    transform type (or 0.0 if that type is no longer the trailing entry).
 3. Build the collapsed render list from the updated history.
 4. `renderer.present()` → `download_presentation_buffer()` → update
@@ -809,19 +809,19 @@ automatically appear in the `pick_list` once their shaders exist.
   untestable until Grayscale/Invert are added, but the handler should exist.
 - Implement the GPU texture caching strategy (Section 2): upload + ingest
   once on load, replay collapsed history from cached texture on every edit.
-- Implement `collapse_adjacent` and `slider_value_for_type` per Section 2.1.
+- Implement `collapse_adjacent` and `active_transform_value` per Section 2.1.
   Add `TransformOption::from_transformation()` to `message.rs`.
 - Display current slider value as formatted text.
 - Slider step size must be set to `0.01` — iced's default step for `f32` is
   `1.0`, which produces only -1, 0, and 1 as values.
 - Slider stays at its released position — does NOT reset to `0.0`.
 - `TransformSelected` loads the slider position from history via
-  `slider_value_for_type` (Section 2.1).
+  `active_transform_value` (Section 2.1).
 
 **Key files:**
 - `bdip/src/ui/sidebar.rs` (modify — transform picker + slider)
 - `bdip/src/ui/app.rs` (modify — update handler for transform messages,
-  `collapse_adjacent`, `slider_value_for_type`, `render_to_handle`)
+  `collapse_adjacent`, `active_transform_value`, `render_to_handle`)
 - `bdip/src/ui/message.rs` (modify — add `TransformOption::from_transformation`)
 
 **References:**
@@ -858,7 +858,7 @@ including keyboard shortcuts.
 - Style active entries with normal text, undone entries with dimmed text.
 - Wire Undo/Redo buttons to `HistoryManager::undo()` / `redo()` + pipeline
   replay (Section 8.4).
-- After undo/redo, update `preview_value` via `slider_value_for_type` so the
+- After undo/redo, update `preview_value` via `active_transform_value` so the
   active slider reflects the new trailing committed value (or 0.0 if the type
   is no longer the trailing entry). This keeps the slider in sync with history
   without requiring the user to switch transforms.
@@ -884,7 +884,7 @@ including keyboard shortcuts.
 **Already implemented in PR 2 — do not re-implement:**
 - `render_to_handle(preview: Option<&Transformation>)` in `app.rs` — call
   this with `None` after undo/redo to re-render from the updated history.
-- `slider_value_for_type(opt, history)` in `app.rs` — call this after
+- `active_transform_value(opt)` in `app.rs` — call this after
   undo/redo to sync `preview_value` with the new history state.
 - `collapse_adjacent` in `app.rs` — used internally by `render_to_handle`.
 - `TransformOption::from_transformation` in `message.rs`.

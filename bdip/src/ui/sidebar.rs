@@ -55,12 +55,7 @@ fn transform_view(app: &BdipApp) -> Element<'_, Message> {
         TransformOption::Grayscale | TransformOption::Invert => {
             // The toggle is ON when the selected parameterless transform is the
             // most recently committed entry in history.
-            let is_active = app
-                .history
-                .applied_transforms()
-                .last()
-                .map(|t| TransformOption::from_transformation(t) == app.selected_transform)
-                .unwrap_or(false);
+            let is_active = app.is_transform_active(&app.selected_transform);
             row![
                 text("Apply"),
                 toggler(is_active).on_toggle(|_| Message::ToggleParameterless),

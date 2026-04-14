@@ -221,9 +221,7 @@ fn transform_view(app: &BdipApp) -> Element<'_, Message> {
         | TransformOption::Example => { /* slider widget */ }
         // parameterless → "Apply" label + toggler
         TransformOption::Grayscale | TransformOption::Invert => {
-            let is_active = app.history.applied_transforms().last()
-                .map(|t| TransformOption::from_transformation(t) == app.selected_transform)
-                .unwrap_or(false);
+            let is_active = app.is_transform_active(&app.selected_transform);
             row![
                 text("Apply"),
                 toggler(is_active).on_toggle(|_| Message::ToggleParameterless),
