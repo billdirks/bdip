@@ -5,8 +5,11 @@ use super::app::BdipApp;
 use super::message::{Message, TransformOption};
 use super::style;
 
-const TRANSFORM_OPTIONS: &[TransformOption] =
-    &[TransformOption::Brightness, TransformOption::Saturation];
+const TRANSFORM_OPTIONS: &[TransformOption] = &[
+    TransformOption::Brightness,
+    TransformOption::Saturation,
+    TransformOption::Contrast,
+];
 
 pub fn view(app: &BdipApp) -> Element<'_, Message> {
     let transform_section = transform_view(app);

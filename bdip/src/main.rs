@@ -26,6 +26,15 @@ fn parse_transform(s: &str) -> anyhow::Result<Transformation> {
             let val = parts[1].parse::<f32>()?;
             Ok(Transformation::Saturation(val))
         }
+        "contrast" => {
+            if parts.len() != 2 {
+                return Err(anyhow::anyhow!(
+                    "Contrast requires a float value. E.g., contrast:0.5"
+                ));
+            }
+            let val = parts[1].parse::<f32>()?;
+            Ok(Transformation::Contrast(val))
+        }
         _ => Err(anyhow::anyhow!(
             "Unsupported or unknown transformation: {}",
             parts[0]

@@ -26,8 +26,8 @@ All transform shaders share the same two-group layout:
 | 1 | 0 | Uniform buffer (shader-specific params) |
 
 This layout is enforced by `PipelineCache::compile()` in `pipeline.rs`.
-All current shaders (brightness, saturation) follow it. New shaders must
-also follow it unless the architecture is changed.
+All current shaders (brightness, saturation, contrast) follow it. New shaders
+must also follow it unless the architecture is changed.
 
 ## Step-by-Step Checklist
 
@@ -41,6 +41,9 @@ Create `bdip_core/src/gpu/<name>.wgsl`. Follow the existing pattern in
 - Use `@workgroup_size(16, 16)` and an entry point named `main`.
 - Operate in linear color space (input textures have already been
   ingested from sRGB).
+
+For parameterless transforms (Grayscale, Invert), a dummy 16-byte uniform
+must still be declared to satisfy the bind group layout (see step 2).
 
 ### 2. Add a uniform params struct (`pipeline.rs`)
 
@@ -58,6 +61,16 @@ struct ExampleParams {
 }
 ```
 
+For parameterless transforms, use a dummy struct with no meaningful fields:
+
+```rust
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+struct GrayscaleParams {
+    _unused: [f32; 4],
+}
+```
+
 ### 3. Add a `TransformKind` variant (`pipeline.rs`)
 
 Add the new variant to the `TransformKind` enum and update the
@@ -68,6 +81,7 @@ Add the new variant to the `TransformKind` enum and update the
 enum TransformKind {
     Brightness,
     Saturation,
+    Contrast,
     Example,       // <-- new
 }
 
@@ -76,6 +90,7 @@ impl From<&Transformation> for TransformKind {
         match t {
             Transformation::Brightness(_) => TransformKind::Brightness,
             Transformation::Saturation(_) => TransformKind::Saturation,
+            Transformation::Contrast(_) => TransformKind::Contrast,
             Transformation::Example(_) => TransformKind::Example, // <-- new
             other => panic!("TransformKind not implemented for {:?}", other),
         }
@@ -121,25 +136,124 @@ Transformation::Example(val) => {
 }
 ```
 
+For parameterless transforms, the payload-less variant still needs an arm
+that creates a zeroed dummy buffer:
+
+```rust
+Transformation::Grayscale => {
+    let p = GrayscaleParams { _unused: [0.0; 4] };
+    engine.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("Apply Params Buffer"),
+        contents: bytemuck::cast_slice(&[p]),
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+    })
+}
+```
+
 ### 6. Add the `Transformation` variant (if not already present)
 
 In `bdip_core/src/transformation.rs`, add the new variant to the
-`Transformation` enum.
+`Transformation` enum and update the `Display` impl with its formatted
+string. Parameterized variants should format as `"Name: {v:.2}"`;
+parameterless variants as just `"Name"`.
 
 ### 7. Add CLI parsing (if applicable)
 
 In the headless CLI (`bdip/src/main.rs`), add a match arm in the
-transform parser to accept the new shader name and its parameter.
+`parse_transform` function to accept the new shader name and its
+parameter:
 
-### 8. Write tests
+```rust
+"example" => {
+    if parts.len() != 2 {
+        return Err(anyhow::anyhow!(
+            "Example requires a float value. E.g., example:0.5"
+        ));
+    }
+    let val = parts[1].parse::<f32>()?;
+    Ok(Transformation::Example(val))
+}
+```
 
-At minimum, write unit tests for:
+For parameterless transforms, expect no colon-separated value:
 
-- **Identity case** — parameter value `0.0` (or equivalent) produces
-  unchanged output.
-- **Extreme values** — verify behavior at the parameter range boundaries.
-- **Chaining** — applying the new shader in combination with existing
-  shaders produces expected results.
+```rust
+"grayscale" => Ok(Transformation::Grayscale),
+```
+
+### 8. Add the variant to the UI pick list (`bdip/src/ui/sidebar.rs`)
+
+Add the corresponding `TransformOption` variant to the `TRANSFORM_OPTIONS`
+slice in `sidebar.rs`. The sidebar already handles the two control paths:
+
+- **Parameterized transforms** (those matching the slider arm in
+  `transform_view`): add the variant to the `pick_list` and the slider
+  match arm in `sidebar.rs`. The slider range is `-1.0..=1.0` with step
+  `0.01`. The `app.rs` `update()` handler converts `SliderReleased` into
+  a `Transformation::Example(preview_value)` push to `HistoryManager`.
+- **Parameterless transforms**: add the variant to the `pick_list` and the
+  `Apply` button match arm in `sidebar.rs`. `ApplyParameterless` in
+  `app.rs` pushes `Transformation::Grayscale` (or equivalent) directly.
+
+`TransformOption` is defined in `bdip/src/ui/message.rs`. Add the variant
+there too, along with its `Display` and `from_transformation` arms.
+
+**Slider/parameterless routing in `sidebar.rs`:**
+
+```rust
+const TRANSFORM_OPTIONS: &[TransformOption] = &[
+    TransformOption::Brightness,
+    TransformOption::Saturation,
+    TransformOption::Contrast,
+    TransformOption::Example,  // <-- new
+];
+
+fn transform_view(app: &BdipApp) -> Element<'_, Message> {
+    let transform_control: Element<'_, Message> = match app.selected_transform {
+        // parameterized → slider
+        TransformOption::Brightness
+        | TransformOption::Saturation
+        | TransformOption::Contrast
+        | TransformOption::Example => { /* slider widget */ }
+        // parameterless → Apply button
+        TransformOption::Grayscale | TransformOption::Invert => { /* button widget */ }
+    };
+    // ...
+}
+```
+
+**`update()` in `app.rs`:** the `SliderReleased` handler builds the
+`Transformation` from `selected_transform` and `preview_value`. Add a
+match arm there if the new variant is parameterized:
+
+```rust
+TransformOption::Example => Transformation::Example(self.preview_value),
+```
+
+For parameterless variants, the `ApplyParameterless` handler maps them:
+
+```rust
+TransformOption::Grayscale => Some(Transformation::Grayscale),
+```
+
+### 9. Write tests
+
+At minimum, write unit tests in `pipeline.rs` for:
+
+- **Identity case** — parameter value `0.0` (or equivalent no-op input)
+  produces output that matches the input within f16 rounding tolerance (±64
+  u16 units).
+- **Extreme values** — verify clamping behavior at the parameter range
+  boundaries (e.g., max positive pushes pixels in the expected direction,
+  max negative collapses or flattens as expected).
+- **Alpha preservation** — alpha channel is unchanged by the transform.
+- **Chaining** — applying the new shader in combination with an existing
+  shader (e.g., brightness then the new shader) produces numerically
+  expected results.
+
+Follow the `make_solid_image` + `roundtrip` helper pattern established in
+the existing test suite. Each test must cover a single, isolated behavior
+(see `AGENTS.md` Unit Testing Standards).
 
 ---
 
@@ -148,9 +262,12 @@ At minimum, write unit tests for:
 | File | Change |
 |------|--------|
 | `bdip_core/src/gpu/<name>.wgsl` | New file |
-| `bdip_core/src/gpu/pipeline.rs` | Params struct, `TransformKind` variant, `compile()` arm, `apply()` arm |
-| `bdip_core/src/transformation.rs` | `Transformation` variant (if new) |
-| `bdip/src/main.rs` | CLI parsing (if applicable) |
+| `bdip_core/src/gpu/pipeline.rs` | Params struct, `TransformKind` variant, `compile()` arm, `apply()` arm, tests |
+| `bdip_core/src/transformation.rs` | `Transformation` variant + `Display` arm (if new) |
+| `bdip/src/main.rs` | `parse_transform` arm |
+| `bdip/src/ui/message.rs` | `TransformOption` variant, `Display` arm, `from_transformation` arm |
+| `bdip/src/ui/sidebar.rs` | `TRANSFORM_OPTIONS` slice, slider/button match arms |
+| `bdip/src/ui/app.rs` | `SliderReleased` / `ApplyParameterless` match arms |
 
 ## Touch Points in `pipeline.rs`
 
