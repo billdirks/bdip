@@ -7,33 +7,6 @@ This document tracks known architectural shortcuts, generic naming, and structur
 
 ## UI Responsiveness
 
-### [PHASE 5 REQUIREMENT] Synchronous Disk I/O Blocks UI Initialization
-- **Location:** `bdip/src/ui_spike.rs` (`SpikeApp::new`)
-- **Current Pattern:** The `io::load_image` function is called directly within the application
-  initialization logic on the main thread.
-- **Risk:** Decoding massive DSLR imagery (e.g. 100+ MB TIFFs) is CPU-intensive. Running it
-  synchronously entirely blocks the UI framework event loop from launching. The user sees no window 
-  and the app appears "frozen" or unresponsive for up to a full second while booting/loading an image.
-- **Suggested Remediation:** Return the `iced::Application` state immediately with an empty "Loading" 
-  UI (e.g., `None` for the `image_handle`). Dispatch the heavy `io::load_image` execution as a 
-  non-blocking background `iced::Task`. Once the background worker yields the loaded image, pass it 
-  back to the event loop natively via an `Update` message to render the scene.
-- **Priority:** **High.** Mandatory for delivering a seamless, native-feeling user experience.
-
-### [PHASE 5 REQUIREMENT] Panic-on-Failure in Application Constructor
-- **Location:** `bdip/src/ui_spike.rs` (`SpikeApp::new`)
-- **Current Pattern:** The constructor uses `expect()` for all fallible operations (image loading,
-  GPU init, texture download). The `iced` application constructor returns `(Self, Task<Message>)`,
-  not a `Result`, so there is no way to propagate errors without panicking.
-- **Risk:** An invalid file path, missing GPU, or readback failure crashes the process with a stack
-  trace before the window appears. Acceptable in a throwaway spike, unacceptable in a shipping app.
-- **Suggested Remediation:** When building the Phase 4 `iced` app, the constructor should return
-  immediately with an empty/loading state. All fallible work (I/O, GPU init, pipeline execution)
-  should be dispatched via `iced::Task` and results communicated back through `Message` variants
-  that carry `Result` payloads. Errors should be surfaced via a UI error dialog, not a panic.
-- **Priority:** **High.** Must be addressed in the Phase 4 app design, not retroactively in the
-  spike.
-
 ### Synchronous Readback Blocks UI Thread
 - **Location:** `bdip_core/src/gpu/texture.rs` (`download_presentation_buffer`), call sites in
   `bdip/src/ui/app.rs`
