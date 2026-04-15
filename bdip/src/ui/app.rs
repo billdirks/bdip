@@ -13,7 +13,7 @@ use super::message::{Message, TransformOption};
 use super::sidebar;
 
 // ---------------------------------------------------------------------------
-// Scheduling types (used in PR 3 to move renders off the UI thread)
+// Scheduling types
 // ---------------------------------------------------------------------------
 
 /// Captures everything the background worker needs to replay a render.
