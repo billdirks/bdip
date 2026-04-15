@@ -13,8 +13,7 @@ headless = "run -p bdip -- --headless"
 headless-release = "run -p bdip --release -- --headless"
 
 # Run the 24 MP GPU roundtrip performance benchmark.
-# Run in release mode for results comparable to the perf_goal_1.md targets.
-perf-test = "test -p bdip_core --release -- --nocapture test_perf_gpu_roundtrip_24mp"
+perf-test = "test -p bdip_core -- --nocapture test_perf_gpu_roundtrip_24mp"
 
 # Run rigorous static analysis (as required by .cursorrules)
 lint = "clippy --workspace --all-targets --all-features"
