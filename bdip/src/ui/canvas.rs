@@ -9,6 +9,18 @@ use super::style;
 
 /// Converts the output of `Renderer::present` to an iced image handle. Called
 /// on every render (load, commit, preview, undo/redo).
+///
+/// Uses `download_slice` to borrow pixel data directly from `Renderer`'s
+/// internal `pixel_vec`, avoiding a 192 MB `Vec<u16>` allocation on every
+/// frame. The 16-bit values are shifted to 8-bit inline using the correct
+/// formula (`p * 255 / 65535`), which matches the behaviour of
+/// `image::DynamicImage::into_rgba8()`.
+///
+/// Note: the resulting `Vec<u8>` (~96 MB for a 24 MP image) is still
+/// allocated each frame because `image::Handle::from_rgba` requires
+/// ownership of the buffer. If this allocation shows up in profiles,
+/// investigate whether iced exposes a zero-copy path or whether the
+/// allocator free-list makes it negligible in practice.
 pub fn presentation_to_handle(
     renderer: &mut Renderer,
     engine: &GpuEngine,
@@ -16,11 +28,15 @@ pub fn presentation_to_handle(
     width: u32,
     height: u32,
 ) -> Option<image::Handle> {
-    let img16 = renderer.download(engine, buf, width, height).ok()?;
-    let img8 = bdip_core::image::DynamicImage::ImageRgba16(img16).into_rgba8();
-    let (w, h) = img8.dimensions();
-    let pixels = img8.into_raw();
-    Some(image::Handle::from_rgba(w, h, pixels))
+    let pixels_16 = renderer.download_slice(engine, buf, width, height).ok()?;
+
+    // Convert 16-bit to 8-bit using the same formula the `image` crate applies
+    // in `into_rgba8()` — correct round-trip division rather than a truncating
+    // `>> 8` shift, avoiding off-by-one surprises at boundary values.
+    let mut u8_pixels = Vec::with_capacity(pixels_16.len());
+    u8_pixels.extend(pixels_16.iter().map(|&p| (p as u32 * 255 / 65535) as u8));
+
+    Some(image::Handle::from_rgba(width, height, u8_pixels))
 }
 
 pub fn view(app: &BdipApp) -> Element<'_, Message> {

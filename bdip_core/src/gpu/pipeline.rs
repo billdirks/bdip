@@ -279,6 +279,12 @@ pub struct Renderer {
     // cached buffer updated in a loop would cause all tiles to read the last
     // tile's params. Per-tile allocation of 16 bytes is essentially free.
     present_tile_buffer: Option<(wgpu::Buffer, u64)>, // (buffer, byte_size)
+
+    // Reusable pixel buffer for the interactive readback path. `download_slice`
+    // copies GPU data into this Vec rather than allocating a fresh one each frame,
+    // keeping the hot path allocation-free. `download` (used for file saving)
+    // takes a slice of this Vec and copies it into an owned Vec as needed.
+    pixel_vec: Vec<u16>,
 }
 
 impl Renderer {
@@ -402,6 +408,7 @@ impl Renderer {
             pipeline_cache: PipelineCache::new(),
             staging_buffer: None,
             present_tile_buffer: None,
+            pixel_vec: Vec::new(),
         }
     }
 
@@ -542,28 +549,6 @@ impl Renderer {
         output_buffer
     }
 
-    /// Ensures the cached staging buffer is allocated and large enough to hold the
-    /// requested byte size. Reuses existing memory if possible to avoid the high cost
-    /// of mapping and unmapping new MAP_READ buffers from the OS.
-    fn ensure_staging_buffer(&mut self, engine: &GpuEngine, buffer_size: u64) -> &wgpu::Buffer {
-        let needs_alloc = match &self.staging_buffer {
-            Some((_, sz)) => *sz < buffer_size,
-            None => true,
-        };
-
-        if needs_alloc {
-            let buf = engine.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("presentation_staging_buffer"),
-                size: buffer_size,
-                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-            self.staging_buffer = Some((buf, buffer_size));
-        }
-
-        &self.staging_buffer.as_ref().unwrap().0
-    }
-
     /// Ensures the cached tile buffer is allocated and large enough for the worst-case
     /// tile size of the current pass. Reused across tiles within a call and across
     /// subsequent calls to minimize GPU buffer allocation overhead.
@@ -592,32 +577,62 @@ impl Renderer {
         &present_tile_buffer.as_ref().unwrap().0
     }
 
-    /// Downloads the output of `present` from a GPU storage buffer into a
-    /// CPU-side `Rgba16Image`. Reuses a cached `MAP_READ` staging buffer across
-    /// calls to avoid the per-call OS allocation cost (~15–30 ms for a 192 MB
-    /// buffer on Apple Silicon).
+    /// Ensures the cached staging buffer is allocated and large enough. Reused across
+    /// `download_slice` calls to avoid per-call OS allocation of a large MAP_READ buffer.
+    fn ensure_staging_buffer<'a>(
+        staging_buffer: &'a mut Option<(wgpu::Buffer, u64)>,
+        engine: &GpuEngine,
+        buffer_size: u64,
+    ) -> &'a wgpu::Buffer {
+        let needs_alloc = match staging_buffer {
+            Some((_, sz)) => *sz < buffer_size,
+            None => true,
+        };
+
+        if needs_alloc {
+            *staging_buffer = Some((
+                engine.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("presentation_staging_buffer"),
+                    size: buffer_size,
+                    usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }),
+                buffer_size,
+            ));
+        }
+
+        &staging_buffer.as_ref().unwrap().0
+    }
+
+    /// Reads the output of `present` from a GPU storage buffer into `self.pixel_vec`,
+    /// returning a borrowed `&[u16]` slice. No heap allocation occurs on the interactive
+    /// path after the first call (the Vec capacity is retained across frames).
     ///
-    /// Use `bdip_core::gpu::texture::download_presentation_buffer` for one-shot
-    /// callers (headless CLI, tests) that do not hold a `Renderer` across calls.
-    pub fn download(
+    /// The returned slice is borrowed from `self` and is valid until the next call that
+    /// mutates `pixel_vec` (i.e., the next `download_slice` or `download` call).
+    ///
+    /// Use `bdip_core::gpu::texture::download_presentation_buffer` for one-shot callers
+    /// (headless CLI, tests) that do not hold a `Renderer` across calls.
+    pub fn download_slice(
         &mut self,
         engine: &GpuEngine,
         src_buffer: &wgpu::Buffer,
         width: u32,
         height: u32,
-    ) -> Result<crate::Rgba16Image, crate::error::BdipError> {
+    ) -> Result<&[u16], crate::error::BdipError> {
         // Tightly packed: 4 channels × 2 bytes = 8 bytes per pixel, no row padding.
         let buffer_size = width as u64 * height as u64 * 8;
 
-        let staging_buffer = self.ensure_staging_buffer(engine, buffer_size);
+        let staging_buf =
+            Self::ensure_staging_buffer(&mut self.staging_buffer, engine, buffer_size);
 
         let mut encoder = engine
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-        encoder.copy_buffer_to_buffer(src_buffer, 0, staging_buffer, 0, buffer_size);
+        encoder.copy_buffer_to_buffer(src_buffer, 0, staging_buf, 0, buffer_size);
         engine.queue.submit(Some(encoder.finish()));
 
-        let buffer_slice = staging_buffer.slice(..buffer_size);
+        let buffer_slice = staging_buf.slice(..buffer_size);
         let (tx, rx) = std::sync::mpsc::channel();
         buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
             tx.send(result).unwrap();
@@ -638,10 +653,40 @@ impl Renderer {
         // Cast raw bytes to u16. The buffer layout (R|G packed into the first u32,
         // B|A into the second) produces interleaved [R, G, B, A, R, G, B, A, ...]
         // as u16 values on little-endian hardware — exactly what Rgba16Image expects.
-        let pixel_vec: Vec<u16> = bytemuck::cast_slice::<u8, u16>(&data).to_vec();
-        drop(data);
-        staging_buffer.unmap();
+        let u16_data = bytemuck::cast_slice::<u8, u16>(&data);
+        let pixel_count = u16_data.len();
 
+        // Reuse the Vec's capacity across calls. `clear` retains the allocation;
+        // `reserve` only reallocates if the new image is larger than any seen before.
+        // `self.pixel_vec` is a separate field from `self.staging_buffer`; the
+        // split-borrow above ensures the compiler accepts both borrows simultaneously.
+        self.pixel_vec.clear();
+        self.pixel_vec.reserve(pixel_count);
+        self.pixel_vec.extend_from_slice(u16_data); // single memcpy, no allocation
+
+        drop(data);
+        staging_buf.unmap();
+
+        Ok(&self.pixel_vec)
+    }
+
+    /// Downloads the output of `present` from a GPU storage buffer into an owned
+    /// `Rgba16Image`. Delegates to `download_slice` and copies the slice into a
+    /// fresh `Vec<u16>` — one allocation at call time, but isolated to code paths
+    /// (file saving) where that cost is acceptable.
+    ///
+    /// For the interactive preview path, prefer `download_slice` to avoid the
+    /// allocation entirely.
+    pub fn download(
+        &mut self,
+        engine: &GpuEngine,
+        src_buffer: &wgpu::Buffer,
+        width: u32,
+        height: u32,
+    ) -> Result<crate::Rgba16Image, crate::error::BdipError> {
+        let pixel_vec = self
+            .download_slice(engine, src_buffer, width, height)?
+            .to_vec();
         crate::Rgba16Image::from_raw(width, height, pixel_vec)
             .ok_or_else(|| crate::error::BdipError::Gpu("Presentation buffer size mismatch".into()))
     }
@@ -1903,12 +1948,15 @@ mod tests {
     /// Two runs are measured to isolate warm-pipeline performance from one-time
     /// startup costs:
     ///
-    /// - **Run 1 (cold)**: upload → ingest → apply → present → readback.
+    /// - **Run 1 (cold)**: upload → ingest → apply → present → download.
     ///   Includes shader compilation and initial staging buffer allocation.
-    /// - **Run 2 (warm)**: apply → present → readback, reusing the ingested
-    ///   base texture and the cached staging buffer from run 1. This matches
-    ///   the interactive editing path, where upload+ingest happen once and are
-    ///   cached across slider changes.
+    ///   Uses `download` (returns owned `Rgba16Image`) since this is the
+    ///   first call and primes both the staging buffer and pixel_vec caches.
+    /// - **Run 2 (warm)**: apply → present → download_slice, reusing the
+    ///   ingested base texture, cached staging buffer, and pixel_vec from
+    ///   run 1. This matches the interactive editing path
+    ///   (`presentation_to_handle` → `download_slice`), where upload+ingest
+    ///   happen once and are cached across slider changes.
     ///
     /// Run 2 is the number to compare against the 8–20 ms target.
     ///
@@ -1916,15 +1964,15 @@ mod tests {
     ///   cargo perf-test
     ///
     /// Measurements on Apple M4 Pro (2026-04):
-    ///   gpu upload:              ~73.10 ms  (CPU f16 conversion loop; see tech_debt.md)
-    ///   run 1 execute:           ~1.64 ms
-    ///   run 1 readback:          ~51.02 ms  (staging buffer alloc + memcpy)
-    ///   run 1 critical path:     ~52.66 ms
-    ///   run 2 execute:           ~0.28 ms
-    ///   run 2 readback:          ~21.47 ms (used previously alloced buffer)
-    ///   run 2 critical path:     ~21.76 ms
+    ///   gpu upload:              ~72.84 ms  (CPU f16 conversion loop; see tech_debt.md)
+    ///   run 1 execute:           ~1.71 ms
+    ///   run 1 readback:          ~62.70 ms  (staging buffer alloc + memcpy)
+    ///   run 1 critical path:     ~64.42 ms
+    ///   run 2 execute:           ~0.31 ms
+    ///   run 2 readback:          ~17.15 ms (reused staging buffer + pixel_vec)
+    ///   run 2 critical path:     ~17.46 ms
     ///
-    /// Target once all known bottlenecks are resolved (warm, interactive): 8–20 ms.
+    /// Target once all known bottlenecks are resolved (warm, interactive): <20 ms.
     /// When the target is reliably met, add an assertion and remove #[ignore].
     #[test]
     #[ignore = "performance benchmark: run manually to avoid slowing CI"]
@@ -1965,28 +2013,34 @@ mod tests {
 
         let t_readback_2 = Instant::now();
         let _result_2 = renderer
-            .download(&engine, &present_buf_2, img.width(), img.height())
+            .download_slice(&engine, &present_buf_2, img.width(), img.height())
             .unwrap();
         let readback_ms_2 = t_readback_2.elapsed().as_secs_f64() * 1000.0;
 
         eprintln!("--- 24 MP GPU roundtrip ---");
-        eprintln!("  gpu upload:                   {:>8.2} ms", upload_ms);
+        eprintln!("  gpu upload:                      {:>8.2} ms", upload_ms);
         eprintln!(
             "  run 1 execute (ingest+apply+present): {:>8.2} ms",
             execute_ms_1
         );
-        eprintln!("  run 1 readback:               {:>8.2} ms", readback_ms_1);
         eprintln!(
-            "  run 1 critical path:          {:>8.2} ms",
+            "  run 1 readback (download):       {:>8.2} ms",
+            readback_ms_1
+        );
+        eprintln!(
+            "  run 1 critical path:             {:>8.2} ms",
             execute_ms_1 + readback_ms_1
         );
         eprintln!(
-            "  run 2 execute (apply+present):        {:>8.2} ms",
+            "  run 2 execute (apply+present):   {:>8.2} ms",
             execute_ms_2
         );
-        eprintln!("  run 2 readback:               {:>8.2} ms", readback_ms_2);
         eprintln!(
-            "  run 2 critical path:          {:>8.2} ms  (target: 8–20 ms warm)",
+            "  run 2 readback (download_slice): {:>8.2} ms",
+            readback_ms_2
+        );
+        eprintln!(
+            "  run 2 critical path:             {:>8.2} ms  (target: <20 ms warm)",
             execute_ms_2 + readback_ms_2
         );
         eprintln!("----------------------------------");
