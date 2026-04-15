@@ -36,3 +36,6 @@
   a system works to aid understanding. However, keep the language objective. Avoid flowery,
   self-aggrandizing, or sales-like adjectives (e.g., "massive," "flawless," "heavily leveraging")
   that do not add to technical clarity. Present mechanics as neutral architectural details.
+- **Future-Proof Code Comments:** Write for readers who lack context on ephemeral plans or previous
+  code states. Avoid references like "this is different from before". Instead, frame the rationale
+  as a design decision (e.g., "Strategy B was chosen over A because...") to provide lasting value.
