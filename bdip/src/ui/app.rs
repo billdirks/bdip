@@ -12,15 +12,24 @@ use super::menu_bar;
 use super::message::{Message, TransformOption};
 use super::sidebar;
 
+/// Owns all GPU resources shared across render operations. Grouped into a
+/// single struct so it can be extracted from `BdipApp` as a unit — a
+/// prerequisite for wrapping in `Arc<Mutex<>>` in a later PR to move renders
+/// off the UI thread.
+struct GpuState {
+    engine: GpuEngine,
+    renderer: Renderer,
+    cached_base_texture: Option<bdip_core::wgpu::Texture>,
+}
+
 pub struct BdipApp {
     // Image state
     pub base_image: Option<bdip_core::Rgba16Image>,
     pub image_handle: Option<iced::widget::image::Handle>,
 
-    // GPU state
-    pub engine: Option<GpuEngine>,
-    pub renderer: Option<Renderer>,
-    pub cached_base_texture: Option<bdip_core::wgpu::Texture>,
+    // GPU state — all three GPU-owned resources live here so they can be
+    // moved as a unit in a later refactor (Arc<Mutex<GpuState>>).
+    gpu: Option<GpuState>,
 
     // Transform state
     pub history: HistoryManager,
@@ -39,12 +48,19 @@ pub struct BdipApp {
 
 impl BdipApp {
     pub fn new(input_path: Option<PathBuf>) -> (Self, Task<Message>) {
-        let (engine, renderer, error_message) = match GpuEngine::new() {
-            Ok(e) => {
-                let r = Renderer::new(&e);
-                (Some(e), Some(r), None)
+        let (gpu, error_message) = match GpuEngine::new() {
+            Ok(engine) => {
+                let renderer = Renderer::new(&engine);
+                (
+                    Some(GpuState {
+                        engine,
+                        renderer,
+                        cached_base_texture: None,
+                    }),
+                    None,
+                )
             }
-            Err(e) => (None, None, Some(format!("GPU init failed: {e}"))),
+            Err(e) => (None, Some(format!("GPU init failed: {e}"))),
         };
 
         let has_input = input_path.is_some();
@@ -57,9 +73,7 @@ impl BdipApp {
             BdipApp {
                 base_image: None,
                 image_handle: None,
-                engine,
-                renderer,
-                cached_base_texture: None,
+                gpu,
                 history: HistoryManager::new(),
                 selected_transform: TransformOption::Brightness,
                 preview_value: 0.0,
@@ -105,12 +119,13 @@ impl BdipApp {
 
             Message::ImageLoaded(Ok((_, img))) => {
                 let (w, h) = img.dimensions();
-                if let (Some(engine), Some(renderer)) = (&self.engine, &mut self.renderer) {
-                    let uploaded = upload_texture(&engine.device, &engine.queue, &img);
-                    let linear = renderer.ingest(engine, &uploaded);
-                    let buf = renderer.present(engine, &linear);
-                    self.image_handle = presentation_to_handle(renderer, engine, &buf, w, h);
-                    self.cached_base_texture = Some(linear);
+                if let Some(gpu) = &mut self.gpu {
+                    let uploaded = upload_texture(&gpu.engine.device, &gpu.engine.queue, &img);
+                    let linear = gpu.renderer.ingest(&gpu.engine, &uploaded);
+                    let buf = gpu.renderer.present(&gpu.engine, &linear);
+                    self.image_handle =
+                        presentation_to_handle(&mut gpu.renderer, &gpu.engine, &buf, w, h);
+                    gpu.cached_base_texture = Some(linear);
                 }
                 self.base_image = Some(img);
                 self.history.clear();
@@ -181,7 +196,7 @@ impl BdipApp {
             Message::SliderChanged(val) => {
                 self.preview_value = val;
                 self.is_previewing = true;
-                if self.cached_base_texture.is_some() {
+                if self.has_base_texture() {
                     let preview = make_transform(&self.selected_transform, val);
                     self.image_handle = self.render_to_handle(Some(&preview));
                 }
@@ -197,14 +212,14 @@ impl BdipApp {
                 self.is_previewing = false;
                 // preview_value stays at its current position — the slider
                 // does not reset.
-                if self.cached_base_texture.is_some() {
+                if self.has_base_texture() {
                     self.image_handle = self.render_to_handle(None);
                 }
                 Task::none()
             }
 
             Message::ToggleParameterless => {
-                if self.cached_base_texture.is_none() {
+                if !self.has_base_texture() {
                     return Task::none();
                 }
                 let is_active = self.is_transform_active(&self.selected_transform);
@@ -219,7 +234,7 @@ impl BdipApp {
             }
 
             Message::Undo => {
-                if self.history.undo().is_some() && self.cached_base_texture.is_some() {
+                if self.history.undo().is_some() && self.has_base_texture() {
                     self.preview_value = self.active_transform_value(&self.selected_transform);
                     self.image_handle = self.render_to_handle(None);
                 }
@@ -227,7 +242,7 @@ impl BdipApp {
             }
 
             Message::Redo => {
-                if self.history.redo().is_some() && self.cached_base_texture.is_some() {
+                if self.history.redo().is_some() && self.has_base_texture() {
                     self.preview_value = self.active_transform_value(&self.selected_transform);
                     self.image_handle = self.render_to_handle(None);
                 }
@@ -308,21 +323,20 @@ impl BdipApp {
         };
 
         let (w, h) = self.base_image.as_ref()?.dimensions();
-        let engine = self.engine.as_ref()?;
-        let renderer = self.renderer.as_mut()?;
-        let base = self.cached_base_texture.as_ref()?;
+        let gpu = self.gpu.as_mut()?;
+        let base = gpu.cached_base_texture.as_ref()?;
 
         let mut current: Option<bdip_core::wgpu::Texture> = None;
         for t in &render_list {
             let new_tex = {
                 let src = current.as_ref().unwrap_or(base);
-                renderer.apply(engine, src, t)
+                gpu.renderer.apply(&gpu.engine, src, t)
             };
             current = Some(new_tex);
         }
 
         let final_tex = current.as_ref().unwrap_or(base);
-        let buf = renderer.present(engine, final_tex);
+        let buf = gpu.renderer.present(&gpu.engine, final_tex);
         Some((buf, w, h))
     }
 
@@ -334,9 +348,8 @@ impl BdipApp {
         preview: Option<&Transformation>,
     ) -> Option<iced::widget::image::Handle> {
         let (buf, w, h) = self.render_pipeline(preview)?;
-        let engine = self.engine.as_ref()?;
-        let renderer = self.renderer.as_mut()?;
-        canvas::presentation_to_handle(renderer, engine, &buf, w, h)
+        let gpu = self.gpu.as_mut()?;
+        canvas::presentation_to_handle(&mut gpu.renderer, &gpu.engine, &buf, w, h)
     }
 
     /// Renders the committed transform stack from `cached_base_texture` and
@@ -344,9 +357,8 @@ impl BdipApp {
     /// same GPU pipeline as `render_to_handle` but skips the 8-bit conversion.
     fn render_to_rgba16(&mut self) -> Option<bdip_core::Rgba16Image> {
         let (buf, w, h) = self.render_pipeline(None)?;
-        let engine = self.engine.as_ref()?;
-        let renderer = self.renderer.as_mut()?;
-        renderer.download(engine, &buf, w, h).ok()
+        let gpu = self.gpu.as_mut()?;
+        gpu.renderer.download(&gpu.engine, &buf, w, h).ok()
     }
 
     /// Checks if the provided `TransformOption` represents the most recently applied transformation.
@@ -356,6 +368,14 @@ impl BdipApp {
             .last()
             .map(|t| TransformOption::from_transformation(t) == *opt)
             .unwrap_or(false)
+    }
+
+    /// Returns true if the GPU is initialized and a base image is currently
+    /// resident in GPU memory as a texture.
+    fn has_base_texture(&self) -> bool {
+        self.gpu
+            .as_ref()
+            .is_some_and(|g| g.cached_base_texture.is_some())
     }
 
     /// Returns the slider value for `opt` by examining the trailing run of the
