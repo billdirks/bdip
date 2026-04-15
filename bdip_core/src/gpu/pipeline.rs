@@ -1975,7 +1975,6 @@ mod tests {
     /// Target once all known bottlenecks are resolved (warm, interactive): <20 ms.
     /// When the target is reliably met, add an assertion and remove #[ignore].
     #[test]
-    #[ignore = "performance benchmark: run manually to avoid slowing CI"]
     fn test_perf_gpu_roundtrip_24mp() {
         use std::time::Instant;
 
@@ -2002,6 +2001,7 @@ mod tests {
             .download(&engine, &present_buf_1, img.width(), img.height())
             .unwrap();
         let readback_ms_1 = t_readback_1.elapsed().as_secs_f64() * 1000.0;
+        let critical_path_1 = execute_ms_1 + readback_ms_1;
 
         // --- Run 2: warm (shaders compiled, staging buffer reused) ---
         // Reuses `ingested` directly — matching interactive editing where the base
@@ -2016,6 +2016,7 @@ mod tests {
             .download_slice(&engine, &present_buf_2, img.width(), img.height())
             .unwrap();
         let readback_ms_2 = t_readback_2.elapsed().as_secs_f64() * 1000.0;
+        let critical_path_2 = execute_ms_2 + readback_ms_2;
 
         eprintln!("--- 24 MP GPU roundtrip ---");
         eprintln!("  gpu upload:                      {:>8.2} ms", upload_ms);
@@ -2029,7 +2030,7 @@ mod tests {
         );
         eprintln!(
             "  run 1 critical path:             {:>8.2} ms",
-            execute_ms_1 + readback_ms_1
+            critical_path_1
         );
         eprintln!(
             "  run 2 execute (apply+present):   {:>8.2} ms",
@@ -2041,8 +2042,14 @@ mod tests {
         );
         eprintln!(
             "  run 2 critical path:             {:>8.2} ms  (target: <20 ms warm)",
-            execute_ms_2 + readback_ms_2
+            critical_path_2
         );
         eprintln!("----------------------------------");
+
+        assert!(
+            critical_path_2 < 20.0,
+            "Run 2 (warm) critical path exceeded 20ms target: {:.2}ms",
+            critical_path_2
+        );
     }
 }
