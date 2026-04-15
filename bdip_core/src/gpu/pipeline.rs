@@ -413,7 +413,8 @@ impl Renderer {
     }
 
     /// Converts sRGB-encoded values in `src_texture` to linear light, returning
-    /// a new `Rgba16Float` texture. Must be the first pass after `upload_texture`.
+    /// a new `Rgba16Float` texture. The source texture must be `Rgba16Unorm` as
+    /// produced by `upload_texture`. Must be the first pass after `upload_texture`.
     pub fn ingest(&self, engine: &GpuEngine, src_texture: &wgpu::Texture) -> wgpu::Texture {
         self.run_color_space_pass(
             engine,
@@ -1963,14 +1964,14 @@ mod tests {
     /// This test is ignored by default so it does not run in CI. Run it manually:
     ///   cargo perf-test
     ///
-    /// Measurements on Apple M4 Pro (2026-04):
-    ///   gpu upload:              ~72.84 ms  (CPU f16 conversion loop; see tech_debt.md)
-    ///   run 1 execute:           ~1.71 ms
-    ///   run 1 readback:          ~62.70 ms  (staging buffer alloc + memcpy)
-    ///   run 1 critical path:     ~64.42 ms
-    ///   run 2 execute:           ~0.31 ms
-    ///   run 2 readback:          ~17.15 ms (reused staging buffer + pixel_vec)
-    ///   run 2 critical path:     ~17.46 ms
+    /// Measurements on Apple M4 Pro (2026-04) after PR 4 (GPU Upload Conversion):
+    ///   gpu upload:              ~13.17 ms  (Raw u16 upload; no CPU conversion)
+    ///   run 1 execute:           ~1.52 ms
+    ///   run 1 readback:          ~62.45 ms
+    ///   run 1 critical path:     ~63.97 ms
+    ///   run 2 execute:           ~0.35 ms
+    ///   run 2 readback:          ~15.58 ms (reused staging buffer + pixel_vec)
+    ///   run 2 critical path:     ~15.93 ms
     ///
     /// Target once all known bottlenecks are resolved (warm, interactive): <20 ms.
     /// When the target is reliably met, add an assertion and remove #[ignore].
@@ -2046,6 +2047,16 @@ mod tests {
         );
         eprintln!("----------------------------------");
 
+        assert!(
+            upload_ms < 25.0,
+            "Upload time exceeded 25ms target: {:.2}ms",
+            upload_ms
+        );
+        assert!(
+            critical_path_1 < 80.0,
+            "Run 1 (cold) critical path exceeded 80ms target: {:.2}ms",
+            critical_path_1
+        );
         assert!(
             critical_path_2 < 20.0,
             "Run 2 (warm) critical path exceeded 20ms target: {:.2}ms",

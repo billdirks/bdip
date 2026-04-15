@@ -6,35 +6,13 @@
 //! isolated unit tests of these functions.
 
 use crate::Rgba16Image;
-use bytemuck::{Pod, Zeroable};
-use half::f16;
 use wgpu::{
     Device, Extent3d, Origin3d, Queue, TexelCopyBufferLayout, TexelCopyTextureInfo, TextureAspect,
     TextureDescriptor, TextureDimension, TextureFormat, TextureUsages,
 };
 
-#[repr(C)]
-#[derive(Copy, Clone, Debug, Pod, Zeroable)]
-pub struct PixelF16 {
-    pub r: f16,
-    pub g: f16,
-    pub b: f16,
-    pub a: f16,
-}
-
 pub fn upload_texture(device: &Device, queue: &Queue, img: &Rgba16Image) -> wgpu::Texture {
     let (width, height) = img.dimensions();
-
-    // Convert Rgba16 to f16 arrays.
-    let mut float_data: Vec<PixelF16> = Vec::with_capacity((width * height) as usize);
-    for pixel in img.pixels() {
-        float_data.push(PixelF16 {
-            r: f16::from_f32(pixel[0] as f32 / 65535.0),
-            g: f16::from_f32(pixel[1] as f32 / 65535.0),
-            b: f16::from_f32(pixel[2] as f32 / 65535.0),
-            a: f16::from_f32(pixel[3] as f32 / 65535.0),
-        });
-    }
 
     let texture_size = Extent3d {
         width,
@@ -42,13 +20,15 @@ pub fn upload_texture(device: &Device, queue: &Queue, img: &Rgba16Image) -> wgpu
         depth_or_array_layers: 1,
     };
 
+    // Use Rgba16Unorm so the GPU hardware normalizes u16 values to [0.0, 1.0]
+    // on textureLoad, eliminating the need for a per-pixel CPU u16→f16 conversion loop.
     let texture = device.create_texture(&TextureDescriptor {
         label: Some("upload_texture"),
         size: texture_size,
         mip_level_count: 1,
         sample_count: 1,
         dimension: TextureDimension::D2,
-        format: TextureFormat::Rgba16Float,
+        format: TextureFormat::Rgba16Unorm,
         usage: TextureUsages::TEXTURE_BINDING
             | TextureUsages::COPY_DST
             | TextureUsages::COPY_SRC
@@ -56,6 +36,8 @@ pub fn upload_texture(device: &Device, queue: &Queue, img: &Rgba16Image) -> wgpu
         view_formats: &[],
     });
 
+    // Rgba16Image stores pixels as contiguous [u16; 4] per pixel. Cast the
+    // raw u16 slice to bytes and write directly — no CPU conversion needed.
     queue.write_texture(
         TexelCopyTextureInfo {
             texture: &texture,
@@ -63,10 +45,10 @@ pub fn upload_texture(device: &Device, queue: &Queue, img: &Rgba16Image) -> wgpu
             origin: Origin3d::ZERO,
             aspect: TextureAspect::All,
         },
-        bytemuck::cast_slice(&float_data),
+        bytemuck::cast_slice::<u16, u8>(img.as_raw()),
         TexelCopyBufferLayout {
             offset: 0,
-            bytes_per_row: Some(width * 8), // 4 channels * 2 bytes = 8 bytes per pixel
+            bytes_per_row: Some(width * 8), // 4 channels × 2 bytes = 8 bytes per pixel
             rows_per_image: Some(height),
         },
         texture_size,

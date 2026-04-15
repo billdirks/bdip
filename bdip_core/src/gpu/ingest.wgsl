@@ -1,7 +1,9 @@
 // Ingest pass: sRGB-encoded → linear light.
 //
-// Reads an Rgba16Float texture whose RGB channels hold sRGB-normalized values
-// in [0, 1] (as produced by upload_texture) and writes a new Rgba16Float
+// Reads an Rgba16Unorm texture whose RGB channels hold sRGB-normalized u16
+// values uploaded raw from the CPU. The GPU hardware normalizes the u16 values
+// to [0.0, 1.0] on textureLoad, so the shader receives the same [0,1] float
+// range it did when the texture was Rgba16Float. Writes a new Rgba16Float
 // texture whose RGB channels hold the corresponding linear-light values.
 // Alpha is copied unchanged.
 //

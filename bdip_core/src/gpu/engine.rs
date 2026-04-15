@@ -20,6 +20,7 @@ impl GpuEngine {
 
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("Bdip Headless Device"),
+            required_features: wgpu::Features::TEXTURE_FORMAT_16BIT_NORM,
             memory_hints: wgpu::MemoryHints::Performance,
             ..Default::default()
         }))
