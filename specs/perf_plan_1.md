@@ -228,9 +228,9 @@ already satisfied at all call sites.
 
 ---
 
-### Phase 2: Reuse Present Output and Tile Buffers (PR 2)
+### Phase 2: Reuse Present Tile Buffer (PR 2)
 
-**Goal**: Eliminate per-call buffer allocation in `present()`.
+**Goal**: Eliminate per-call tile buffer allocation in `present()`.
 
 **Expected impact**: Minor improvement to execute time (~0.1–0.5ms), but prevents
 it from becoming the next bottleneck and completes the "warm pipeline"
@@ -243,49 +243,62 @@ already has a mutable reference to `Renderer`.
 
 **Deliverables**:
 
-1. **Add cached buffer fields to `Renderer`**
+1. **Add a cached tile buffer field to `Renderer`**
    (`bdip_core/src/gpu/pipeline.rs`):
    ```rust
    // Alongside the staging_buffer field from Phase 1:
-   present_output_buffer: Option<(wgpu::Buffer, u64)>,  // (buffer, byte_size)
-   present_tile_buffer: Option<(wgpu::Buffer, u64)>,     // (buffer, byte_size)
+   present_tile_buffer: Option<(wgpu::Buffer, u64)>, // (buffer, byte_size)
    ```
-   Initialize both to `None` in `Renderer::new`.
+   Initialize to `None` in `Renderer::new`.
 
-2. **Modify `present_with_max_binding` to reuse buffers**
+   **What is and is not cached**:
+
+   - **`tile_buffer`** (`STORAGE | COPY_SRC`, sized `max_rows * width * 8`
+     bytes): **cached**. Tiles are processed sequentially, so the same buffer
+     is reused across tiles within a single `present` call. Its contents are
+     copied into the fresh output buffer before the next tile overwrites them.
+     Safe to cache across calls for the same reason.
+
+   - **`output_buffer`** (`COPY_DST | COPY_SRC`, sized `width * height * 8`
+     bytes): **not cached**. `present` returns this buffer to the caller (who
+     holds it across the subsequent `download` call). `wgpu::Buffer::clone()`
+     is an `Arc` clone — if the buffer were cached on `Renderer`, a subsequent
+     `present()` call would write new GPU data into the same underlying buffer
+     the caller is still reading. Allocate fresh each call.
+
+   - **`params_buffer`** (`UNIFORM`, 16 bytes, one per tile): **not cached**.
+     The natural approach — cache the buffer and update it with
+     `queue.write_buffer` — does not work here. `queue.write_buffer` is
+     submitted to the GPU queue immediately, while the compute dispatches are
+     recorded into a command encoder and only submitted at the end of the loop.
+     Updating the same buffer in a loop would result in all compute passes
+     seeing the last tile's params. Retain per-tile `create_buffer_init`
+     (16 bytes — negligible cost).
+
+2. **Modify `present_with_max_binding` to reuse the tile buffer**
    (`bdip_core/src/gpu/pipeline.rs`):
 
    Change signature from `&self` to `&mut self`. Also change `present` from
    `&self` to `&mut self`.
 
-   For `output_buffer` (currently allocated at line 422 with usage
-   `COPY_DST | COPY_SRC`): check if `self.present_output_buffer` exists and
-   has `size >= full_size`. If so, reuse it. Otherwise allocate and store.
+   Before the tile loop, check `self.present_tile_buffer`: if `Some((buf, sz))`
+   and `sz >= max_tile_size`, reuse `buf`. Otherwise allocate a new buffer
+   with `usage: STORAGE | COPY_SRC` and store it. `max_tile_size` is
+   `max_rows * width * 8` — the size needed for the worst-case tile.
 
-   For `tile_buffer` (currently allocated at line 439 with usage
-   `STORAGE | COPY_SRC`): same pattern with `self.present_tile_buffer`.
-   Note: only one tile buffer needs caching because tiles are processed
-   sequentially in the `while` loop, so the same buffer is reused across
-   tiles within a single `present` call.
+   Inside the loop body, allocate `output_buffer` and `params_buffer` as
+   before (fresh per call and per tile respectively). The loop structure
+   otherwise remains the same: create per-tile bind groups, encode the
+   compute pass and `copy_buffer_to_buffer` into a single command encoder,
+   and submit once after the loop.
 
-   For `params_buffer` (currently allocated via `create_buffer_init` at line
-   452 with `PresentParams`): the contents change per tile (`y_offset`,
-   `tile_height` differ). Replace the per-tile `create_buffer_init` with a
-   cached buffer + `queue.write_buffer`. Add a field:
-   ```rust
-   present_params_buffer: Option<wgpu::Buffer>,
-   ```
-   On first call, create with `create_buffer_init`. On subsequent calls,
-   use `engine.queue.write_buffer(&buf, 0, bytemuck::cast_slice(&[params]))`
-   to update contents without reallocating. The buffer is 16 bytes so the
-   write is trivial.
-
-3. **Update `present` signature**:
-   Change `pub fn present(&self, ...)` to `pub fn present(&mut self, ...)`.
-   This compiles at all existing call sites because:
-   - `app.rs` line 111/325: `renderer` is already `&mut Renderer`
+3. **Update `present` and `present_with_max_binding` signatures**:
+   Change both from `&self` to `&mut self`. Compiles at all existing call
+   sites because:
+   - `app.rs`: `renderer` is already `&mut Renderer` at both call sites
    - `main.rs` line 95: `renderer` is `mut Renderer`
-   - All test code uses `mut renderer`
+   - Test bindings that were `let renderer` must become `let mut renderer`
+     (five test functions updated)
 
 **Files modified**:
 - `bdip_core/src/gpu/pipeline.rs`
@@ -296,7 +309,10 @@ avoids two PRs independently adding fields to the same struct).
 **Verification**:
 - `cargo test -p bdip_core --release` — all existing tests pass.
 - `cargo test -p bdip_core --release test_perf_gpu_roundtrip_24mp -- --ignored
-  --nocapture` — execute time should remain well under 5ms.
+  --nocapture` — execute time should remain well under 5ms. Observed on
+  Apple M4 Pro after Phases 1+2: run 2 execute ~0.28ms, run 2 critical
+  path ~21.76ms (down from ~35ms after Phase 1 alone, reflecting the tile
+  buffer no longer being reallocated on the warm path).
 - `cargo clippy --workspace`
 - `cargo fmt --all`
 

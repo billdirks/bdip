@@ -259,6 +259,26 @@ pub struct Renderer {
     // Cached staging buffer for readback. Reused across `download` calls to
     // avoid per-call OS allocation of a large MAP_READ buffer.
     staging_buffer: Option<(wgpu::Buffer, u64)>, // (buffer, byte_size)
+
+    // We considered caching 3 `present buffers` but only ended up caching the
+    // `present_tile_buffer`. It can be reused across calls to avoid per-call
+    // GPU buffer allocation and is only reallocated when image dimensions grow.
+    //
+    // `present_tile_buffer`: the per-tile STORAGE buffer sized for the worst-case
+    //   tile (`max_rows * width * 8` bytes). Reused across tiles in the same
+    //   call (tiles are processed sequentially) and across calls (the result is
+    //   copied into the fresh output buffer each time).
+    //
+    // The output buffer returned by `present` is allocated fresh each call
+    // because callers hold it alive (for `download`) while the next `present`
+    // call would otherwise overwrite the same GPU memory.
+    //
+    // The params uniform (16 bytes) is not cached: it is created fresh per tile
+    // via `create_buffer_init` because `queue.write_buffer` is submitted
+    // immediately (before the command encoder's compute passes run), so a single
+    // cached buffer updated in a loop would cause all tiles to read the last
+    // tile's params. Per-tile allocation of 16 bytes is essentially free.
+    present_tile_buffer: Option<(wgpu::Buffer, u64)>, // (buffer, byte_size)
 }
 
 impl Renderer {
@@ -381,6 +401,7 @@ impl Renderer {
             present_params_bind_group_layout,
             pipeline_cache: PipelineCache::new(),
             staging_buffer: None,
+            present_tile_buffer: None,
         }
     }
 
@@ -405,7 +426,7 @@ impl Renderer {
     /// binding-sized buffer, which is then copied into the correct offset of
     /// the full output buffer. The shader's `y_offset` uniform shifts texture
     /// reads so each tile processes the correct rows.
-    pub fn present(&self, engine: &GpuEngine, src_texture: &wgpu::Texture) -> wgpu::Buffer {
+    pub fn present(&mut self, engine: &GpuEngine, src_texture: &wgpu::Texture) -> wgpu::Buffer {
         let max_binding = engine.device.limits().max_storage_buffer_binding_size;
         self.present_with_max_binding(engine, src_texture, max_binding)
     }
@@ -413,7 +434,7 @@ impl Renderer {
     /// Inner implementation of `present` that accepts an explicit binding-size
     /// limit. Tests use this to force tiling on small images.
     pub(crate) fn present_with_max_binding(
-        &self,
+        &mut self,
         engine: &GpuEngine,
         src_texture: &wgpu::Texture,
         max_binding_size: u64,
@@ -423,7 +444,16 @@ impl Renderer {
         let full_size = width as u64 * height as u64 * pixel_size;
 
         let max_rows = (max_binding_size / (width as u64 * pixel_size)).min(height as u64) as u32;
+        // The tile buffer must be large enough for the worst-case tile (max_rows rows).
+        // The last tile may be smaller, but we only dispatch/copy `tile_size` bytes from
+        // offset 0, so any unused space beyond `tile_size` is harmless.
+        let max_tile_size = width as u64 * max_rows as u64 * pixel_size;
+        let tile_buffer =
+            Self::ensure_tile_buffer(&mut self.present_tile_buffer, engine, max_tile_size);
 
+        // The output buffer is allocated fresh each call. The caller holds a
+        // reference to it across the `present` + `download` sequence, so reusing
+        // it across calls would overwrite memory the caller is still reading.
         let output_buffer = engine.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("present_output_buffer"),
             size: full_size,
@@ -441,13 +471,11 @@ impl Renderer {
             let tile_height = max_rows.min(height - y_offset);
             let tile_size = width as u64 * tile_height as u64 * pixel_size;
 
-            let tile_buffer = engine.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("present_tile_buffer"),
-                size: tile_size,
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-                mapped_at_creation: false,
-            });
-
+            // The params buffer is created fresh each tile. Using a cached buffer
+            // updated via `queue.write_buffer` would not work here: `write_buffer`
+            // is submitted immediately (before the command encoder's compute passes
+            // run), so all tiles would see the last write's values. Per-tile
+            // allocation of 16 bytes is cheap.
             let params = PresentParams {
                 width,
                 y_offset,
@@ -499,7 +527,7 @@ impl Renderer {
             }
 
             encoder.copy_buffer_to_buffer(
-                &tile_buffer,
+                tile_buffer,
                 0,
                 &output_buffer,
                 y_offset as u64 * width as u64 * pixel_size,
@@ -514,6 +542,9 @@ impl Renderer {
         output_buffer
     }
 
+    /// Ensures the cached staging buffer is allocated and large enough to hold the
+    /// requested byte size. Reuses existing memory if possible to avoid the high cost
+    /// of mapping and unmapping new MAP_READ buffers from the OS.
     fn ensure_staging_buffer(&mut self, engine: &GpuEngine, buffer_size: u64) -> &wgpu::Buffer {
         let needs_alloc = match &self.staging_buffer {
             Some((_, sz)) => *sz < buffer_size,
@@ -531,6 +562,34 @@ impl Renderer {
         }
 
         &self.staging_buffer.as_ref().unwrap().0
+    }
+
+    /// Ensures the cached tile buffer is allocated and large enough for the worst-case
+    /// tile size of the current pass. Reused across tiles within a call and across
+    /// subsequent calls to minimize GPU buffer allocation overhead.
+    fn ensure_tile_buffer<'a>(
+        present_tile_buffer: &'a mut Option<(wgpu::Buffer, u64)>,
+        engine: &GpuEngine,
+        max_tile_size: u64,
+    ) -> &'a wgpu::Buffer {
+        let needs_tile_alloc = match present_tile_buffer {
+            Some((_, sz)) => *sz < max_tile_size,
+            None => true,
+        };
+
+        if needs_tile_alloc {
+            *present_tile_buffer = Some((
+                engine.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("present_tile_buffer"),
+                    size: max_tile_size,
+                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+                    mapped_at_creation: false,
+                }),
+                max_tile_size,
+            ));
+        }
+
+        &present_tile_buffer.as_ref().unwrap().0
     }
 
     /// Downloads the output of `present` from a GPU storage buffer into a
@@ -982,7 +1041,7 @@ mod tests {
     #[test]
     fn test_ingest_present_roundtrip() {
         let engine = GpuEngine::new().unwrap();
-        let renderer = Renderer::new(&engine);
+        let mut renderer = Renderer::new(&engine);
 
         // Use a mix of mid-tone values across the sRGB range.
         let mut img = crate::Rgba16Image::new(4, 4);
@@ -1022,7 +1081,7 @@ mod tests {
     #[test]
     fn test_ingest_pure_black_and_white() {
         let engine = GpuEngine::new().unwrap();
-        let renderer = Renderer::new(&engine);
+        let mut renderer = Renderer::new(&engine);
 
         // The sRGB transfer function fixes both endpoints exactly: f(0) = 0, f(1) = 1.
         let mut img = crate::Rgba16Image::new(2, 1);
@@ -1067,7 +1126,7 @@ mod tests {
     #[test]
     fn test_presentation_buffer_layout() {
         let engine = GpuEngine::new().unwrap();
-        let renderer = Renderer::new(&engine);
+        let mut renderer = Renderer::new(&engine);
 
         // 3×2 image: row 0 = black, row 1 = white.
         // If row stride or pixel packing is wrong, rows or channels will be swapped.
@@ -1118,7 +1177,7 @@ mod tests {
     #[test]
     fn test_present_tiling_one_row_per_tile() {
         let engine = GpuEngine::new().unwrap();
-        let renderer = Renderer::new(&engine);
+        let mut renderer = Renderer::new(&engine);
 
         // 4×4 image with distinct per-row colors to detect row-offset bugs.
         let mut img = crate::Rgba16Image::new(4, 4);
@@ -1156,7 +1215,7 @@ mod tests {
     #[test]
     fn test_present_tiling_uneven_rows() {
         let engine = GpuEngine::new().unwrap();
-        let renderer = Renderer::new(&engine);
+        let mut renderer = Renderer::new(&engine);
 
         // 3×5 image — 5 rows don't divide evenly into 2-row tiles.
         let mut img = crate::Rgba16Image::new(3, 5);
@@ -1857,13 +1916,13 @@ mod tests {
     ///   cargo perf-test
     ///
     /// Measurements on Apple M4 Pro (2026-04):
-    ///   gpu upload:              ~75.58 ms  (CPU f16 conversion loop; see tech_debt.md)
-    ///   run 1 execute:           ~1.71 ms
-    ///   run 1 readback:          ~64.36 ms  (staging buffer alloc + memcpy)
-    ///   run 1 critical path:     ~66.07 ms
-    ///   run 2 execute:           ~0.76 ms
-    ///   run 2 readback:          ~34.28 ms (used previously alloced buffer)
-    ///   run 2 critical path:     ~35.04 ms
+    ///   gpu upload:              ~73.10 ms  (CPU f16 conversion loop; see tech_debt.md)
+    ///   run 1 execute:           ~1.64 ms
+    ///   run 1 readback:          ~51.02 ms  (staging buffer alloc + memcpy)
+    ///   run 1 critical path:     ~52.66 ms
+    ///   run 2 execute:           ~0.28 ms
+    ///   run 2 readback:          ~21.47 ms (used previously alloced buffer)
+    ///   run 2 critical path:     ~21.76 ms
     ///
     /// Target once all known bottlenecks are resolved (warm, interactive): 8–20 ms.
     /// When the target is reliably met, add an assertion and remove #[ignore].
