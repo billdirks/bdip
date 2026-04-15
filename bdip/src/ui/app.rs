@@ -5,6 +5,7 @@ use bdip_core::{HistoryManager, Transformation};
 use iced::widget::{column, container, row};
 use iced::{Element, Length, Subscription, Task};
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 use super::canvas;
 use super::canvas::presentation_to_handle;
@@ -17,10 +18,10 @@ use super::sidebar;
 // GPU state
 // ---------------------------------------------------------------------------
 
-/// Owns all GPU resources shared across render operations. Grouped into a
-/// single struct so it can be extracted from `BdipApp` as a unit — a
-/// prerequisite for wrapping in `Arc<Mutex<>>` in a later PR to move renders
-/// off the UI thread.
+/// Owns all GPU resources shared between the UI thread and background render
+/// tasks. Wrapped in `Arc<Mutex<>>` so that `Task::perform` closures can hold
+/// a clone of the `Arc` and lock it on the background executor while the UI
+/// thread is free to process other messages.
 struct GpuState {
     engine: GpuEngine,
     renderer: Renderer,
@@ -32,9 +33,11 @@ pub struct BdipApp {
     pub base_image: Option<bdip_core::Rgba16Image>,
     pub image_handle: Option<iced::widget::image::Handle>,
 
-    // GPU state — all three GPU-owned resources live here so they can be
-    // moved as a unit in a later refactor (Arc<Mutex<GpuState>>).
-    gpu: Option<GpuState>,
+    // GPU state — shared with background render tasks via Arc<Mutex>.
+    gpu: Option<Arc<Mutex<GpuState>>>,
+
+    // Scheduling state — at most one GPU task is in-flight at a time.
+    scheduler: RenderScheduler,
 
     // Transform state
     pub history: HistoryManager,
@@ -57,11 +60,11 @@ impl BdipApp {
             Ok(engine) => {
                 let renderer = Renderer::new(&engine);
                 (
-                    Some(GpuState {
+                    Some(Arc::new(Mutex::new(GpuState {
                         engine,
                         renderer,
                         cached_base_texture: None,
-                    }),
+                    }))),
                     None,
                 )
             }
@@ -79,6 +82,7 @@ impl BdipApp {
                 base_image: None,
                 image_handle: None,
                 gpu,
+                scheduler: RenderScheduler::new(),
                 history: HistoryManager::new(),
                 selected_transform: TransformOption::Brightness,
                 preview_value: 0.0,
@@ -124,12 +128,14 @@ impl BdipApp {
 
             Message::ImageLoaded(Ok((_, img))) => {
                 let (w, h) = img.dimensions();
-                if let Some(gpu) = &mut self.gpu {
+                // Upload and ingest synchronously: these two operations are fast (they
+                // submit GPU commands without blocking on completion) and must finish
+                // before any render task can proceed, since they populate
+                // `cached_base_texture`. The lock is brief.
+                if let Some(gpu_arc) = &self.gpu {
+                    let mut gpu = gpu_arc.lock().unwrap();
                     let uploaded = upload_texture(&gpu.engine.device, &gpu.engine.queue, &img);
                     let linear = gpu.renderer.ingest(&gpu.engine, &uploaded);
-                    let buf = gpu.renderer.present(&gpu.engine, &linear);
-                    self.image_handle =
-                        presentation_to_handle(&mut gpu.renderer, &gpu.engine, &buf, w, h);
                     gpu.cached_base_texture = Some(linear);
                 }
                 self.base_image = Some(img);
@@ -138,7 +144,13 @@ impl BdipApp {
                 self.is_previewing = false;
                 self.is_loading = false;
                 self.error_message = None;
-                Task::none()
+                // Dispatch the initial preview render asynchronously.
+                let render_list = build_render_list(&self.history, None);
+                self.spawn_render(RenderRequest::Preview {
+                    render_list,
+                    width: w,
+                    height: h,
+                })
             }
 
             Message::ImageLoaded(Err(e)) => {
@@ -148,37 +160,20 @@ impl BdipApp {
             }
 
             Message::SaveImagePressed => {
-                if self.is_saving || self.base_image.is_none() {
+                if self.is_saving || !self.has_base_texture() {
                     return Task::none();
                 }
-                let Some(img) = self.render_to_rgba16() else {
+                let Some(base_image) = &self.base_image else {
                     return Task::none();
                 };
+                let (w, h) = base_image.dimensions();
+                let render_list = build_render_list(&self.history, None);
                 self.is_saving = true;
-                Task::perform(
-                    async move {
-                        let handle = rfd::AsyncFileDialog::new()
-                            .add_filter("Images", &["png", "jpg", "jpeg", "tif", "tiff"])
-                            .save_file()
-                            .await;
-                        match handle {
-                            Some(h) => {
-                                let path = h.path().to_path_buf();
-                                bdip_core::io::save_image(&img, &path)
-                                    .map_err(|e| e.to_string())?;
-                                Ok(path)
-                            }
-                            None => Err("cancelled".to_string()),
-                        }
-                    },
-                    |result: Result<PathBuf, String>| match result {
-                        Ok(path) => Message::ImageSaved(Ok(path)),
-                        Err(e) if e == "cancelled" => {
-                            Message::ImageSaved(Err("cancelled".to_string()))
-                        }
-                        Err(e) => Message::ImageSaved(Err(e)),
-                    },
-                )
+                self.spawn_render(RenderRequest::Save {
+                    render_list,
+                    width: w,
+                    height: h,
+                })
             }
 
             Message::ImageSaved(result) => {
@@ -201,11 +196,20 @@ impl BdipApp {
             Message::SliderChanged(val) => {
                 self.preview_value = val;
                 self.is_previewing = true;
-                if self.has_base_texture() {
-                    let preview = make_transform(&self.selected_transform, val);
-                    self.image_handle = self.render_to_handle(Some(&preview));
+                if !self.has_base_texture() {
+                    return Task::none();
                 }
-                Task::none()
+                let Some(base_image) = &self.base_image else {
+                    return Task::none();
+                };
+                let (w, h) = base_image.dimensions();
+                let preview = make_transform(&self.selected_transform, val);
+                let render_list = build_render_list(&self.history, Some(&preview));
+                self.spawn_render(RenderRequest::Preview {
+                    render_list,
+                    width: w,
+                    height: h,
+                })
             }
 
             Message::SliderReleased => {
@@ -215,12 +219,20 @@ impl BdipApp {
                 let t = make_transform(&self.selected_transform, self.preview_value);
                 self.history.apply(t);
                 self.is_previewing = false;
-                // preview_value stays at its current position — the slider
-                // does not reset.
-                if self.has_base_texture() {
-                    self.image_handle = self.render_to_handle(None);
+                // preview_value stays at its current position — the slider does not reset.
+                if !self.has_base_texture() {
+                    return Task::none();
                 }
-                Task::none()
+                let Some(base_image) = &self.base_image else {
+                    return Task::none();
+                };
+                let (w, h) = base_image.dimensions();
+                let render_list = build_render_list(&self.history, None);
+                self.spawn_render(RenderRequest::Preview {
+                    render_list,
+                    width: w,
+                    height: h,
+                })
             }
 
             Message::ToggleParameterless => {
@@ -234,14 +246,31 @@ impl BdipApp {
                     let t = make_transform(&self.selected_transform, 0.0);
                     self.history.apply(t);
                 }
-                self.image_handle = self.render_to_handle(None);
-                Task::none()
+                let Some(base_image) = &self.base_image else {
+                    return Task::none();
+                };
+                let (w, h) = base_image.dimensions();
+                let render_list = build_render_list(&self.history, None);
+                self.spawn_render(RenderRequest::Preview {
+                    render_list,
+                    width: w,
+                    height: h,
+                })
             }
 
             Message::Undo => {
                 if self.history.undo().is_some() && self.has_base_texture() {
                     self.preview_value = self.active_transform_value(&self.selected_transform);
-                    self.image_handle = self.render_to_handle(None);
+                    let Some(base_image) = &self.base_image else {
+                        return Task::none();
+                    };
+                    let (w, h) = base_image.dimensions();
+                    let render_list = build_render_list(&self.history, None);
+                    return self.spawn_render(RenderRequest::Preview {
+                        render_list,
+                        width: w,
+                        height: h,
+                    });
                 }
                 Task::none()
             }
@@ -249,9 +278,77 @@ impl BdipApp {
             Message::Redo => {
                 if self.history.redo().is_some() && self.has_base_texture() {
                     self.preview_value = self.active_transform_value(&self.selected_transform);
-                    self.image_handle = self.render_to_handle(None);
+                    let Some(base_image) = &self.base_image else {
+                        return Task::none();
+                    };
+                    let (w, h) = base_image.dimensions();
+                    let render_list = build_render_list(&self.history, None);
+                    return self.spawn_render(RenderRequest::Preview {
+                        render_list,
+                        width: w,
+                        height: h,
+                    });
                 }
                 Task::none()
+            }
+
+            Message::PreviewReady(generation, handle) => {
+                match self.scheduler.complete(generation) {
+                    CompleteResult::Stale => Task::none(),
+                    CompleteResult::Accept(pending) => {
+                        self.image_handle = handle;
+                        pending
+                            .map(|req| self.spawn_render(req))
+                            .unwrap_or(Task::none())
+                    }
+                }
+            }
+
+            Message::SaveRenderReady(generation, img) => {
+                match self.scheduler.complete(generation) {
+                    CompleteResult::Stale => Task::none(),
+                    CompleteResult::Accept(pending) => {
+                        let pending_task = pending
+                            .map(|req| self.spawn_render(req))
+                            .unwrap_or(Task::none());
+
+                        let save_task = if let Some(img) = img {
+                            Task::perform(
+                                async move {
+                                    let handle = rfd::AsyncFileDialog::new()
+                                        .add_filter(
+                                            "Images",
+                                            &["png", "jpg", "jpeg", "tif", "tiff"],
+                                        )
+                                        .save_file()
+                                        .await;
+                                    match handle {
+                                        Some(h) => {
+                                            let path = h.path().to_path_buf();
+                                            bdip_core::io::save_image(&img, &path)
+                                                .map_err(|e| e.to_string())?;
+                                            Ok(path)
+                                        }
+                                        None => Err("cancelled".to_string()),
+                                    }
+                                },
+                                |result: Result<PathBuf, String>| match result {
+                                    Ok(path) => Message::ImageSaved(Ok(path)),
+                                    Err(e) if e == "cancelled" => {
+                                        Message::ImageSaved(Err("cancelled".to_string()))
+                                    }
+                                    Err(e) => Message::ImageSaved(Err(e)),
+                                },
+                            )
+                        } else {
+                            // GPU render failed — reset so the user can retry.
+                            self.is_saving = false;
+                            Task::none()
+                        };
+
+                        Task::batch([pending_task, save_task])
+                    }
+                }
             }
 
             Message::DismissError => {
@@ -299,71 +396,71 @@ impl BdipApp {
         })
     }
 
-    /// Executes the transformation pipeline on the GPU and returns the final presentation buffer
-    /// along with the image dimensions.
-    fn render_pipeline(
-        &mut self,
-        preview: Option<&Transformation>,
-    ) -> Option<(bdip_core::wgpu::Buffer, u32, u32)> {
-        let committed: Vec<Transformation> = self.history.applied_transforms().to_vec();
-        let collapsed = collapse_adjacent(&committed);
-
-        // Build the final render list: collapse the committed history, then
-        // either replace the trailing entry of the same type as the preview
-        // or append the preview.
-        let render_list = match preview {
-            Some(p) => {
-                let preview_kind = TransformOption::from_transformation(p);
-                let mut list = collapsed;
-                if let Some(last) = list.last()
-                    && TransformOption::from_transformation(last) == preview_kind
-                {
-                    // Replace the trailing entry of the same type.
-                    list.pop();
-                }
-                list.push(p.clone());
-                list
+    /// Submits a render request to the scheduler and, if no task is already
+    /// in-flight, immediately dispatches a `Task::perform` that runs the GPU
+    /// pipeline on a background executor. If a task IS already in-flight, the
+    /// request is queued for dispatch when the current task completes.
+    ///
+    /// At most one GPU task is in-flight at a time. Rapid renders (e.g. slider
+    /// drags) coalesce: only the most recent queued request is retained.
+    fn spawn_render(&mut self, request: RenderRequest) -> Task<Message> {
+        // Clone the request so the scheduler can take ownership of the queued
+        // copy while we pass the original into the async block if dispatching.
+        let request_for_task = request.clone();
+        match self.scheduler.request(request) {
+            ScheduleResult::Queued => Task::none(),
+            ScheduleResult::Dispatch(generation) => {
+                let Some(gpu_arc) = self.gpu.clone() else {
+                    return Task::none();
+                };
+                Task::perform(
+                    async move {
+                        // Lock the GPU state for the duration of this render.
+                        // There are no `.await` points inside the lock, so
+                        // MutexGuard<GpuState> is never held across a
+                        // suspension point — making this future Send.
+                        let mut gpu = gpu_arc.lock().unwrap();
+                        match request_for_task {
+                            RenderRequest::Preview {
+                                render_list,
+                                width,
+                                height,
+                            } => {
+                                let Some(buf) = execute_render_pipeline(&mut gpu, &render_list)
+                                else {
+                                    return Message::PreviewReady(generation, None);
+                                };
+                                // Reborrow as &mut GpuState so the borrow checker
+                                // can split the field borrows (engine vs renderer).
+                                let gpu_state = &mut *gpu;
+                                let engine = &gpu_state.engine;
+                                let renderer = &mut gpu_state.renderer;
+                                let handle =
+                                    presentation_to_handle(renderer, engine, &buf, width, height);
+                                Message::PreviewReady(generation, handle)
+                            }
+                            RenderRequest::Save {
+                                render_list,
+                                width,
+                                height,
+                            } => {
+                                let Some(buf) = execute_render_pipeline(&mut gpu, &render_list)
+                                else {
+                                    return Message::SaveRenderReady(generation, None);
+                                };
+                                let gpu_state = &mut *gpu;
+                                let img = gpu_state
+                                    .renderer
+                                    .download(&gpu_state.engine, &buf, width, height)
+                                    .ok();
+                                Message::SaveRenderReady(generation, img)
+                            }
+                        }
+                    },
+                    |m| m,
+                )
             }
-            None => collapsed,
-        };
-
-        let (w, h) = self.base_image.as_ref()?.dimensions();
-        let gpu = self.gpu.as_mut()?;
-        let base = gpu.cached_base_texture.as_ref()?;
-
-        let mut current: Option<bdip_core::wgpu::Texture> = None;
-        for t in &render_list {
-            let new_tex = {
-                let src = current.as_ref().unwrap_or(base);
-                gpu.renderer.apply(&gpu.engine, src, t)
-            };
-            current = Some(new_tex);
         }
-
-        let final_tex = current.as_ref().unwrap_or(base);
-        let buf = gpu.renderer.present(&gpu.engine, final_tex);
-        Some((buf, w, h))
-    }
-
-    /// Replays the collapsed transform stack from `cached_base_texture` and
-    /// returns an updated iced image handle. If `preview` is `Some`, it is
-    /// treated as a tentative value for the currently selected transform type.
-    fn render_to_handle(
-        &mut self,
-        preview: Option<&Transformation>,
-    ) -> Option<iced::widget::image::Handle> {
-        let (buf, w, h) = self.render_pipeline(preview)?;
-        let gpu = self.gpu.as_mut()?;
-        canvas::presentation_to_handle(&mut gpu.renderer, &gpu.engine, &buf, w, h)
-    }
-
-    /// Renders the committed transform stack from `cached_base_texture` and
-    /// returns the result as a 16-bit RGBA image suitable for saving. Uses the
-    /// same GPU pipeline as `render_to_handle` but skips the 8-bit conversion.
-    fn render_to_rgba16(&mut self) -> Option<bdip_core::Rgba16Image> {
-        let (buf, w, h) = self.render_pipeline(None)?;
-        let gpu = self.gpu.as_mut()?;
-        gpu.renderer.download(&gpu.engine, &buf, w, h).ok()
     }
 
     /// Checks if the provided `TransformOption` represents the most recently applied transformation.
@@ -380,7 +477,7 @@ impl BdipApp {
     fn has_base_texture(&self) -> bool {
         self.gpu
             .as_ref()
-            .is_some_and(|g| g.cached_base_texture.is_some())
+            .is_some_and(|g| g.lock().unwrap().cached_base_texture.is_some())
     }
 
     /// Returns the slider value for `opt` by examining the trailing run of the
@@ -443,6 +540,61 @@ fn collapse_adjacent(transforms: &[Transformation]) -> Vec<Transformation> {
         result.push(t.clone());
     }
     result
+}
+
+/// Builds the final render list from the committed history and an optional
+/// preview transform.
+///
+/// Collapses adjacent runs of the same type (keeping only the last in each
+/// run). If `preview` is `Some`, replaces any trailing entry of the same type
+/// with the preview value, or appends the preview if no such trailing entry
+/// exists. This mirrors the live-preview semantics of slider drags: the
+/// in-progress value overlays the last committed value for the same transform
+/// rather than stacking on top of it.
+fn build_render_list(
+    history: &HistoryManager,
+    preview: Option<&Transformation>,
+) -> Vec<Transformation> {
+    let committed: Vec<Transformation> = history.applied_transforms().to_vec();
+    let collapsed = collapse_adjacent(&committed);
+    match preview {
+        Some(p) => {
+            let preview_kind = TransformOption::from_transformation(p);
+            let mut list = collapsed;
+            if let Some(last) = list.last()
+                && TransformOption::from_transformation(last) == preview_kind
+            {
+                // Replace the trailing entry of the same type.
+                list.pop();
+            }
+            list.push(p.clone());
+            list
+        }
+        None => collapsed,
+    }
+}
+
+/// Executes the GPU render pipeline: applies each transform in order starting
+/// from `gpu.cached_base_texture`, then calls `Renderer::present` to produce
+/// an RGBA16 presentation buffer.
+///
+/// Returns `None` if `cached_base_texture` is not set (no image has been
+/// loaded yet).
+fn execute_render_pipeline(
+    gpu: &mut GpuState,
+    render_list: &[Transformation],
+) -> Option<bdip_core::wgpu::Buffer> {
+    let base = gpu.cached_base_texture.as_ref()?;
+    let mut current: Option<bdip_core::wgpu::Texture> = None;
+    for t in render_list {
+        let new_tex = {
+            let src = current.as_ref().unwrap_or(base);
+            gpu.renderer.apply(&gpu.engine, src, t)
+        };
+        current = Some(new_tex);
+    }
+    let final_tex = current.as_ref().unwrap_or(base);
+    Some(gpu.renderer.present(&gpu.engine, final_tex))
 }
 
 #[cfg(test)]

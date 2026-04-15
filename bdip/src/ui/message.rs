@@ -56,6 +56,14 @@ pub enum Message {
     Undo,
     Redo,
 
+    // Async render completions
+    /// Background preview render completed. The generation counter is used to
+    /// discard results from superseded tasks.
+    PreviewReady(u64, Option<iced::widget::image::Handle>),
+    /// Background 16-bit render completed (for saving). The generation counter
+    /// is used to discard results from superseded tasks.
+    SaveRenderReady(u64, Option<bdip_core::Rgba16Image>),
+
     // Error handling
     DismissError,
 
