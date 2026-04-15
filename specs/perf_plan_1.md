@@ -566,3 +566,27 @@ After all four phases, projected warm-pipeline numbers for a 24MP image:
 
 The critical path target of 8–20ms should be achievable after Phase 3.
 Phase 4 is an improvement for initial load time.
+
+---
+
+## Addendum: Asynchronous GPU Measurement Discrepancy
+
+Following the implementation of Phase 3, the observed performance in the
+`test_perf_gpu_roundtrip_24mp` benchmark is ~17.46 ms for the warm-pipeline critical path. While
+this successfully meets the overall sub-20ms latency goal, it differs from the initially projected
+~3-9ms target. 
+
+This discrepancy stems from how `wgpu` asynchronous execution was measured. The 0.59 ms "execute"
+time originally observed only captured CPU dispatch latency—the time to build command encoders and
+call `queue.submit(...)`. The commands returned immediately without waiting for the GPU hardware.
+
+The first synchronous block on the CPU occurs inside `download_slice`, which calls
+`engine.device.poll(wgpu::PollType::wait_indefinitely())`. This forces the CPU to wait until the
+GPU evaluates the `apply` shaders, processes the tiles for `present`, computes the
+`copy_buffer_to_buffer` transfer, and completes the memory mapping before the final CPU-side
+slice copy.
+
+Because the true GPU execution time was absorbed into the synchronous "readback" phase, the
+complete elimination of CPU allocation overhead dropped the total latency down to the actual
+hardware execution floor of ~17.5ms. The initial 3-9ms projection was overly optimistic due to
+misinterpreting CPU dispatch time as the complete GPU workload duration.
