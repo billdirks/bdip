@@ -5,6 +5,7 @@ mod app;
 mod canvas;
 mod menu_bar;
 mod message;
+mod scheduler;
 mod sidebar;
 mod style;
 
