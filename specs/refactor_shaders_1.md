@@ -8,13 +8,10 @@ central enums. This is critical for open-source contribution at scale -- when sh
 become the primary extensibility point, contributors should be able to add one without
 understanding the rendering pipeline internals.
 
-**Vision:** A shader artist or GPU programmer should be able to write a shader transformation,
-create a small metadata struct, and have the UI, CLI, and pipeline automatically support it.
-No match arms to find, no central lists to modify, no knowledge of `pipeline.rs`, bind group
-layouts, or dispatch mechanics required.
-
-**Baseline requirement:** Contributors should not need to edit `Transformation` enum, `TransformKind`,
-or any central dispatch machinery. A missing match arm (or its absence) should never be a source of bugs.
+**Baseline requirement:** `Transformation`, `TransformKind`, and all central dispatch
+machinery must be untouched when adding a shader. A shader added without updating a central
+dispatch table must produce a compile error or a clearly absent feature -- never a silent
+incorrect result or a runtime panic.
 
 ---
 
