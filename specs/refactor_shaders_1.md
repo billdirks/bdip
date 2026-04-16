@@ -1,5 +1,23 @@
 # Shader Isolation Refactor: Design Options
 
+## Goal
+
+Enable contributors to add a new GPU shader by writing only a `.wgsl` file and a single
+Rust struct with metadata. No editing of pipeline machinery, UI routing, CLI parsing, or
+central enums. This is critical for open-source contribution at scale -- when shaders
+become the primary extensibility point, contributors should be able to add one without
+understanding the rendering pipeline internals.
+
+**Vision:** A shader artist or GPU programmer should be able to write a shader transformation,
+create a small metadata struct, and have the UI, CLI, and pipeline automatically support it.
+No match arms to find, no central lists to modify, no knowledge of `pipeline.rs`, bind group
+layouts, or dispatch mechanics required.
+
+**Baseline requirement:** Contributors should not need to edit `Transformation` enum, `TransformKind`,
+or any central dispatch machinery. A missing match arm (or its absence) should never be a source of bugs.
+
+---
+
 ## Current Pain Points
 
 Adding a shader today requires editing **7 files** with **~12 insertion points** total:
