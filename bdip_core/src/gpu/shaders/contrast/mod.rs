@@ -2,16 +2,16 @@ use crate::gpu::shaders::{ParamKind, ShaderMeta, TransformShader};
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct SaturationParams {
+pub struct ContrastParams {
     pub value: f32,
     pub _padding: [f32; 3],
 }
 
-impl TransformShader for SaturationParams {
+impl TransformShader for ContrastParams {
     const META: ShaderMeta = ShaderMeta {
-        id: "saturation",
-        display_name: "Saturation",
-        wgsl_source: include_str!("../saturation.wgsl"),
+        id: "contrast",
+        display_name: "Contrast",
+        wgsl_source: include_str!("contrast.wgsl"),
         param: ParamKind::Slider {
             min: -1.0,
             max: 1.0,
@@ -27,9 +27,7 @@ impl TransformShader for SaturationParams {
     }
 }
 
-inventory::submit!(crate::gpu::shaders::ShaderRegistration::new::<
-    SaturationParams,
->());
+inventory::submit!(crate::gpu::shaders::ShaderRegistration::new::<ContrastParams>());
 
 #[cfg(test)]
 mod tests {
@@ -37,14 +35,14 @@ mod tests {
     use crate::gpu::shaders::registry_by_id;
 
     #[test]
-    fn test_saturation_registry_entry_exists() {
-        assert!(registry_by_id("saturation").is_some());
+    fn test_contrast_registry_entry_exists() {
+        assert!(registry_by_id("contrast").is_some());
     }
 
     #[test]
-    fn test_saturation_registry_metadata() {
-        let reg = registry_by_id("saturation").unwrap();
-        assert_eq!(reg.meta.display_name, "Saturation");
+    fn test_contrast_registry_metadata() {
+        let reg = registry_by_id("contrast").unwrap();
+        assert_eq!(reg.meta.display_name, "Contrast");
         assert_eq!(
             reg.meta.param,
             ParamKind::Slider {
@@ -56,10 +54,10 @@ mod tests {
     }
 
     #[test]
-    fn test_saturation_make_uniform_known_value() {
-        let reg = registry_by_id("saturation").unwrap();
+    fn test_contrast_make_uniform_known_value() {
+        let reg = registry_by_id("contrast").unwrap();
         let bytes = (reg.make_uniform)(0.5);
-        let expected = bytemuck::bytes_of(&SaturationParams {
+        let expected = bytemuck::bytes_of(&ContrastParams {
             value: 0.5,
             _padding: [0.0; 3],
         });

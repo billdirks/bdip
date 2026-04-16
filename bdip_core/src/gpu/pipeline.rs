@@ -117,7 +117,7 @@ impl PipelineCache {
             pl_label,
         ) = match kind {
             TransformKind::Brightness => (
-                include_str!("brightness.wgsl"),
+                include_str!("shaders/brightness/brightness.wgsl"),
                 "Brightness Shader",
                 "Brightness Pipeline",
                 "Brightness Texture BGL",
@@ -125,7 +125,7 @@ impl PipelineCache {
                 "Brightness Pipeline Layout",
             ),
             TransformKind::Saturation => (
-                include_str!("saturation.wgsl"),
+                include_str!("shaders/saturation/saturation.wgsl"),
                 "Saturation Shader",
                 "Saturation Pipeline",
                 "Saturation Texture BGL",
@@ -133,7 +133,7 @@ impl PipelineCache {
                 "Saturation Pipeline Layout",
             ),
             TransformKind::Contrast => (
-                include_str!("contrast.wgsl"),
+                include_str!("shaders/contrast/contrast.wgsl"),
                 "Contrast Shader",
                 "Contrast Pipeline",
                 "Contrast Texture BGL",
@@ -141,7 +141,7 @@ impl PipelineCache {
                 "Contrast Pipeline Layout",
             ),
             TransformKind::Grayscale => (
-                include_str!("grayscale.wgsl"),
+                include_str!("shaders/grayscale/grayscale.wgsl"),
                 "Grayscale Shader",
                 "Grayscale Pipeline",
                 "Grayscale Texture BGL",
@@ -149,7 +149,7 @@ impl PipelineCache {
                 "Grayscale Pipeline Layout",
             ),
             TransformKind::Invert => (
-                include_str!("invert.wgsl"),
+                include_str!("shaders/invert/invert.wgsl"),
                 "Invert Shader",
                 "Invert Pipeline",
                 "Invert Texture BGL",

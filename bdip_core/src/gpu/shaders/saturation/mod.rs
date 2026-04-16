@@ -2,16 +2,16 @@ use crate::gpu::shaders::{ParamKind, ShaderMeta, TransformShader};
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct BrightnessParams {
+pub struct SaturationParams {
     pub value: f32,
     pub _padding: [f32; 3],
 }
 
-impl TransformShader for BrightnessParams {
+impl TransformShader for SaturationParams {
     const META: ShaderMeta = ShaderMeta {
-        id: "brightness",
-        display_name: "Brightness",
-        wgsl_source: include_str!("../brightness.wgsl"),
+        id: "saturation",
+        display_name: "Saturation",
+        wgsl_source: include_str!("saturation.wgsl"),
         param: ParamKind::Slider {
             min: -1.0,
             max: 1.0,
@@ -28,23 +28,23 @@ impl TransformShader for BrightnessParams {
 }
 
 inventory::submit!(crate::gpu::shaders::ShaderRegistration::new::<
-    BrightnessParams,
+    SaturationParams,
 >());
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gpu::shaders::{ParamKind, registry_by_id};
+    use crate::gpu::shaders::registry_by_id;
 
     #[test]
-    fn test_brightness_registry_entry_exists() {
-        assert!(registry_by_id("brightness").is_some());
+    fn test_saturation_registry_entry_exists() {
+        assert!(registry_by_id("saturation").is_some());
     }
 
     #[test]
-    fn test_brightness_registry_metadata() {
-        let reg = registry_by_id("brightness").unwrap();
-        assert_eq!(reg.meta.display_name, "Brightness");
+    fn test_saturation_registry_metadata() {
+        let reg = registry_by_id("saturation").unwrap();
+        assert_eq!(reg.meta.display_name, "Saturation");
         assert_eq!(
             reg.meta.param,
             ParamKind::Slider {
@@ -56,23 +56,13 @@ mod tests {
     }
 
     #[test]
-    fn test_brightness_make_uniform_known_value() {
-        let reg = registry_by_id("brightness").unwrap();
+    fn test_saturation_make_uniform_known_value() {
+        let reg = registry_by_id("saturation").unwrap();
         let bytes = (reg.make_uniform)(0.5);
-        let expected = bytemuck::bytes_of(&BrightnessParams {
+        let expected = bytemuck::bytes_of(&SaturationParams {
             value: 0.5,
             _padding: [0.0; 3],
         });
         assert_eq!(bytes, expected);
-    }
-
-    #[test]
-    fn test_transform_display_slider() {
-        use crate::gpu::shaders::Transform;
-        let t = Transform {
-            shader_id: "brightness",
-            value: 0.35,
-        };
-        assert_eq!(t.to_string(), "Brightness: 0.35");
     }
 }

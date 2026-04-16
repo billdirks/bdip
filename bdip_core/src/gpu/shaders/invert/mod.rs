@@ -10,7 +10,7 @@ impl TransformShader for InvertParams {
     const META: ShaderMeta = ShaderMeta {
         id: "invert",
         display_name: "Invert",
-        wgsl_source: include_str!("../invert.wgsl"),
+        wgsl_source: include_str!("invert.wgsl"),
         param: ParamKind::Toggle,
     };
 

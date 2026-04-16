@@ -10,7 +10,7 @@ impl TransformShader for GrayscaleParams {
     const META: ShaderMeta = ShaderMeta {
         id: "grayscale",
         display_name: "Grayscale",
-        wgsl_source: include_str!("../grayscale.wgsl"),
+        wgsl_source: include_str!("grayscale.wgsl"),
         param: ParamKind::Toggle,
     };
 
