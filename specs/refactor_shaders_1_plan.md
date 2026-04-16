@@ -309,6 +309,12 @@ is needed.
 
 ## PR Breakdown
 
+> **Before starting any PR below:** read `specs/refactor_shaders_1.md` (the design
+> doc this plan implements) per the AGENTS.md `specs/*goal*` rule. It contains
+> the Goal section, the rejected design alternatives, and the constraints
+> (zero-touch registration, bind group contract preservation) that this plan
+> must satisfy.
+
 ### PR 1: Trait and Registry Infrastructure (No Behavioral Changes)
 
 **Goal:** Add the `TransformShader` trait, `ShaderMeta`, `ParamKind`,
@@ -323,7 +329,9 @@ is modified — this is purely additive.
   call. Also contains `#[cfg(test)] mod tests` with the tests listed below.
 
 **Files modified:**
-- `bdip_core/Cargo.toml` — add `inventory` dependency
+- `bdip_core/Cargo.toml` — add `inventory = "0.3"` to `[dependencies]`. Pin to
+  the `0.3` major version so a future `0.4` release cannot silently change the
+  `submit!` / `iter` semantics this plan relies on.
 - `bdip_core/src/gpu/mod.rs` — add `pub mod shaders;`
 
 **Tests** (in `bdip_core/src/gpu/shaders/mod.rs`):
@@ -511,36 +519,73 @@ are both deleted in PR 5.
    - `get_or_create(&mut self, device, kind: TransformKind)` →
      `get_or_create(&mut self, device, shader_id: &'static str)`
    - `compile(device, kind: TransformKind)` →
-     `compile(device, shader_id: &'static str)`. The new `compile`:
+     `compile(device, shader_id: &'static str)`. The full new body (replaces the
+     existing one verbatim — only the label/source derivation changes, the bind
+     group layout, pipeline layout, and pipeline creation are byte-identical to
+     the current implementation in `pipeline.rs:110-207`):
      ```rust
      fn compile(device: &wgpu::Device, shader_id: &'static str) -> CachedPipeline {
          let reg = registry_by_id(shader_id)
              .unwrap_or_else(|| panic!("Unknown shader ID: '{shader_id}'"));
          let meta = &reg.meta;
 
+         // Labels are `format!`-generated from `meta.display_name` instead of
+         // selected by a match arm. These are GPU debug labels; the allocation
+         // happens once per shader on first compile, so cost is negligible.
+         let shader_label = format!("{} Shader", meta.display_name);
+         let pipeline_label = format!("{} Pipeline", meta.display_name);
+         let texture_bgl_label = format!("{} Texture BGL", meta.display_name);
+         let params_bgl_label = format!("{} Params BGL", meta.display_name);
+         let pl_label = format!("{} Pipeline Layout", meta.display_name);
+
          let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-             label: Some(&format!("{} Shader", meta.display_name)),
+             label: Some(&shader_label),
              source: wgpu::ShaderSource::Wgsl(meta.wgsl_source.into()),
          });
 
-         // texture_bind_group_layout, params_bind_group_layout, pipeline_layout,
-         // and pipeline creation are identical to before — only the labels and
-         // shader source are now read from the registry instead of a match arm.
-         // ...
+         let texture_bind_group_layout =
+             make_texture_only_bind_group_layout(device, &texture_bgl_label);
+
+         let params_bind_group_layout =
+             device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+                 label: Some(&params_bgl_label),
+                 entries: &[BindGroupLayoutEntry {
+                     binding: 0,
+                     visibility: ShaderStages::COMPUTE,
+                     ty: BindingType::Buffer {
+                         ty: wgpu::BufferBindingType::Uniform,
+                         has_dynamic_offset: false,
+                         min_binding_size: None,
+                     },
+                     count: None,
+                 }],
+             });
+
+         let pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+             label: Some(&pl_label),
+             bind_group_layouts: &[
+                 Some(&texture_bind_group_layout),
+                 Some(&params_bind_group_layout),
+             ],
+             immediate_size: 0,
+         });
+
+         let pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
+             label: Some(&pipeline_label),
+             layout: Some(&pipeline_layout),
+             module: &shader,
+             entry_point: Some("main"),
+             compilation_options: Default::default(),
+             cache: None,
+         });
+
+         CachedPipeline {
+             pipeline,
+             texture_bind_group_layout,
+             params_bind_group_layout,
+         }
      }
      ```
-     The current `compile` destructures a match arm into 6 string labels. The new
-     version replaces the match with `format!`-generated labels from
-     `meta.display_name`:
-     - `shader_label` → `format!("{} Shader", meta.display_name)`
-     - `pipeline_label` → `format!("{} Pipeline", meta.display_name)`
-     - `texture_bgl_label` → `format!("{} Texture BGL", meta.display_name)`
-     - `params_bgl_label` → `format!("{} Params BGL", meta.display_name)`
-     - `pl_label` → `format!("{} Pipeline Layout", meta.display_name)`
-     - `shader_src` → `meta.wgsl_source` (not a label, just the source string)
-
-     These are GPU debug labels and the `format!` allocation happens only once per
-     shader (on first compile) so the cost is negligible.
 
 4. **Rewrite `Renderer::apply`:**
    ```rust
@@ -579,14 +624,36 @@ are both deleted in PR 5.
 - `bdip/src/main.rs` — headless CLI loop wraps each `renderer.apply` call with
   `Transform::from_legacy`
 
-**Tests** (in `pipeline.rs`):
-- All existing GPU roundtrip tests updated to use `Transform` values instead of
-  `Transformation` variants. Example: `Transformation::Brightness(0.5)` becomes
-  `Transform { shader_id: "brightness", value: 0.5 }`. Numeric assertions are
-  unchanged — this is a pure refactor with no behavioral change.
-- Pipeline cache tests updated: `TransformKind::Brightness` becomes `"brightness"`.
+**Test-file scope for this PR:** the only test file that needs editing is
+`bdip_core/src/gpu/pipeline.rs` (its `#[cfg(test)] mod tests`). The bridge
+`Transform::from_legacy` keeps `Transformation` alive, so:
+- `bdip_core/src/transformation.rs` tests — **unchanged** (deleted in PR 5).
+- `bdip_core/src/history.rs` tests — **unchanged** (deleted/migrated in PR 5).
+- `bdip/src/ui/scheduler.rs` tests — **unchanged** (migrated in PR 5).
+- `bdip/src/ui/app.rs` tests — **unchanged** (migrated in PR 5).
+
+**Tests** (in `bdip_core/src/gpu/pipeline.rs` only):
+- All ~30 existing GPU roundtrip tests updated to use `Transform` values instead
+  of `Transformation` variants. Example: `Transformation::Brightness(0.5)`
+  becomes `Transform { shader_id: "brightness", value: 0.5 }`. Numeric
+  assertions are unchanged — this is a pure refactor with no behavioral change.
+  Affected tests include all `test_brightness_*`, `test_saturation_*`,
+  `test_contrast_*`, `test_grayscale_*`, `test_invert_*`, chaining tests
+  (`test_chained_*`, `test_multiple_same_transform`), and headroom tests.
+- Pipeline cache tests updated: `TransformKind::Brightness` →`"brightness"`,
+  `TransformKind::Saturation` → `"saturation"` in
+  `test_pipeline_cache_returns_same_pipeline` and
+  `test_pipeline_cache_different_kinds`.
 - `test_perf_gpu_roundtrip_24mp` must still pass with the same thresholds.
-- Chaining tests, headroom tests, and tiling tests all updated similarly.
+- Tiling tests (`test_present_tiling_*`, `test_ingest_*`,
+  `test_presentation_buffer_layout`) do not call `Renderer::apply` and need no
+  changes.
+
+**Note on `Transformation` re-export:** `Transformation` is re-exported at
+`bdip_core::Transformation` (see `bdip_core/src/lib.rs`). The bridge method
+references it as `crate::Transformation` from within `bdip_core`, and external
+callers (`app.rs`, `main.rs`) keep their existing
+`use bdip_core::Transformation;` imports through PR 4.
 
 **Dependencies:** PR 3 (all shaders must be registered before the old dispatch can
 be removed).
