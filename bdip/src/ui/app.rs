@@ -1,5 +1,6 @@
 use bdip_core::gpu::engine::GpuEngine;
 use bdip_core::gpu::pipeline::Renderer;
+use bdip_core::gpu::shaders::Transform;
 use bdip_core::gpu::texture::upload_texture;
 use bdip_core::{HistoryManager, Transformation};
 use iced::widget::{column, container, row};
@@ -589,7 +590,8 @@ fn execute_render_pipeline(
     for t in render_list {
         let new_tex = {
             let src = current.as_ref().unwrap_or(base);
-            gpu.renderer.apply(&gpu.engine, src, t)
+            gpu.renderer
+                .apply(&gpu.engine, src, &Transform::from_legacy(t))
         };
         current = Some(new_tex);
     }

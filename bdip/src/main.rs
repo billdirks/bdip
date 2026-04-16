@@ -1,3 +1,4 @@
+use bdip_core::gpu::shaders::Transform;
 use bdip_core::gpu::texture::{download_presentation_buffer, upload_texture};
 use bdip_core::{Transformation, gpu::engine::GpuEngine, gpu::pipeline::Renderer};
 use clap::Parser;
@@ -88,7 +89,11 @@ fn main() -> anyhow::Result<()> {
         let mut current_texture = renderer.ingest(&engine, &uploaded_texture);
         for transform in &transforms {
             println!("Applying {:?}", transform);
-            current_texture = renderer.apply(&engine, &current_texture, transform);
+            current_texture = renderer.apply(
+                &engine,
+                &current_texture,
+                &Transform::from_legacy(transform),
+            );
         }
         timer.lap("gpu execute");
 

@@ -1,5 +1,5 @@
 use crate::gpu::engine::GpuEngine;
-use crate::transformation::Transformation;
+use crate::gpu::shaders::{Transform, registry_by_id};
 use std::collections::HashMap;
 use wgpu::{
     BindGroupDescriptor, BindGroupEntry, BindGroupLayoutDescriptor, BindGroupLayoutEntry,
@@ -12,69 +12,11 @@ use wgpu::{
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-struct BrightnessParams {
-    brightness_offset: f32,
-    _padding: [f32; 3], // WebGPU uniforms require 16-byte alignment
-}
-
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-struct SaturationParams {
-    saturation_offset: f32,
-    _padding: [f32; 3], // WebGPU uniforms require 16-byte alignment
-}
-
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-struct ContrastParams {
-    contrast_offset: f32,
-    _padding: [f32; 3], // WebGPU uniforms require 16-byte alignment
-}
-
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-struct GrayscaleParams {
-    _unused: [f32; 4], // WebGPU uniforms require 16-byte alignment; no user params
-}
-
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-struct InvertParams {
-    _unused: [f32; 4], // WebGPU uniforms require 16-byte alignment; no user params
-}
-
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 struct PresentParams {
     width: u32,
     y_offset: u32,
     tile_height: u32,
     _padding: u32, // WebGPU uniforms require 16-byte alignment
-}
-
-// ========== TransformKind ==========
-
-/// Lightweight discriminant identifying which compiled pipeline to use.
-/// Derived from a `Transformation` variant — carries no parameter values.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-enum TransformKind {
-    Brightness,
-    Saturation,
-    Contrast,
-    Grayscale,
-    Invert,
-}
-
-impl From<&Transformation> for TransformKind {
-    fn from(t: &Transformation) -> Self {
-        match t {
-            Transformation::Brightness(_) => TransformKind::Brightness,
-            Transformation::Saturation(_) => TransformKind::Saturation,
-            Transformation::Contrast(_) => TransformKind::Contrast,
-            Transformation::Grayscale => TransformKind::Grayscale,
-            Transformation::Invert => TransformKind::Invert,
-        }
-    }
 }
 
 // ========== CachedPipeline ==========
@@ -89,7 +31,7 @@ struct CachedPipeline {
 
 /// Lazily compiles and caches transform pipelines on first use.
 struct PipelineCache {
-    cache: HashMap<TransformKind, CachedPipeline>,
+    cache: HashMap<&'static str, CachedPipeline>,
 }
 
 impl PipelineCache {
@@ -99,76 +41,38 @@ impl PipelineCache {
         }
     }
 
-    /// Returns a reference to the compiled pipeline for `kind`, compiling it on
-    /// first access and caching the result for all subsequent calls.
-    fn get_or_create(&mut self, device: &wgpu::Device, kind: TransformKind) -> &CachedPipeline {
+    /// Returns a reference to the compiled pipeline for `shader_id`, compiling
+    /// it on first access and caching the result for all subsequent calls.
+    fn get_or_create(&mut self, device: &wgpu::Device, shader_id: &'static str) -> &CachedPipeline {
         self.cache
-            .entry(kind)
-            .or_insert_with(|| Self::compile(device, kind))
+            .entry(shader_id)
+            .or_insert_with(|| Self::compile(device, shader_id))
     }
 
-    fn compile(device: &wgpu::Device, kind: TransformKind) -> CachedPipeline {
-        let (
-            shader_src,
-            shader_label,
-            pipeline_label,
-            texture_bgl_label,
-            params_bgl_label,
-            pl_label,
-        ) = match kind {
-            TransformKind::Brightness => (
-                include_str!("shaders/brightness/brightness.wgsl"),
-                "Brightness Shader",
-                "Brightness Pipeline",
-                "Brightness Texture BGL",
-                "Brightness Params BGL",
-                "Brightness Pipeline Layout",
-            ),
-            TransformKind::Saturation => (
-                include_str!("shaders/saturation/saturation.wgsl"),
-                "Saturation Shader",
-                "Saturation Pipeline",
-                "Saturation Texture BGL",
-                "Saturation Params BGL",
-                "Saturation Pipeline Layout",
-            ),
-            TransformKind::Contrast => (
-                include_str!("shaders/contrast/contrast.wgsl"),
-                "Contrast Shader",
-                "Contrast Pipeline",
-                "Contrast Texture BGL",
-                "Contrast Params BGL",
-                "Contrast Pipeline Layout",
-            ),
-            TransformKind::Grayscale => (
-                include_str!("shaders/grayscale/grayscale.wgsl"),
-                "Grayscale Shader",
-                "Grayscale Pipeline",
-                "Grayscale Texture BGL",
-                "Grayscale Params BGL",
-                "Grayscale Pipeline Layout",
-            ),
-            TransformKind::Invert => (
-                include_str!("shaders/invert/invert.wgsl"),
-                "Invert Shader",
-                "Invert Pipeline",
-                "Invert Texture BGL",
-                "Invert Params BGL",
-                "Invert Pipeline Layout",
-            ),
-        };
+    fn compile(device: &wgpu::Device, shader_id: &'static str) -> CachedPipeline {
+        let reg =
+            registry_by_id(shader_id).unwrap_or_else(|| panic!("Unknown shader ID: '{shader_id}'"));
+        let meta = &reg.meta;
+
+        // Labels are derived from `meta.display_name`. The allocations happen once per shader on
+        // first compile.
+        let shader_label = format!("{} Shader", meta.display_name);
+        let pipeline_label = format!("{} Pipeline", meta.display_name);
+        let texture_bgl_label = format!("{} Texture BGL", meta.display_name);
+        let params_bgl_label = format!("{} Params BGL", meta.display_name);
+        let pl_label = format!("{} Pipeline Layout", meta.display_name);
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some(shader_label),
-            source: wgpu::ShaderSource::Wgsl(shader_src.into()),
+            label: Some(&shader_label),
+            source: wgpu::ShaderSource::Wgsl(meta.wgsl_source.into()),
         });
 
         let texture_bind_group_layout =
-            make_texture_only_bind_group_layout(device, texture_bgl_label);
+            make_texture_only_bind_group_layout(device, &texture_bgl_label);
 
         let params_bind_group_layout =
             device.create_bind_group_layout(&BindGroupLayoutDescriptor {
-                label: Some(params_bgl_label),
+                label: Some(&params_bgl_label),
                 entries: &[BindGroupLayoutEntry {
                     binding: 0,
                     visibility: ShaderStages::COMPUTE,
@@ -182,7 +86,7 @@ impl PipelineCache {
             });
 
         let pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
-            label: Some(pl_label),
+            label: Some(&pl_label),
             bind_group_layouts: &[
                 Some(&texture_bind_group_layout),
                 Some(&params_bind_group_layout),
@@ -191,7 +95,7 @@ impl PipelineCache {
         });
 
         let pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
-            label: Some(pipeline_label),
+            label: Some(&pipeline_label),
             layout: Some(&pipeline_layout),
             module: &shader,
             entry_point: Some("main"),
@@ -762,17 +666,20 @@ impl Renderer {
         dst_texture
     }
 
-    /// Applies a single `Transformation` to `src_texture` and returns a new
+    /// Applies a single `Transform` to `src_texture` and returns a new
     /// `Rgba16Float` texture in linear light. The correct pipeline is compiled
-    /// on first use and cached for subsequent calls with the same transform kind.
+    /// on first use and cached for subsequent calls with the same shader ID.
     pub fn apply(
         &mut self,
         engine: &GpuEngine,
         src_texture: &wgpu::Texture,
-        transformation: &Transformation,
+        transform: &Transform,
     ) -> wgpu::Texture {
-        let kind = TransformKind::from(transformation);
-        let cached = self.pipeline_cache.get_or_create(&engine.device, kind);
+        let reg = registry_by_id(transform.shader_id)
+            .unwrap_or_else(|| panic!("Unknown shader ID: '{}'", transform.shader_id));
+        let cached = self
+            .pipeline_cache
+            .get_or_create(&engine.device, transform.shader_id);
 
         let (width, height, depth) = (
             src_texture.width(),
@@ -815,67 +722,14 @@ impl Renderer {
             ],
         });
 
-        let params_buffer = match transformation {
-            Transformation::Brightness(val) => {
-                let p = BrightnessParams {
-                    brightness_offset: *val,
-                    _padding: [0.0; 3],
-                };
-                engine
-                    .device
-                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some("Apply Params Buffer"),
-                        contents: bytemuck::cast_slice(&[p]),
-                        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                    })
-            }
-            Transformation::Saturation(val) => {
-                let p = SaturationParams {
-                    saturation_offset: *val,
-                    _padding: [0.0; 3],
-                };
-                engine
-                    .device
-                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some("Apply Params Buffer"),
-                        contents: bytemuck::cast_slice(&[p]),
-                        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                    })
-            }
-            Transformation::Contrast(val) => {
-                let p = ContrastParams {
-                    contrast_offset: *val,
-                    _padding: [0.0; 3],
-                };
-                engine
-                    .device
-                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some("Apply Params Buffer"),
-                        contents: bytemuck::cast_slice(&[p]),
-                        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                    })
-            }
-            Transformation::Grayscale => {
-                let p = GrayscaleParams { _unused: [0.0; 4] };
-                engine
-                    .device
-                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some("Apply Params Buffer"),
-                        contents: bytemuck::cast_slice(&[p]),
-                        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                    })
-            }
-            Transformation::Invert => {
-                let p = InvertParams { _unused: [0.0; 4] };
-                engine
-                    .device
-                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some("Apply Params Buffer"),
-                        contents: bytemuck::cast_slice(&[p]),
-                        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                    })
-            }
-        };
+        let uniform_bytes = (reg.make_uniform)(transform.value);
+        let params_buffer = engine
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Apply Params Buffer"),
+                contents: &uniform_bytes,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            });
 
         let params_bind_group = engine.device.create_bind_group(&BindGroupDescriptor {
             label: Some("Apply Params Bind Group"),
@@ -909,7 +763,7 @@ impl Renderer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Transformation;
+    use crate::gpu::shaders::Transform;
     use crate::gpu::texture::{download_presentation_buffer, upload_texture};
 
     // ========== Helpers ==========
@@ -926,7 +780,7 @@ mod tests {
         renderer: &mut Renderer,
         engine: &GpuEngine,
         img: &crate::Rgba16Image,
-        transforms: &[Transformation],
+        transforms: &[Transform],
     ) -> crate::Rgba16Image {
         let (w, h) = (img.width(), img.height());
         let upload = upload_texture(&engine.device, &engine.queue, img);
@@ -938,7 +792,7 @@ mod tests {
         download_presentation_buffer(&engine.device, &engine.queue, &buf, w, h).unwrap()
     }
 
-    // ========== Existing brightness tests (updated to use apply()) ==========
+    // ========== Brightness correctness tests ==========
 
     #[test]
     fn test_brightness_shader_positive() {
@@ -951,7 +805,10 @@ mod tests {
             &mut renderer,
             &engine,
             &img,
-            &[Transformation::Brightness(0.5)],
+            &[Transform {
+                shader_id: "brightness",
+                value: 0.5,
+            }],
         );
 
         // 0.214 + 0.5 = 0.714 linear → sRGB ≈ 0.862 → u16 ≈ 56500
@@ -986,7 +843,10 @@ mod tests {
             &mut renderer,
             &engine,
             &img,
-            &[Transformation::Brightness(-0.6)],
+            &[Transform {
+                shader_id: "brightness",
+                value: -0.6,
+            }],
         );
 
         for pixel in out_img.pixels() {
@@ -1007,7 +867,10 @@ mod tests {
             &mut renderer,
             &engine,
             &img,
-            &[Transformation::Brightness(0.0)],
+            &[Transform {
+                shader_id: "brightness",
+                value: 0.0,
+            }],
         );
 
         // sRGB → linear → sRGB is a mathematical identity; differences are f16 rounding.
@@ -1031,8 +894,14 @@ mod tests {
             &engine,
             &img,
             &[
-                Transformation::Brightness(-0.2),
-                Transformation::Brightness(0.5),
+                Transform {
+                    shader_id: "brightness",
+                    value: -0.2,
+                },
+                Transform {
+                    shader_id: "brightness",
+                    value: 0.5,
+                },
             ],
         );
 
@@ -1069,8 +938,14 @@ mod tests {
             &engine,
             &img,
             &[
-                Transformation::Brightness(0.8),
-                Transformation::Brightness(-0.8),
+                Transform {
+                    shader_id: "brightness",
+                    value: 0.8,
+                },
+                Transform {
+                    shader_id: "brightness",
+                    value: -0.8,
+                },
             ],
         );
 
@@ -1307,7 +1182,10 @@ mod tests {
             &mut renderer,
             &engine,
             &img,
-            &[Transformation::Saturation(0.0)],
+            &[Transform {
+                shader_id: "saturation",
+                value: 0.0,
+            }],
         );
 
         // saturation_offset=0 → scale=1.0 → identity; only f16 rounding applies.
@@ -1343,7 +1221,10 @@ mod tests {
             &mut renderer,
             &engine,
             &img,
-            &[Transformation::Saturation(-1.0)],
+            &[Transform {
+                shader_id: "saturation",
+                value: -1.0,
+            }],
         );
 
         for pixel in out_img.pixels() {
@@ -1383,7 +1264,10 @@ mod tests {
             &mut renderer,
             &engine,
             &img,
-            &[Transformation::Saturation(0.5)],
+            &[Transform {
+                shader_id: "saturation",
+                value: 0.5,
+            }],
         );
 
         for pixel in out_img.pixels() {
@@ -1413,15 +1297,13 @@ mod tests {
         let engine = GpuEngine::new().unwrap();
         let mut cache = PipelineCache::new();
 
-        // Calling get_or_create twice for the same kind must return the same
+        // Calling get_or_create twice for the same shader_id must return the same
         // cached entry — no recompilation on the second call.
-        let p1 =
-            cache.get_or_create(&engine.device, TransformKind::Brightness) as *const CachedPipeline;
-        let p2 =
-            cache.get_or_create(&engine.device, TransformKind::Brightness) as *const CachedPipeline;
+        let p1 = cache.get_or_create(&engine.device, "brightness") as *const CachedPipeline;
+        let p2 = cache.get_or_create(&engine.device, "brightness") as *const CachedPipeline;
         assert!(
             std::ptr::eq(p1, p2),
-            "same TransformKind should return the same cached pipeline pointer"
+            "same shader_id should return the same cached pipeline pointer"
         );
     }
 
@@ -1431,13 +1313,11 @@ mod tests {
         let mut cache = PipelineCache::new();
 
         // Brightness and Saturation must occupy separate cache entries.
-        let pb =
-            cache.get_or_create(&engine.device, TransformKind::Brightness) as *const CachedPipeline;
-        let ps =
-            cache.get_or_create(&engine.device, TransformKind::Saturation) as *const CachedPipeline;
+        let pb = cache.get_or_create(&engine.device, "brightness") as *const CachedPipeline;
+        let ps = cache.get_or_create(&engine.device, "saturation") as *const CachedPipeline;
         assert!(
             !std::ptr::eq(pb, ps),
-            "different TransformKinds should return different pipeline pointers"
+            "different shader IDs should return different pipeline pointers"
         );
     }
 
@@ -1455,21 +1335,33 @@ mod tests {
             &mut renderer,
             &engine,
             &img,
-            &[Transformation::Brightness(0.3)],
+            &[Transform {
+                shader_id: "brightness",
+                value: 0.3,
+            }],
         );
         let saturation_only = roundtrip(
             &mut renderer,
             &engine,
             &img,
-            &[Transformation::Saturation(-0.5)],
+            &[Transform {
+                shader_id: "saturation",
+                value: -0.5,
+            }],
         );
         let chained = roundtrip(
             &mut renderer,
             &engine,
             &img,
             &[
-                Transformation::Brightness(0.3),
-                Transformation::Saturation(-0.5),
+                Transform {
+                    shader_id: "brightness",
+                    value: 0.3,
+                },
+                Transform {
+                    shader_id: "saturation",
+                    value: -0.5,
+                },
             ],
         );
 
@@ -1504,8 +1396,14 @@ mod tests {
             &engine,
             &img,
             &[
-                Transformation::Brightness(0.3),
-                Transformation::Saturation(-0.5),
+                Transform {
+                    shader_id: "brightness",
+                    value: 0.3,
+                },
+                Transform {
+                    shader_id: "saturation",
+                    value: -0.5,
+                },
             ],
         );
         let sat_then_bright = roundtrip(
@@ -1513,8 +1411,14 @@ mod tests {
             &engine,
             &img,
             &[
-                Transformation::Saturation(-0.5),
-                Transformation::Brightness(0.3),
+                Transform {
+                    shader_id: "saturation",
+                    value: -0.5,
+                },
+                Transform {
+                    shader_id: "brightness",
+                    value: 0.3,
+                },
             ],
         );
 
@@ -1556,15 +1460,24 @@ mod tests {
             &mut renderer,
             &engine,
             &img,
-            &[Transformation::Brightness(0.3)],
+            &[Transform {
+                shader_id: "brightness",
+                value: 0.3,
+            }],
         );
         let twice = roundtrip(
             &mut renderer,
             &engine,
             &img,
             &[
-                Transformation::Brightness(0.3),
-                Transformation::Brightness(0.3),
+                Transform {
+                    shader_id: "brightness",
+                    value: 0.3,
+                },
+                Transform {
+                    shader_id: "brightness",
+                    value: 0.3,
+                },
             ],
         );
 
@@ -1592,7 +1505,10 @@ mod tests {
             &mut renderer,
             &engine,
             &img,
-            &[Transformation::Contrast(0.0)],
+            &[Transform {
+                shader_id: "contrast",
+                value: 0.0,
+            }],
         );
 
         // contrast_offset=0 → scale=1.0 → identity; only f16 rounding applies.
@@ -1628,7 +1544,10 @@ mod tests {
             &mut renderer,
             &engine,
             &img,
-            &[Transformation::Contrast(1.0)],
+            &[Transform {
+                shader_id: "contrast",
+                value: 1.0,
+            }],
         );
 
         for pixel in out_img.pixels() {
@@ -1651,7 +1570,10 @@ mod tests {
             &mut renderer,
             &engine,
             &img,
-            &[Transformation::Contrast(1.0)],
+            &[Transform {
+                shader_id: "contrast",
+                value: 1.0,
+            }],
         );
 
         for pixel in out_img.pixels() {
@@ -1681,7 +1603,10 @@ mod tests {
             &mut renderer,
             &engine,
             &img,
-            &[Transformation::Contrast(-1.0)],
+            &[Transform {
+                shader_id: "contrast",
+                value: -1.0,
+            }],
         );
 
         for pixel in out_img.pixels() {
@@ -1715,7 +1640,10 @@ mod tests {
             &mut renderer,
             &engine,
             &img,
-            &[Transformation::Contrast(1.0)],
+            &[Transform {
+                shader_id: "contrast",
+                value: 1.0,
+            }],
         );
 
         for pixel in out_img.pixels() {
@@ -1738,8 +1666,14 @@ mod tests {
             &engine,
             &img,
             &[
-                Transformation::Brightness(0.3),
-                Transformation::Contrast(0.5),
+                Transform {
+                    shader_id: "brightness",
+                    value: 0.3,
+                },
+                Transform {
+                    shader_id: "contrast",
+                    value: 0.5,
+                },
             ],
         );
 
@@ -1762,7 +1696,15 @@ mod tests {
 
         // Colored input: channels are distinct, so any non-trivial operation is detectable.
         let img = make_solid_image(2, 2, 32767, 16384, 8192);
-        let out_img = roundtrip(&mut renderer, &engine, &img, &[Transformation::Grayscale]);
+        let out_img = roundtrip(
+            &mut renderer,
+            &engine,
+            &img,
+            &[Transform {
+                shader_id: "grayscale",
+                value: 0.0,
+            }],
+        );
 
         // After grayscale, R, G, and B must all equal the luminance value.
         for pixel in out_img.pixels() {
@@ -1787,7 +1729,15 @@ mod tests {
         let mut renderer = Renderer::new(&engine);
 
         let img = make_solid_image(2, 2, 32767, 16384, 8192);
-        let out_img = roundtrip(&mut renderer, &engine, &img, &[Transformation::Grayscale]);
+        let out_img = roundtrip(
+            &mut renderer,
+            &engine,
+            &img,
+            &[Transform {
+                shader_id: "grayscale",
+                value: 0.0,
+            }],
+        );
 
         for pixel in out_img.pixels() {
             assert_eq!(pixel[3], 65535, "alpha must be unchanged by grayscale");
@@ -1801,7 +1751,15 @@ mod tests {
 
         // Pure black: all channels 0 linear → luminance = 0 → output stays 0.
         let img = make_solid_image(2, 2, 0, 0, 0);
-        let out_img = roundtrip(&mut renderer, &engine, &img, &[Transformation::Grayscale]);
+        let out_img = roundtrip(
+            &mut renderer,
+            &engine,
+            &img,
+            &[Transform {
+                shader_id: "grayscale",
+                value: 0.0,
+            }],
+        );
 
         for pixel in out_img.pixels() {
             assert_eq!(
@@ -1829,7 +1787,15 @@ mod tests {
 
         // Pure white: all channels 1.0 linear → luminance = 0.2126+0.7152+0.0722 = 1.0 → white.
         let img = make_solid_image(2, 2, 65535, 65535, 65535);
-        let out_img = roundtrip(&mut renderer, &engine, &img, &[Transformation::Grayscale]);
+        let out_img = roundtrip(
+            &mut renderer,
+            &engine,
+            &img,
+            &[Transform {
+                shader_id: "grayscale",
+                value: 0.0,
+            }],
+        );
 
         for pixel in out_img.pixels() {
             assert!(
@@ -1862,7 +1828,16 @@ mod tests {
             &mut renderer,
             &engine,
             &img,
-            &[Transformation::Brightness(0.2), Transformation::Grayscale],
+            &[
+                Transform {
+                    shader_id: "brightness",
+                    value: 0.2,
+                },
+                Transform {
+                    shader_id: "grayscale",
+                    value: 0.0,
+                },
+            ],
         );
 
         for pixel in out_img.pixels() {
@@ -1892,7 +1867,15 @@ mod tests {
         // 10000 / 65535, inverted is 55535 / 65535.
         // Note: linear-light invert means 1.0 - linear_value.
         let img = make_solid_image(2, 2, 0, 65535, 32767);
-        let out_img = roundtrip(&mut renderer, &engine, &img, &[Transformation::Invert]);
+        let out_img = roundtrip(
+            &mut renderer,
+            &engine,
+            &img,
+            &[Transform {
+                shader_id: "invert",
+                value: 0.0,
+            }],
+        );
 
         for pixel in out_img.pixels() {
             // R: 0 -> inverted -> 65535
@@ -1918,7 +1901,16 @@ mod tests {
             &mut renderer,
             &engine,
             &img,
-            &[Transformation::Invert, Transformation::Invert],
+            &[
+                Transform {
+                    shader_id: "invert",
+                    value: 0.0,
+                },
+                Transform {
+                    shader_id: "invert",
+                    value: 0.0,
+                },
+            ],
         );
 
         for pixel in out_img.pixels() {
@@ -1993,7 +1985,14 @@ mod tests {
         // --- Run 1: cold (shader compilation + initial staging buffer allocation) ---
         let t_execute_1 = Instant::now();
         let ingested = renderer.ingest(&engine, &uploaded);
-        let transformed_1 = renderer.apply(&engine, &ingested, &Transformation::Brightness(0.1));
+        let transformed_1 = renderer.apply(
+            &engine,
+            &ingested,
+            &Transform {
+                shader_id: "brightness",
+                value: 0.1,
+            },
+        );
         let present_buf_1 = renderer.present(&engine, &transformed_1);
         let execute_ms_1 = t_execute_1.elapsed().as_secs_f64() * 1000.0;
 
@@ -2008,7 +2007,14 @@ mod tests {
         // Reuses `ingested` directly — matching interactive editing where the base
         // texture is cached in VRAM across slider changes.
         let t_execute_2 = Instant::now();
-        let transformed_2 = renderer.apply(&engine, &ingested, &Transformation::Brightness(0.1));
+        let transformed_2 = renderer.apply(
+            &engine,
+            &ingested,
+            &Transform {
+                shader_id: "brightness",
+                value: 0.1,
+            },
+        );
         let present_buf_2 = renderer.present(&engine, &transformed_2);
         let execute_ms_2 = t_execute_2.elapsed().as_secs_f64() * 1000.0;
 

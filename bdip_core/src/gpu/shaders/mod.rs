@@ -59,6 +59,35 @@ pub struct Transform {
     pub value: f32,
 }
 
+impl Transform {
+    /// Temporary bridge: converts from the legacy `Transformation` enum.
+    /// Removed in PR 5 when `Transformation` is deleted.
+    pub fn from_legacy(t: &crate::Transformation) -> Self {
+        match t {
+            crate::Transformation::Brightness(v) => Transform {
+                shader_id: "brightness",
+                value: *v,
+            },
+            crate::Transformation::Saturation(v) => Transform {
+                shader_id: "saturation",
+                value: *v,
+            },
+            crate::Transformation::Contrast(v) => Transform {
+                shader_id: "contrast",
+                value: *v,
+            },
+            crate::Transformation::Grayscale => Transform {
+                shader_id: "grayscale",
+                value: 0.0,
+            },
+            crate::Transformation::Invert => Transform {
+                shader_id: "invert",
+                value: 0.0,
+            },
+        }
+    }
+}
+
 impl std::fmt::Display for Transform {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match registry_by_id(self.shader_id) {
