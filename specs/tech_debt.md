@@ -5,25 +5,6 @@ This document tracks known architectural shortcuts, generic naming, and structur
 > [!CAUTION]
 > **To Future AI Contexts / Agents:** The remediations proposed below are *suggestions* based on the state of the codebase at the time they were documented. Do NOT execute them blindly. Always cross-reference these suggestions with the *current* state of the code and evaluate if a better, more modern pattern is appropriate before executing refactors.
 
-## UI Responsiveness
-
-### Synchronous Readback Blocks UI Thread
-- **Location:** `bdip_core/src/gpu/texture.rs` (`download_presentation_buffer`), call sites in
-  `bdip/src/ui/app.rs`
-- **Current Pattern:** `download_presentation_buffer()` calls `device.poll(wait_indefinitely)`, which
-  blocks the calling thread until the GPU finishes and the PCIe transfer completes. This is currently
-  called on the UI thread during both the initial image load (to generate the UI handle) and during
-  transform adjustments.
-- **Risk:** While fast on Apple Silicon (1–4ms), on discrete GPUs or with very large images (40MP+),
-  this blocking call causes the UI to freeze momentarily. This is particularly noticeable after the
-  initial file load completes, where the app stays "busy" for another few hundred milliseconds while
-  the GPU prepares the preview.
-- **Suggested Remediation:** Move the full pipeline invocation (compute shader dispatch +
-  `download_presentation_buffer`) into an `iced::Task`. Once the readback completes, send the
-  resulting `Rgba16Image` back to the UI state via a `Message`. This keeps the UI event loop fully
-  responsive with a "loading" state instead of freezing.
-- **Priority:** **Medium.** Important for maintaining a premium feel on high-resolution imagery.
-
 ## API Design
 
 ### Missing High-Level Pipeline Execution Method
