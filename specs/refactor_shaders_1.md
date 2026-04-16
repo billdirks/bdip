@@ -184,9 +184,32 @@ identical to today. The `make_uniform` function pointer adds one indirect call p
   linker section manipulation). But it is a dependency.
 - **Type erasure** loses some compile-time guarantees -- e.g., you can't exhaustively match
   on all shader types. In practice this doesn't matter because the system is open by design.
-- **`Transform` uses a string ID** instead of a type-safe enum variant. Typos in shader IDs
-  are caught at registration time (duplicate check) but not at construction time unless you
-  use associated constants.
+- **`Transform` uses a string ID** instead of a type-safe enum variant. Typos in shader IDs 
+  are not caught at construction time unless you use associated constants.
+
+### Validation: Enforcing Uniqueness
+
+Because `inventory` is a flat collection, the compiler cannot enforce that `id` or `display_name`
+are unique across all shaders. To prevent collisions (e.g., two shaders claiming the ID 
+`"brightness"`), we use a mandatory unit test that scans the registry:
+
+```rust
+#[test]
+fn test_shader_registry_integrity() {
+    let mut ids = std::collections::HashSet::new();
+    let mut names = std::collections::HashSet::new();
+
+    for reg in inventory::iter::<ShaderRegistration>() {
+        assert!(ids.insert(reg.meta.id), 
+            "Collision: Duplicate shader ID '{}'", reg.meta.id);
+        assert!(names.insert(reg.meta.display_name), 
+            "Collision: Duplicate display name '{}'", reg.meta.display_name);
+    }
+}
+```
+
+This ensures that while the registry is "open" to contributors, it is still strictly validated 
+before any code is merged or shipped.
 
 ---
 
