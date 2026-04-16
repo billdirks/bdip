@@ -189,15 +189,12 @@ slice in `sidebar.rs`. The sidebar already handles the two control paths:
 - **Parameterized transforms** (those matching the slider arm in
   `transform_view`): add the variant to the `pick_list` and the slider
   match arm in `sidebar.rs`. The slider range is `-1.0..=1.0` with step
-  `0.01`. The `app.rs` `update()` handler converts `SliderReleased` into
-  a `Transformation::Example(preview_value)` push to `HistoryManager`.
+  `0.01`.
 - **Parameterless transforms**: add the variant to the `pick_list` and the
   toggle match arm in `sidebar.rs`. The toggle displays an "Apply" label on
   the left and an `iced::widget::toggler` on the right. Its active state
   reflects whether the selected transform is the most recent entry in
-  `HistoryManager`. The `ToggleParameterless` message in `app.rs` checks the
-  current active state: if ON it calls `history.undo()`; if OFF it pushes the
-  transform via `history.apply()`.
+  `HistoryManager`.
 
 `TransformOption` is defined in `bdip/src/ui/message.rs`. Add the variant
 there too, along with its `Display` and `from_transformation` arms.
@@ -215,12 +212,13 @@ const TRANSFORM_OPTIONS: &[TransformOption] = &[
 fn transform_view(app: &BdipApp) -> Element<'_, Message> {
     let transform_control: Element<'_, Message> = match app.selected_transform {
         // parameterized → slider
-        TransformOption::Brightness
-        | TransformOption::Saturation
-        | TransformOption::Contrast
+        TransformOption::Brightness 
+        | TransformOption::Saturation 
+        | TransformOption::Contrast 
         | TransformOption::Example => { /* slider widget */ }
+        
         // parameterless → "Apply" label + toggler
-        TransformOption::Grayscale | TransformOption::Invert => {
+        TransformOption::Grayscale | TransformOption::Invert | TransformOption::ExampleParamless => {
             let is_active = app.is_transform_active(&app.selected_transform);
             row![
                 text("Apply"),
@@ -235,17 +233,33 @@ fn transform_view(app: &BdipApp) -> Element<'_, Message> {
 }
 ```
 
-**`update()` in `app.rs`:** the `SliderReleased` handler builds the
-`Transformation` from `selected_transform` and `preview_value`. Add a
-match arm there if the new variant is parameterized:
+**UI Logic in `app.rs`:**
 
-```rust
-TransformOption::Example => Transformation::Example(self.preview_value),
-```
+You must update **two helper functions** in `bdip/src/ui/app.rs` to glue the
+UI and history together:
 
-For parameterless variants, the `ToggleParameterless` handler derives the
-action from the current history state — no additional match arms are needed
-there.
+1.  **`make_transform()`**: This helper converts the UI's `TransformOption`
+    selection and live slider value into a `bdip_core::Transformation`. Add
+    a match arm for your new variant:
+
+    ```rust
+    TransformOption::Example => Transformation::Example(val),
+    ```
+
+2.  **`active_transform_value()`**: This helper is called when you select a
+    variant from the pick list. It scans the history to see if that variant is
+    already active and, if so, returns its current value so the slider moves
+    to the correct position. Add your variant to the parameterized match arm:
+
+    ```rust
+    match last {
+        Transformation::Brightness(v)
+        | Transformation::Saturation(v)
+        | Transformation::Contrast(v)
+        | Transformation::Example(v) => *v, // <-- add here
+        Transformation::Grayscale | Transformation::Invert => 0.0,
+    }
+    ```
 
 ### 9. Write tests
 
@@ -277,8 +291,8 @@ the existing test suite. Each test must cover a single, isolated behavior
 | `bdip_core/src/transformation.rs` | `Transformation` variant + `Display` arm (if new) |
 | `bdip/src/main.rs` | `parse_transform` arm |
 | `bdip/src/ui/message.rs` | `TransformOption` variant, `Display` arm, `from_transformation` arm |
-| `bdip/src/ui/sidebar.rs` | `TRANSFORM_OPTIONS` slice, slider/button match arms |
-| `bdip/src/ui/app.rs` | `SliderReleased` / `ApplyParameterless` match arms |
+| `bdip/src/ui/sidebar.rs` | `TRANSFORM_OPTIONS` slice, `transform_view` match arms |
+| `bdip/src/ui/app.rs` | `make_transform` and `active_transform_value` helpers |
 
 ## Touch Points in `pipeline.rs`
 
