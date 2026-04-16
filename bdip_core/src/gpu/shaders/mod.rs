@@ -1,3 +1,5 @@
+pub mod brightness;
+
 /// Metadata that the UI, CLI, and pipeline all read from a registered shader.
 #[derive(Debug, Clone)]
 pub struct ShaderMeta {
@@ -23,14 +25,15 @@ pub struct ShaderRegistration {
 
 inventory::collect!(ShaderRegistration);
 
+fn make_uniform_for<T: TransformShader>(val: f32) -> Vec<u8> {
+    bytemuck::bytes_of(&T::from_value(val)).to_vec()
+}
+
 impl ShaderRegistration {
-    pub fn new<T: TransformShader>() -> Self {
+    pub const fn new<T: TransformShader>() -> Self {
         Self {
             meta: T::META,
-            make_uniform: |val| {
-                let params = T::from_value(val);
-                bytemuck::bytes_of(&params).to_vec()
-            },
+            make_uniform: make_uniform_for::<T>,
         }
     }
 }
@@ -94,5 +97,29 @@ mod tests {
     #[test]
     fn test_registry_by_id_unknown_returns_none() {
         assert!(registry_by_id("nonexistent").is_none());
+    }
+
+    #[test]
+    fn test_shader_registry_no_duplicate_ids() {
+        let mut ids = std::collections::HashSet::new();
+        for reg in inventory::iter::<ShaderRegistration> {
+            assert!(
+                ids.insert(reg.meta.id),
+                "Duplicate shader ID: '{}'",
+                reg.meta.id
+            );
+        }
+    }
+
+    #[test]
+    fn test_shader_registry_no_duplicate_display_names() {
+        let mut names = std::collections::HashSet::new();
+        for reg in inventory::iter::<ShaderRegistration> {
+            assert!(
+                names.insert(reg.meta.display_name),
+                "Duplicate display name: '{}'",
+                reg.meta.display_name
+            );
+        }
     }
 }

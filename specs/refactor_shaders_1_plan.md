@@ -395,7 +395,13 @@ the old dispatch path is deleted.
 **Files modified:**
 - `bdip_core/src/gpu/shaders/mod.rs` — add `pub mod brightness;`
 
-**Tests** (in `bdip_core/src/gpu/shaders/mod.rs`):
+**Test placement rule:** Shader-specific tests live in the shader's own module
+(e.g., `brightness.rs`). Only tests that exercise cross-cutting concerns — registry
+integrity, `Transform` display fallback, unknown-ID behavior — belong in `mod.rs`.
+This keeps each shader self-contained and avoids `mod.rs` growing with per-shader
+test boilerplate.
+
+**Tests** (in `bdip_core/src/gpu/shaders/brightness.rs`):
 - `test_brightness_registry_entry_exists` — `registry_by_id("brightness")` returns
   `Some`.
 - `test_brightness_registry_metadata` — verify `display_name` is `"Brightness"` and
@@ -405,6 +411,8 @@ the old dispatch path is deleted.
   _padding: [0.0; 3] })`.
 - `test_transform_display_slider` — `Transform { shader_id: "brightness",
   value: 0.35 }.to_string()` equals `"Brightness: 0.35"`.
+
+**Tests** (in `bdip_core/src/gpu/shaders/mod.rs`):
 - `test_shader_registry_no_duplicate_ids` — (now exercises one real entry).
 - `test_shader_registry_no_duplicate_display_names` — (now exercises one real entry).
 
@@ -451,11 +459,20 @@ paths use `"../<name>.wgsl"` to reach one directory up.
 - `bdip_core/src/gpu/shaders/mod.rs` — add `pub mod saturation;`,
   `pub mod contrast;`, `pub mod grayscale;`, `pub mod invert;`
 
+**Test placement:** Follow the same rule established in PR 2 — shader-specific
+tests live in the shader's own module; only cross-cutting tests live in `mod.rs`.
+
+**Tests** (in each shader's own `.rs` file):
+- `test_<name>_registry_entry_exists` — `registry_by_id("<id>")` returns `Some`.
+- `test_<name>_registry_metadata` — verify `display_name` and `param` match the
+  declared values.
+- `test_<name>_make_uniform_known_value` — call `make_uniform` with a known value
+  and verify the returned bytes match the expected params struct bytes.
+- `test_transform_display_toggle` (in `grayscale.rs`) — `Transform { shader_id:
+  "grayscale", value: 0.0 }.to_string()` equals `"Grayscale"` (no value shown for
+  toggles).
+
 **Tests** (in `bdip_core/src/gpu/shaders/mod.rs`):
-- For each shader: `test_<name>_registry_entry_exists`,
-  `test_<name>_registry_metadata`, `test_<name>_make_uniform_known_value`
-- `test_transform_display_toggle` — `Transform { shader_id: "grayscale",
-  value: 0.0 }.to_string()` equals `"Grayscale"` (no value shown for toggles).
 - `test_shader_registry_no_duplicate_ids` — now validates all five entries.
 - `test_shader_registry_no_duplicate_display_names` — now validates all five.
 
@@ -910,6 +927,48 @@ Update `specs/tech_debt.md` to mark the "Shader Isolation" entry as resolved.
 
 ---
 
+---
+
+### PR 7: Eliminate `pub mod` Declarations via `automod` (Not Fully Specified)
+
+> **Note:** This PR is a placeholder. The approach is not fully specified and
+> will need design work before implementation begins.
+
+**Goal:** Remove the requirement to add `pub mod <name>;` to `shaders/mod.rs`
+when a new shader is added, fully closing the gap to the "one file only"
+contribution goal.
+
+**Motivation:** After PRs 1–6, adding a shader requires creating one `.wgsl`
+file and one `.rs` file, plus adding one `pub mod <name>;` line to `mod.rs`.
+The `automod` crate (`automod = "1"`) can replace the explicit `pub mod`
+declarations with a single macro call that auto-discovers all `.rs` siblings:
+
+```rust
+// shaders/mod.rs — replaces all explicit `pub mod` lines
+automod::dir!(pub "src/gpu/shaders");
+```
+
+With this in place, dropping a new `.rs` file into `src/gpu/shaders/` is
+sufficient — `mod.rs` never needs editing.
+
+**Known open questions before this can be specified:**
+- Verify `automod` interacts correctly with `inventory::collect!` and that all
+  `inventory::submit!` calls in auto-discovered modules are linked in.
+- Determine whether `automod::dir!` works with the workspace's Rust edition and
+  `rustfmt` without issues.
+- Confirm the crate is actively maintained and acceptable to add as a dependency.
+
+**Files that will need updating:**
+- `bdip_core/src/gpu/shaders/mod.rs` — replace explicit `pub mod` lines with
+  `automod::dir!`.
+- `bdip_core/Cargo.toml` — add `automod` dependency.
+- `specs/adding_a_shader.md` — remove step 3 ("add `pub mod <name>;` to
+  `shaders/mod.rs`") entirely; the process becomes two files only.
+
+**Dependencies:** PR 6.
+
+---
+
 ## PR Dependency Graph
 
 ```
@@ -929,10 +988,14 @@ PR 5  (replace Transformation enum — removes from_legacy bridge)
   |
   v
 PR 6  (documentation update)
+  |
+  v
+PR 7  (automod — eliminate pub mod declarations) [NOT FULLY SPECIFIED]
 ```
 
-All PRs are sequential. Each depends on the previous one. PRs 1-3 are purely
+PRs 1–6 are sequential. Each depends on the previous one. PRs 1-3 are purely
 additive (no existing code is changed or broken). PR 4 rewrites `pipeline.rs`
 internals and adds a temporary `from_legacy` bridge to keep the workspace
 compiling. PR 5 is the cascading change that deletes `Transformation`,
-`TransformOption`, and the bridge. PR 6 is documentation only.
+`TransformOption`, and the bridge. PR 6 is documentation only. PR 7 is an
+optional follow-up to fully close the single-file contribution goal.
