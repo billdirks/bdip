@@ -1,8 +1,10 @@
 pub mod brightness;
 pub mod contrast;
 pub mod grayscale;
+pub mod highlights;
 pub mod invert;
 pub mod saturation;
+pub mod shadows;
 pub mod vignette;
 
 #[cfg(test)]
