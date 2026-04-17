@@ -1,4 +1,4 @@
-use crate::gpu::shaders::{ParamKind, ShaderMeta, TransformShader};
+use crate::gpu::shaders::{ParamKind, ShaderMeta, SliderDef, TransformShader};
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -12,16 +12,17 @@ impl TransformShader for SaturationParams {
         id: "saturation",
         display_name: "Saturation",
         wgsl_source: include_str!("saturation.wgsl"),
-        param: ParamKind::Slider {
+        param: ParamKind::Sliders(&[SliderDef {
+            name: "Amount",
             min: -1.0,
             max: 1.0,
             default: 0.0,
-        },
+        }]),
     };
 
-    fn from_value(value: f32) -> Self {
+    fn from_values(values: &[f32]) -> Self {
         Self {
-            value,
+            value: values[0],
             _padding: [0.0; 3],
         }
     }
@@ -36,7 +37,7 @@ mod tests {
     use super::*;
     use crate::gpu::engine::GpuEngine;
     use crate::gpu::pipeline::Renderer;
-    use crate::gpu::shaders::{Transform, registry_by_id};
+    use crate::gpu::shaders::{ParamKind, SliderDef, Transform, registry_by_id};
     use crate::gpu::test_util::{make_solid_image, roundtrip};
 
     #[test]
@@ -50,18 +51,19 @@ mod tests {
         assert_eq!(reg.meta.display_name, "Saturation");
         assert_eq!(
             reg.meta.param,
-            ParamKind::Slider {
+            ParamKind::Sliders(&[SliderDef {
+                name: "Amount",
                 min: -1.0,
                 max: 1.0,
                 default: 0.0,
-            }
+            }])
         );
     }
 
     #[test]
     fn test_saturation_make_uniform_known_value() {
         let reg = registry_by_id("saturation").unwrap();
-        let bytes = (reg.make_uniform)(0.5);
+        let bytes = (reg.make_uniform)(&[0.5]);
         let expected = bytemuck::bytes_of(&SaturationParams {
             value: 0.5,
             _padding: [0.0; 3],
@@ -82,7 +84,7 @@ mod tests {
             &img,
             &[Transform {
                 shader_id: "saturation",
-                value: 0.0,
+                values: vec![0.0],
             }],
         );
 
@@ -121,7 +123,7 @@ mod tests {
             &img,
             &[Transform {
                 shader_id: "saturation",
-                value: -1.0,
+                values: vec![-1.0],
             }],
         );
 
@@ -164,7 +166,7 @@ mod tests {
             &img,
             &[Transform {
                 shader_id: "saturation",
-                value: 0.5,
+                values: vec![0.5],
             }],
         );
 

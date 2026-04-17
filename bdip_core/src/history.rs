@@ -88,7 +88,7 @@ mod tests {
         let mut hm = HistoryManager::new();
         hm.apply(Transform {
             shader_id: "grayscale",
-            value: 0.0,
+            values: vec![],
         });
         assert_eq!(hm.applied_transforms().len(), 1);
         hm.clear();
@@ -100,11 +100,11 @@ mod tests {
         let mut hm = HistoryManager::new();
         hm.apply(Transform {
             shader_id: "grayscale",
-            value: 0.0,
+            values: vec![],
         });
         hm.apply(Transform {
             shader_id: "invert",
-            value: 0.0,
+            values: vec![],
         });
 
         assert_eq!(hm.undo(), Some(()));
@@ -119,12 +119,12 @@ mod tests {
         let mut hm = HistoryManager::new();
         hm.apply(Transform {
             shader_id: "grayscale",
-            value: 0.0,
+            values: vec![],
         });
         hm.undo();
         hm.apply(Transform {
             shader_id: "contrast",
-            value: 0.8,
+            values: vec![0.8],
         });
         assert_eq!(hm.redo(), None);
     }
@@ -147,7 +147,7 @@ mod tests {
         let mut hm = HistoryManager::new();
         hm.apply(Transform {
             shader_id: "grayscale",
-            value: 0.0,
+            values: vec![],
         });
         assert!(hm.can_undo());
     }
@@ -157,7 +157,7 @@ mod tests {
         let mut hm = HistoryManager::new();
         hm.apply(Transform {
             shader_id: "grayscale",
-            value: 0.0,
+            values: vec![],
         });
         hm.undo();
         assert!(!hm.can_undo());
@@ -174,7 +174,7 @@ mod tests {
         let mut hm = HistoryManager::new();
         hm.apply(Transform {
             shader_id: "invert",
-            value: 0.0,
+            values: vec![],
         });
         hm.undo();
         assert!(hm.can_redo());
@@ -185,12 +185,12 @@ mod tests {
         let mut hm = HistoryManager::new();
         hm.apply(Transform {
             shader_id: "invert",
-            value: 0.0,
+            values: vec![],
         });
         hm.undo();
         hm.apply(Transform {
             shader_id: "grayscale",
-            value: 0.0,
+            values: vec![],
         });
         assert!(!hm.can_redo());
     }
@@ -200,11 +200,11 @@ mod tests {
         let mut hm = HistoryManager::new();
         hm.apply(Transform {
             shader_id: "brightness",
-            value: 0.8,
+            values: vec![0.8],
         });
         hm.apply(Transform {
             shader_id: "brightness",
-            value: 0.8,
+            values: vec![0.8],
         });
         assert_eq!(hm.applied_transforms().len(), 1);
     }
@@ -214,18 +214,18 @@ mod tests {
         let mut hm = HistoryManager::new();
         hm.apply(Transform {
             shader_id: "brightness",
-            value: 0.8,
+            values: vec![0.8],
         });
         hm.apply(Transform {
             shader_id: "saturation",
-            value: 0.5,
+            values: vec![0.5],
         });
         hm.undo();
         // Redo stack now has saturation(0.5). Pushing the same brightness(0.8) that is on top
         // should be a no-op and must not wipe the redo stack.
         hm.apply(Transform {
             shader_id: "brightness",
-            value: 0.8,
+            values: vec![0.8],
         });
         assert!(hm.can_redo());
     }
@@ -235,11 +235,11 @@ mod tests {
         let mut hm = HistoryManager::new();
         hm.apply(Transform {
             shader_id: "brightness",
-            value: 0.3,
+            values: vec![0.3],
         });
         hm.apply(Transform {
             shader_id: "saturation",
-            value: 0.5,
+            values: vec![0.5],
         });
         hm.undo(); // undoes saturation(0.5)
         hm.undo(); // undoes brightness(0.3) — last undone, so next to redo
@@ -250,14 +250,14 @@ mod tests {
             redo[0],
             Transform {
                 shader_id: "brightness",
-                value: 0.3
+                values: vec![0.3]
             }
         );
         assert_eq!(
             redo[1],
             Transform {
                 shader_id: "saturation",
-                value: 0.5
+                values: vec![0.5]
             }
         );
     }

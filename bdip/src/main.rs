@@ -22,23 +22,32 @@ fn parse_transform(s: &str) -> anyhow::Result<Transform> {
         )
     })?;
 
-    let value = match &reg.meta.param {
-        ParamKind::Slider { .. } => {
-            if parts.len() != 2 {
+    let values = match &reg.meta.param {
+        ParamKind::Sliders(defs) => {
+            let value_strs: Vec<&str> = parts[1..].to_vec();
+            if value_strs.len() != defs.len() {
                 return Err(anyhow::anyhow!(
-                    "{} requires a float value. E.g., {}:0.5",
+                    "{} requires {} value(s). E.g., {}:{}",
                     reg.meta.display_name,
-                    reg.meta.id
+                    defs.len(),
+                    reg.meta.id,
+                    defs.iter()
+                        .map(|d| format!("{}", d.default))
+                        .collect::<Vec<_>>()
+                        .join(":")
                 ));
             }
-            parts[1].parse::<f32>()?
+            value_strs
+                .iter()
+                .map(|s| s.parse::<f32>().map_err(|e| anyhow::anyhow!(e)))
+                .collect::<anyhow::Result<Vec<f32>>>()?
         }
-        ParamKind::Toggle => 0.0,
+        ParamKind::Toggle => vec![],
     };
 
     Ok(Transform {
         shader_id: reg.meta.id,
-        value,
+        values,
     })
 }
 

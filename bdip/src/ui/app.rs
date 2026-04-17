@@ -214,7 +214,7 @@ impl BdipApp {
                 let (w, h) = base_image.dimensions();
                 let preview = Transform {
                     shader_id: self.selected_transform.id,
-                    value: val,
+                    values: vec![val],
                 };
                 let render_list = build_render_list(&self.history, Some(&preview));
                 self.spawn_render(RenderRequest::Preview {
@@ -230,7 +230,7 @@ impl BdipApp {
                 }
                 let t = Transform {
                     shader_id: self.selected_transform.id,
-                    value: self.preview_value,
+                    values: vec![self.preview_value],
                 };
                 self.history.apply(t);
                 self.is_previewing = false;
@@ -260,7 +260,7 @@ impl BdipApp {
                 } else {
                     let t = Transform {
                         shader_id: self.selected_transform.id,
-                        value: 0.0,
+                        values: vec![],
                     };
                     self.history.apply(t);
                 }
@@ -499,18 +499,18 @@ impl BdipApp {
 
     /// Returns the slider value for `opt` by examining the trailing run of the
     /// history. If the last entry in `history` is of type `opt`, returns that
-    /// value. Otherwise returns the shader's declared default (0.0 for all
-    /// current shaders).
+    /// value. Otherwise returns the shader's declared default, or 0.0 if
+    /// unavailable.
     pub fn active_transform_value(&self, opt: &ShaderOption) -> f32 {
         self.history
             .applied_transforms()
             .last()
             .filter(|t| t.shader_id == opt.id)
-            .map(|t| t.value)
+            .and_then(|t| t.values.first().copied())
             .unwrap_or_else(|| {
                 registry_by_id(opt.id)
                     .and_then(|r| match &r.meta.param {
-                        ParamKind::Slider { default, .. } => Some(*default),
+                        ParamKind::Sliders(defs) => defs.first().map(|d| d.default),
                         ParamKind::Toggle => None,
                     })
                     .unwrap_or(0.0)
@@ -612,11 +612,11 @@ mod tests {
         let input = vec![
             Transform {
                 shader_id: "brightness",
-                value: 0.3,
+                values: vec![0.3],
             },
             Transform {
                 shader_id: "saturation",
-                value: 0.5,
+                values: vec![0.5],
             },
         ];
         let result = collapse_adjacent(&input);
@@ -628,23 +628,23 @@ mod tests {
         let input = vec![
             Transform {
                 shader_id: "brightness",
-                value: 0.3,
+                values: vec![0.3],
             },
             Transform {
                 shader_id: "brightness",
-                value: 0.7,
+                values: vec![0.7],
             },
             Transform {
                 shader_id: "saturation",
-                value: 0.5,
+                values: vec![0.5],
             },
             Transform {
                 shader_id: "saturation",
-                value: 0.3,
+                values: vec![0.3],
             },
             Transform {
                 shader_id: "brightness",
-                value: 0.1,
+                values: vec![0.1],
             },
         ];
         let result = collapse_adjacent(&input);
@@ -653,15 +653,15 @@ mod tests {
             vec![
                 Transform {
                     shader_id: "brightness",
-                    value: 0.7
+                    values: vec![0.7]
                 },
                 Transform {
                     shader_id: "saturation",
-                    value: 0.3
+                    values: vec![0.3]
                 },
                 Transform {
                     shader_id: "brightness",
-                    value: 0.1
+                    values: vec![0.1]
                 },
             ]
         );
@@ -671,7 +671,7 @@ mod tests {
     fn test_collapse_adjacent_single_entry() {
         let input = vec![Transform {
             shader_id: "brightness",
-            value: 0.5,
+            values: vec![0.5],
         }];
         assert_eq!(collapse_adjacent(&input), input);
     }
@@ -681,22 +681,22 @@ mod tests {
         let input = vec![
             Transform {
                 shader_id: "brightness",
-                value: 0.1,
+                values: vec![0.1],
             },
             Transform {
                 shader_id: "brightness",
-                value: 0.5,
+                values: vec![0.5],
             },
             Transform {
                 shader_id: "brightness",
-                value: 0.9,
+                values: vec![0.9],
             },
         ];
         assert_eq!(
             collapse_adjacent(&input),
             vec![Transform {
                 shader_id: "brightness",
-                value: 0.9
+                values: vec![0.9]
             }]
         );
     }
@@ -706,11 +706,11 @@ mod tests {
         let (mut app, _) = BdipApp::new(None);
         app.history.apply(Transform {
             shader_id: "brightness",
-            value: 0.3,
+            values: vec![0.3],
         });
         app.history.apply(Transform {
             shader_id: "saturation",
-            value: 0.5,
+            values: vec![0.5],
         });
         assert_eq!(
             app.active_transform_value(&ShaderOption {
@@ -726,11 +726,11 @@ mod tests {
         let (mut app, _) = BdipApp::new(None);
         app.history.apply(Transform {
             shader_id: "brightness",
-            value: 0.3,
+            values: vec![0.3],
         });
         app.history.apply(Transform {
             shader_id: "saturation",
-            value: 0.5,
+            values: vec![0.5],
         });
         assert_eq!(
             app.active_transform_value(&ShaderOption {
@@ -758,15 +758,15 @@ mod tests {
         let (mut app, _) = BdipApp::new(None);
         app.history.apply(Transform {
             shader_id: "brightness",
-            value: 0.3,
+            values: vec![0.3],
         });
         app.history.apply(Transform {
             shader_id: "saturation",
-            value: 0.2,
+            values: vec![0.2],
         });
         app.history.apply(Transform {
             shader_id: "saturation",
-            value: 0.5,
+            values: vec![0.5],
         });
         assert_eq!(
             app.active_transform_value(&ShaderOption {

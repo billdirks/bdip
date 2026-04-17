@@ -125,7 +125,7 @@ mod tests {
         sched.request(RenderRequest::Preview {
             render_list: vec![Transform {
                 shader_id: "brightness",
-                value: 0.3,
+                values: vec![0.3],
             }],
             width: 100,
             height: 100,
@@ -134,7 +134,7 @@ mod tests {
         sched.request(RenderRequest::Preview {
             render_list: vec![Transform {
                 shader_id: "brightness",
-                value: 0.9,
+                values: vec![0.9],
             }],
             width: 100,
             height: 100,
@@ -150,7 +150,7 @@ mod tests {
             render_list,
             vec![Transform {
                 shader_id: "brightness",
-                value: 0.9
+                values: vec![0.9]
             }]
         );
     }

@@ -37,7 +37,7 @@ Define a params struct, implement `TransformShader`, and submit the registration
 **Parameterized shader (slider):**
 
 ```rust
-use crate::gpu::shaders::{ParamKind, ShaderMeta, TransformShader};
+use crate::gpu::shaders::{ParamKind, ShaderMeta, SliderDef, TransformShader};
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -51,11 +51,11 @@ impl TransformShader for ExampleParams {
         id: "example",
         display_name: "Example",
         wgsl_source: include_str!("example.wgsl"),
-        param: ParamKind::Slider { min: -1.0, max: 1.0, default: 0.0 },
+        param: ParamKind::Sliders(&[SliderDef { name: "Amount", min: -1.0, max: 1.0, default: 0.0 }]),
     };
 
-    fn from_value(value: f32) -> Self {
-        Self { value, _padding: [0.0; 3] }
+    fn from_values(values: &[f32]) -> Self {
+        Self { value: values[0], _padding: [0.0; 3] }
     }
 }
 
@@ -81,7 +81,7 @@ impl TransformShader for ExampleParams {
         param: ParamKind::Toggle,
     };
 
-    fn from_value(_: f32) -> Self {
+    fn from_values(_: &[f32]) -> Self {
         Self { _unused: [0.0; 4] }
     }
 }
@@ -164,8 +164,10 @@ Add a `#[cfg(test)] mod tests` block in your `mod.rs`. At minimum, include:
 
 - `test_<name>_registry_entry_exists` — `registry_by_id("<id>")` returns `Some`.
 - `test_<name>_registry_metadata` — verify `display_name` and `param` values.
-- `test_<name>_make_uniform_known_value` — call `(reg.make_uniform)(val)` and assert
-  the returned bytes match `bytemuck::bytes_of(&ExampleParams { value: val, .. })`.
+- `test_<name>_make_uniform_known_value` — call `(reg.make_uniform)(&[val])` and assert
+  the returned bytes match `bytemuck::bytes_of(&ExampleParams { value: val, .. })`. For
+  multi-parameter shaders, pass all values: `(reg.make_uniform)(&[val1, val2, ...])` and
+  construct the expected `Params` struct with each field set accordingly.
 - **GPU roundtrip tests** covering: identity (no-op value), extreme parameter values,
   alpha preservation, and chaining with an existing shader.
 

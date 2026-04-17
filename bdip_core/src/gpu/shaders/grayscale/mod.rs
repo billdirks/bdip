@@ -14,7 +14,7 @@ impl TransformShader for GrayscaleParams {
         param: ParamKind::Toggle,
     };
 
-    fn from_value(_: f32) -> Self {
+    fn from_values(_: &[f32]) -> Self {
         Self { _unused: [0.0; 4] }
     }
 }
@@ -46,7 +46,7 @@ mod tests {
     #[test]
     fn test_grayscale_make_uniform_known_value() {
         let reg = registry_by_id("grayscale").unwrap();
-        let bytes = (reg.make_uniform)(0.0);
+        let bytes = (reg.make_uniform)(&[]);
         let expected = bytemuck::bytes_of(&GrayscaleParams { _unused: [0.0; 4] });
         assert_eq!(bytes, expected);
     }
@@ -55,7 +55,7 @@ mod tests {
     fn test_transform_display_toggle() {
         let t = Transform {
             shader_id: "grayscale",
-            value: 0.0,
+            values: vec![],
         };
         assert_eq!(t.to_string(), "Grayscale");
     }
@@ -73,7 +73,7 @@ mod tests {
             &img,
             &[Transform {
                 shader_id: "grayscale",
-                value: 0.0,
+                values: vec![],
             }],
         );
 
@@ -106,7 +106,7 @@ mod tests {
             &img,
             &[Transform {
                 shader_id: "grayscale",
-                value: 0.0,
+                values: vec![],
             }],
         );
 
@@ -128,7 +128,7 @@ mod tests {
             &img,
             &[Transform {
                 shader_id: "grayscale",
-                value: 0.0,
+                values: vec![],
             }],
         );
 
@@ -164,7 +164,7 @@ mod tests {
             &img,
             &[Transform {
                 shader_id: "grayscale",
-                value: 0.0,
+                values: vec![],
             }],
         );
 
@@ -202,11 +202,11 @@ mod tests {
             &[
                 Transform {
                     shader_id: "brightness",
-                    value: 0.2,
+                    values: vec![0.2],
                 },
                 Transform {
                     shader_id: "grayscale",
-                    value: 0.0,
+                    values: vec![],
                 },
             ],
         );

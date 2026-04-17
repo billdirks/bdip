@@ -21,11 +21,11 @@ fn test_brightness_saturation_commutativity() {
         &[
             Transform {
                 shader_id: "brightness",
-                value: 0.3,
+                values: vec![0.3],
             },
             Transform {
                 shader_id: "saturation",
-                value: -0.5,
+                values: vec![-0.5],
             },
         ],
     );
@@ -36,11 +36,11 @@ fn test_brightness_saturation_commutativity() {
         &[
             Transform {
                 shader_id: "saturation",
-                value: -0.5,
+                values: vec![-0.5],
             },
             Transform {
                 shader_id: "brightness",
-                value: 0.3,
+                values: vec![0.3],
             },
         ],
     );

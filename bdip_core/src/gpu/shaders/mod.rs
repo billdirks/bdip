@@ -7,6 +7,15 @@ pub mod saturation;
 #[cfg(test)]
 mod cross_shader_tests;
 
+/// A named slider definition — one entry per adjustable parameter on a shader.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SliderDef {
+    pub name: &'static str,
+    pub min: f32,
+    pub max: f32,
+    pub default: f32,
+}
+
 /// Metadata that the UI, CLI, and pipeline all read from a registered shader.
 #[derive(Debug, Clone)]
 pub struct ShaderMeta {
@@ -19,21 +28,21 @@ pub struct ShaderMeta {
 /// Describes what kind of parameter a shader accepts.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ParamKind {
-    Slider { min: f32, max: f32, default: f32 },
+    Sliders(&'static [SliderDef]),
     Toggle,
 }
 
 /// Type-erased registration entry collected by `inventory` at link time.
 pub struct ShaderRegistration {
     pub meta: ShaderMeta,
-    /// Creates the uniform byte buffer from a parameter value.
-    pub make_uniform: fn(f32) -> Vec<u8>,
+    /// Creates the uniform byte buffer from parameter values.
+    pub make_uniform: fn(&[f32]) -> Vec<u8>,
 }
 
 inventory::collect!(ShaderRegistration);
 
-fn make_uniform_for<T: TransformShader>(val: f32) -> Vec<u8> {
-    bytemuck::bytes_of(&T::from_value(val)).to_vec()
+fn make_uniform_for<T: TransformShader>(values: &[f32]) -> Vec<u8> {
+    bytemuck::bytes_of(&T::from_values(values)).to_vec()
 }
 
 impl ShaderRegistration {
@@ -49,17 +58,17 @@ impl ShaderRegistration {
 /// each shader module registers it without editing any central list.
 pub trait TransformShader: bytemuck::Pod {
     const META: ShaderMeta;
-    fn from_value(value: f32) -> Self;
+    fn from_values(values: &[f32]) -> Self;
     fn to_bytes(&self) -> &[u8] {
         bytemuck::bytes_of(self)
     }
 }
 
-/// A transform instance: which shader + what parameter value.
+/// A transform instance: which shader + what parameter values.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Transform {
     pub shader_id: &'static str,
-    pub value: f32,
+    pub values: Vec<f32>,
 }
 
 /// Pick-list item for the sidebar transform selector. Built from the shader
@@ -78,14 +87,26 @@ impl std::fmt::Display for ShaderOption {
 
 impl std::fmt::Display for Transform {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let format_values = |values: &[f32]| -> String {
+            values
+                .iter()
+                .map(|v| format!("{v:.2}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
         match registry_by_id(self.shader_id) {
             Some(reg) => match reg.meta.param {
-                ParamKind::Slider { .. } => {
-                    write!(f, "{}: {:.2}", reg.meta.display_name, self.value)
+                ParamKind::Sliders(_) => {
+                    write!(
+                        f,
+                        "{}: {}",
+                        reg.meta.display_name,
+                        format_values(&self.values)
+                    )
                 }
                 ParamKind::Toggle => write!(f, "{}", reg.meta.display_name),
             },
-            None => write!(f, "{}: {:.2}", self.shader_id, self.value),
+            None => write!(f, "{}: {}", self.shader_id, format_values(&self.values)),
         }
     }
 }
@@ -117,9 +138,18 @@ mod tests {
     fn test_transform_display_unknown_id_fallback() {
         let t = Transform {
             shader_id: "nonexistent_shader",
-            value: 1.23,
+            values: vec![1.23],
         };
         assert_eq!(t.to_string(), "nonexistent_shader: 1.23");
+    }
+
+    #[test]
+    fn test_transform_display_multi_value_format() {
+        let t = Transform {
+            shader_id: "nonexistent_shader",
+            values: vec![0.50, 0.40],
+        };
+        assert_eq!(t.to_string(), "nonexistent_shader: 0.50, 0.40");
     }
 
     #[test]

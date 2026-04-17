@@ -45,8 +45,9 @@ fn transform_view(app: &BdipApp) -> Element<'_, Message> {
 
     let selected_reg = registry_by_id(app.selected_transform.id);
     let transform_control: Element<'_, Message> = match selected_reg.map(|r| &r.meta.param) {
-        Some(ParamKind::Slider { min, max, .. }) => {
-            let s = slider(*min..=*max, app.preview_value, Message::SliderChanged)
+        Some(ParamKind::Sliders(defs)) => {
+            let def = &defs[0];
+            let s = slider(def.min..=def.max, app.preview_value, Message::SliderChanged)
                 .step(0.01)
                 .on_release(Message::SliderReleased);
             let value_label = text(format!("{:.2}", app.preview_value));

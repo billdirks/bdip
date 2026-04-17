@@ -722,7 +722,7 @@ impl Renderer {
             ],
         });
 
-        let uniform_bytes = (reg.make_uniform)(transform.value);
+        let uniform_bytes = (reg.make_uniform)(&transform.values);
         let params_buffer = engine
             .device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -783,11 +783,11 @@ mod tests {
             &[
                 Transform {
                     shader_id: "brightness",
-                    value: -0.2,
+                    values: vec![-0.2],
                 },
                 Transform {
                     shader_id: "brightness",
-                    value: 0.5,
+                    values: vec![0.5],
                 },
             ],
         );
@@ -830,11 +830,11 @@ mod tests {
             &[
                 Transform {
                     shader_id: "brightness",
-                    value: 0.3,
+                    values: vec![0.3],
                 },
                 Transform {
                     shader_id: "contrast",
-                    value: 0.5,
+                    values: vec![0.5],
                 },
             ],
         );
@@ -1149,7 +1149,7 @@ mod tests {
             &ingested,
             &Transform {
                 shader_id: "brightness",
-                value: 0.1,
+                values: vec![0.1],
             },
         );
         let present_buf_1 = renderer.present(&engine, &transformed_1);
@@ -1171,7 +1171,7 @@ mod tests {
             &ingested,
             &Transform {
                 shader_id: "brightness",
-                value: 0.1,
+                values: vec![0.1],
             },
         );
         let present_buf_2 = renderer.present(&engine, &transformed_2);

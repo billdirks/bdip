@@ -14,7 +14,7 @@ impl TransformShader for InvertParams {
         param: ParamKind::Toggle,
     };
 
-    fn from_value(_: f32) -> Self {
+    fn from_values(_: &[f32]) -> Self {
         Self { _unused: [0.0; 4] }
     }
 }
@@ -44,7 +44,7 @@ mod tests {
     #[test]
     fn test_invert_make_uniform_known_value() {
         let reg = registry_by_id("invert").unwrap();
-        let bytes = (reg.make_uniform)(0.0);
+        let bytes = (reg.make_uniform)(&[]);
         let expected = bytemuck::bytes_of(&InvertParams { _unused: [0.0; 4] });
         assert_eq!(bytes, expected);
     }
@@ -62,7 +62,7 @@ mod tests {
             &img,
             &[Transform {
                 shader_id: "invert",
-                value: 0.0,
+                values: vec![],
             }],
         );
 
@@ -93,11 +93,11 @@ mod tests {
             &[
                 Transform {
                     shader_id: "invert",
-                    value: 0.0,
+                    values: vec![],
                 },
                 Transform {
                     shader_id: "invert",
-                    value: 0.0,
+                    values: vec![],
                 },
             ],
         );
