@@ -1,8 +1,10 @@
+use bdip_core::HistoryManager;
 use bdip_core::gpu::engine::GpuEngine;
 use bdip_core::gpu::pipeline::Renderer;
-use bdip_core::gpu::shaders::Transform;
+use bdip_core::gpu::shaders::{
+    ParamKind, ShaderOption, Transform, registry_by_id, sorted_registrations,
+};
 use bdip_core::gpu::texture::upload_texture;
-use bdip_core::{HistoryManager, Transformation};
 use iced::widget::{column, container, row};
 use iced::{Element, Length, Subscription, Task};
 use std::path::PathBuf;
@@ -11,7 +13,7 @@ use std::sync::{Arc, Mutex};
 use super::canvas;
 use super::canvas::presentation_to_handle;
 use super::menu_bar;
-use super::message::{Message, TransformOption};
+use super::message::Message;
 use super::scheduler::{CompleteResult, RenderRequest, RenderScheduler, ScheduleResult};
 use super::sidebar;
 
@@ -42,7 +44,7 @@ pub struct BdipApp {
 
     // Transform state
     pub history: HistoryManager,
-    pub selected_transform: TransformOption,
+    pub selected_transform: ShaderOption,
     /// Current slider display value. During a drag this is the live position;
     /// otherwise it equals the last committed value for the selected transform
     /// (derived from the trailing run in history).
@@ -85,7 +87,13 @@ impl BdipApp {
                 gpu,
                 scheduler: RenderScheduler::new(),
                 history: HistoryManager::new(),
-                selected_transform: TransformOption::Brightness,
+                selected_transform: sorted_registrations()
+                    .first()
+                    .map(|r| ShaderOption {
+                        id: r.meta.id,
+                        display_name: r.meta.display_name,
+                    })
+                    .expect("shader registry must not be empty"),
                 preview_value: 0.0,
                 is_previewing: false,
                 error_message,
@@ -204,7 +212,10 @@ impl BdipApp {
                     return Task::none();
                 };
                 let (w, h) = base_image.dimensions();
-                let preview = make_transform(&self.selected_transform, val);
+                let preview = Transform {
+                    shader_id: self.selected_transform.id,
+                    value: val,
+                };
                 let render_list = build_render_list(&self.history, Some(&preview));
                 self.spawn_render(RenderRequest::Preview {
                     render_list,
@@ -217,7 +228,10 @@ impl BdipApp {
                 if !self.is_previewing {
                     return Task::none();
                 }
-                let t = make_transform(&self.selected_transform, self.preview_value);
+                let t = Transform {
+                    shader_id: self.selected_transform.id,
+                    value: self.preview_value,
+                };
                 self.history.apply(t);
                 self.is_previewing = false;
                 // preview_value stays at its current position — the slider does not reset.
@@ -244,7 +258,10 @@ impl BdipApp {
                 if is_active {
                     self.history.undo();
                 } else {
-                    let t = make_transform(&self.selected_transform, 0.0);
+                    let t = Transform {
+                        shader_id: self.selected_transform.id,
+                        value: 0.0,
+                    };
                     self.history.apply(t);
                 }
                 let Some(base_image) = &self.base_image else {
@@ -464,13 +481,12 @@ impl BdipApp {
         }
     }
 
-    /// Checks if the provided `TransformOption` represents the most recently applied transformation.
-    pub fn is_transform_active(&self, opt: &TransformOption) -> bool {
+    /// Checks if the provided `ShaderOption` represents the most recently applied transformation.
+    pub fn is_transform_active(&self, opt: &ShaderOption) -> bool {
         self.history
             .applied_transforms()
             .last()
-            .map(|t| TransformOption::from_transformation(t) == *opt)
-            .unwrap_or(false)
+            .is_some_and(|t| t.shader_id == opt.id)
     }
 
     /// Returns true if the GPU is initialized and a base image is currently
@@ -483,21 +499,22 @@ impl BdipApp {
 
     /// Returns the slider value for `opt` by examining the trailing run of the
     /// history. If the last entry in `history` is of type `opt`, returns that
-    /// value. Otherwise returns 0.0 (the type was interrupted by a different
-    /// transform, or history is empty).
-    pub fn active_transform_value(&self, opt: &TransformOption) -> f32 {
-        let Some(last) = self.history.applied_transforms().last() else {
-            return 0.0;
-        };
-        if TransformOption::from_transformation(last) != *opt {
-            return 0.0;
-        }
-        match last {
-            Transformation::Brightness(v)
-            | Transformation::Saturation(v)
-            | Transformation::Contrast(v) => *v,
-            Transformation::Grayscale | Transformation::Invert => 0.0,
-        }
+    /// value. Otherwise returns the shader's declared default (0.0 for all
+    /// current shaders).
+    pub fn active_transform_value(&self, opt: &ShaderOption) -> f32 {
+        self.history
+            .applied_transforms()
+            .last()
+            .filter(|t| t.shader_id == opt.id)
+            .map(|t| t.value)
+            .unwrap_or_else(|| {
+                registry_by_id(opt.id)
+                    .and_then(|r| match &r.meta.param {
+                        ParamKind::Slider { default, .. } => Some(*default),
+                        ParamKind::Toggle => None,
+                    })
+                    .unwrap_or(0.0)
+            })
     }
 }
 
@@ -511,30 +528,18 @@ fn load_image_task(path: PathBuf) -> Task<Message> {
     )
 }
 
-/// Constructs a `Transformation` from a `TransformOption` and a parameter value.
-/// For parameterless variants (Grayscale, Invert), the `val` argument is ignored.
-fn make_transform(opt: &TransformOption, val: f32) -> Transformation {
-    match opt {
-        TransformOption::Brightness => Transformation::Brightness(val),
-        TransformOption::Saturation => Transformation::Saturation(val),
-        TransformOption::Contrast => Transformation::Contrast(val),
-        TransformOption::Grayscale => Transformation::Grayscale,
-        TransformOption::Invert => Transformation::Invert,
-    }
-}
-
 /// Collapses adjacent runs of the same transform type, keeping only the last
 /// entry in each run.
 ///
 /// Example: `[B(0.3), B(0.7), S(0.5), S(0.3), B(0.1)]`
 ///       -> `[B(0.7), S(0.3), B(0.1)]`
-fn collapse_adjacent(transforms: &[Transformation]) -> Vec<Transformation> {
-    let mut result: Vec<Transformation> = Vec::new();
+fn collapse_adjacent(transforms: &[Transform]) -> Vec<Transform> {
+    let mut result: Vec<Transform> = Vec::new();
     for t in transforms {
         if let Some(last) = result.last()
-            && TransformOption::from_transformation(last) == TransformOption::from_transformation(t)
+            && last.shader_id == t.shader_id
         {
-            // Same type as previous — replace it.
+            // Same shader as previous — replace it.
             *result.last_mut().unwrap() = t.clone();
             continue;
         }
@@ -552,20 +557,15 @@ fn collapse_adjacent(transforms: &[Transformation]) -> Vec<Transformation> {
 /// exists. This mirrors the live-preview semantics of slider drags: the
 /// in-progress value overlays the last committed value for the same transform
 /// rather than stacking on top of it.
-fn build_render_list(
-    history: &HistoryManager,
-    preview: Option<&Transformation>,
-) -> Vec<Transformation> {
-    let committed: Vec<Transformation> = history.applied_transforms().to_vec();
+fn build_render_list(history: &HistoryManager, preview: Option<&Transform>) -> Vec<Transform> {
+    let committed: Vec<Transform> = history.applied_transforms().to_vec();
     let collapsed = collapse_adjacent(&committed);
     match preview {
         Some(p) => {
-            let preview_kind = TransformOption::from_transformation(p);
             let mut list = collapsed;
             if let Some(last) = list.last()
-                && TransformOption::from_transformation(last) == preview_kind
+                && last.shader_id == p.shader_id
             {
-                // Replace the trailing entry of the same type.
                 list.pop();
             }
             list.push(p.clone());
@@ -583,15 +583,14 @@ fn build_render_list(
 /// loaded yet).
 fn execute_render_pipeline(
     gpu: &mut GpuState,
-    render_list: &[Transformation],
+    render_list: &[Transform],
 ) -> Option<bdip_core::wgpu::Buffer> {
     let base = gpu.cached_base_texture.as_ref()?;
     let mut current: Option<bdip_core::wgpu::Texture> = None;
     for t in render_list {
         let new_tex = {
             let src = current.as_ref().unwrap_or(base);
-            gpu.renderer
-                .apply(&gpu.engine, src, &Transform::from_legacy(t))
+            gpu.renderer.apply(&gpu.engine, src, t)
         };
         current = Some(new_tex);
     }
@@ -602,7 +601,6 @@ fn execute_render_pipeline(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bdip_core::Transformation;
 
     #[test]
     fn test_collapse_adjacent_empty() {
@@ -612,8 +610,14 @@ mod tests {
     #[test]
     fn test_collapse_adjacent_no_duplicates() {
         let input = vec![
-            Transformation::Brightness(0.3),
-            Transformation::Saturation(0.5),
+            Transform {
+                shader_id: "brightness",
+                value: 0.3,
+            },
+            Transform {
+                shader_id: "saturation",
+                value: 0.5,
+            },
         ];
         let result = collapse_adjacent(&input);
         assert_eq!(result, input);
@@ -622,49 +626,97 @@ mod tests {
     #[test]
     fn test_collapse_adjacent_consecutive_same_type() {
         let input = vec![
-            Transformation::Brightness(0.3),
-            Transformation::Brightness(0.7),
-            Transformation::Saturation(0.5),
-            Transformation::Saturation(0.3),
-            Transformation::Brightness(0.1),
+            Transform {
+                shader_id: "brightness",
+                value: 0.3,
+            },
+            Transform {
+                shader_id: "brightness",
+                value: 0.7,
+            },
+            Transform {
+                shader_id: "saturation",
+                value: 0.5,
+            },
+            Transform {
+                shader_id: "saturation",
+                value: 0.3,
+            },
+            Transform {
+                shader_id: "brightness",
+                value: 0.1,
+            },
         ];
         let result = collapse_adjacent(&input);
         assert_eq!(
             result,
             vec![
-                Transformation::Brightness(0.7),
-                Transformation::Saturation(0.3),
-                Transformation::Brightness(0.1),
+                Transform {
+                    shader_id: "brightness",
+                    value: 0.7
+                },
+                Transform {
+                    shader_id: "saturation",
+                    value: 0.3
+                },
+                Transform {
+                    shader_id: "brightness",
+                    value: 0.1
+                },
             ]
         );
     }
 
     #[test]
     fn test_collapse_adjacent_single_entry() {
-        let input = vec![Transformation::Brightness(0.5)];
+        let input = vec![Transform {
+            shader_id: "brightness",
+            value: 0.5,
+        }];
         assert_eq!(collapse_adjacent(&input), input);
     }
 
     #[test]
     fn test_collapse_adjacent_all_same_type() {
         let input = vec![
-            Transformation::Brightness(0.1),
-            Transformation::Brightness(0.5),
-            Transformation::Brightness(0.9),
+            Transform {
+                shader_id: "brightness",
+                value: 0.1,
+            },
+            Transform {
+                shader_id: "brightness",
+                value: 0.5,
+            },
+            Transform {
+                shader_id: "brightness",
+                value: 0.9,
+            },
         ];
         assert_eq!(
             collapse_adjacent(&input),
-            vec![Transformation::Brightness(0.9)]
+            vec![Transform {
+                shader_id: "brightness",
+                value: 0.9
+            }]
         );
     }
 
     #[test]
     fn test_slider_value_trailing_run_matches() {
         let (mut app, _) = BdipApp::new(None);
-        app.history.apply(Transformation::Brightness(0.3));
-        app.history.apply(Transformation::Saturation(0.5));
+        app.history.apply(Transform {
+            shader_id: "brightness",
+            value: 0.3,
+        });
+        app.history.apply(Transform {
+            shader_id: "saturation",
+            value: 0.5,
+        });
         assert_eq!(
-            app.active_transform_value(&TransformOption::Saturation),
+            app.active_transform_value(&ShaderOption {
+                id: "saturation",
+                display_name: "Saturation"
+            }),
             0.5
         );
     }
@@ -672,10 +724,19 @@ mod tests {
     #[test]
     fn test_slider_value_trailing_run_interrupted() {
         let (mut app, _) = BdipApp::new(None);
-        app.history.apply(Transformation::Brightness(0.3));
-        app.history.apply(Transformation::Saturation(0.5));
+        app.history.apply(Transform {
+            shader_id: "brightness",
+            value: 0.3,
+        });
+        app.history.apply(Transform {
+            shader_id: "saturation",
+            value: 0.5,
+        });
         assert_eq!(
-            app.active_transform_value(&TransformOption::Brightness),
+            app.active_transform_value(&ShaderOption {
+                id: "brightness",
+                display_name: "Brightness"
+            }),
             0.0
         );
     }
@@ -684,7 +745,10 @@ mod tests {
     fn test_slider_value_empty_history() {
         let (app, _) = BdipApp::new(None);
         assert_eq!(
-            app.active_transform_value(&TransformOption::Brightness),
+            app.active_transform_value(&ShaderOption {
+                id: "brightness",
+                display_name: "Brightness"
+            }),
             0.0
         );
     }
@@ -692,11 +756,23 @@ mod tests {
     #[test]
     fn test_slider_value_multiple_trailing_same_type() {
         let (mut app, _) = BdipApp::new(None);
-        app.history.apply(Transformation::Brightness(0.3));
-        app.history.apply(Transformation::Saturation(0.2));
-        app.history.apply(Transformation::Saturation(0.5));
+        app.history.apply(Transform {
+            shader_id: "brightness",
+            value: 0.3,
+        });
+        app.history.apply(Transform {
+            shader_id: "saturation",
+            value: 0.2,
+        });
+        app.history.apply(Transform {
+            shader_id: "saturation",
+            value: 0.5,
+        });
         assert_eq!(
-            app.active_transform_value(&TransformOption::Saturation),
+            app.active_transform_value(&ShaderOption {
+                id: "saturation",
+                display_name: "Saturation"
+            }),
             0.5
         );
     }

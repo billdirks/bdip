@@ -3,17 +3,11 @@ use iced::widget::{
 };
 use iced::{Element, Length};
 
-use super::app::BdipApp;
-use super::message::{Message, TransformOption};
-use super::style;
+use bdip_core::gpu::shaders::{ParamKind, ShaderOption, registry_by_id, sorted_registrations};
 
-const TRANSFORM_OPTIONS: &[TransformOption] = &[
-    TransformOption::Brightness,
-    TransformOption::Saturation,
-    TransformOption::Contrast,
-    TransformOption::Grayscale,
-    TransformOption::Invert,
-];
+use super::app::BdipApp;
+use super::message::Message;
+use super::style;
 
 pub fn view(app: &BdipApp) -> Element<'_, Message> {
     let transform_section = transform_view(app);
@@ -35,27 +29,30 @@ pub fn view(app: &BdipApp) -> Element<'_, Message> {
 }
 
 fn transform_view(app: &BdipApp) -> Element<'_, Message> {
+    let options: Vec<ShaderOption> = sorted_registrations()
+        .into_iter()
+        .map(|reg| ShaderOption {
+            id: reg.meta.id,
+            display_name: reg.meta.display_name,
+        })
+        .collect();
+
     let transform_picker = pick_list(
-        TRANSFORM_OPTIONS,
+        options,
         Some(app.selected_transform.clone()),
         Message::TransformSelected,
     );
 
-    let transform_control: Element<'_, Message> = match app.selected_transform {
-        TransformOption::Brightness | TransformOption::Saturation | TransformOption::Contrast => {
-            let s = slider(
-                -1.0_f32..=1.0_f32,
-                app.preview_value,
-                Message::SliderChanged,
-            )
-            .step(0.01)
-            .on_release(Message::SliderReleased);
+    let selected_reg = registry_by_id(app.selected_transform.id);
+    let transform_control: Element<'_, Message> = match selected_reg.map(|r| &r.meta.param) {
+        Some(ParamKind::Slider { min, max, .. }) => {
+            let s = slider(*min..=*max, app.preview_value, Message::SliderChanged)
+                .step(0.01)
+                .on_release(Message::SliderReleased);
             let value_label = text(format!("{:.2}", app.preview_value));
             column![s, value_label].spacing(4).into()
         }
-        TransformOption::Grayscale | TransformOption::Invert => {
-            // The toggle is ON when the selected parameterless transform is the
-            // most recently committed entry in history.
+        Some(ParamKind::Toggle) | None => {
             let is_active = app.is_transform_active(&app.selected_transform);
             row![
                 text("Apply"),

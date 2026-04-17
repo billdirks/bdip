@@ -1,49 +1,45 @@
-use bdip_core::gpu::shaders::Transform;
+use bdip_core::gpu::shaders::{ParamKind, Transform, all_registrations, registry_by_id};
 use bdip_core::gpu::texture::{download_presentation_buffer, upload_texture};
-use bdip_core::{Transformation, gpu::engine::GpuEngine, gpu::pipeline::Renderer};
+use bdip_core::gpu::{engine::GpuEngine, pipeline::Renderer};
 use clap::Parser;
 
 mod cli;
 mod timing;
 mod ui;
 
-fn parse_transform(s: &str) -> anyhow::Result<Transformation> {
+fn parse_transform(s: &str) -> anyhow::Result<Transform> {
     let parts: Vec<&str> = s.split(':').collect();
-    match parts[0].to_lowercase().as_str() {
-        "brightness" => {
+    let name = parts[0].to_lowercase();
+
+    let reg = registry_by_id(&name).ok_or_else(|| {
+        anyhow::anyhow!(
+            "Unknown transformation: '{}'. Available: {}",
+            name,
+            all_registrations()
+                .map(|r| r.meta.id)
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    })?;
+
+    let value = match &reg.meta.param {
+        ParamKind::Slider { .. } => {
             if parts.len() != 2 {
                 return Err(anyhow::anyhow!(
-                    "Brightness requires a float value. E.g., brightness:0.5"
+                    "{} requires a float value. E.g., {}:0.5",
+                    reg.meta.display_name,
+                    reg.meta.id
                 ));
             }
-            let val = parts[1].parse::<f32>()?;
-            Ok(Transformation::Brightness(val))
+            parts[1].parse::<f32>()?
         }
-        "saturation" => {
-            if parts.len() != 2 {
-                return Err(anyhow::anyhow!(
-                    "Saturation requires a float value. E.g., saturation:-0.5"
-                ));
-            }
-            let val = parts[1].parse::<f32>()?;
-            Ok(Transformation::Saturation(val))
-        }
-        "contrast" => {
-            if parts.len() != 2 {
-                return Err(anyhow::anyhow!(
-                    "Contrast requires a float value. E.g., contrast:0.5"
-                ));
-            }
-            let val = parts[1].parse::<f32>()?;
-            Ok(Transformation::Contrast(val))
-        }
-        "grayscale" => Ok(Transformation::Grayscale),
-        "invert" => Ok(Transformation::Invert),
-        _ => Err(anyhow::anyhow!(
-            "Unsupported or unknown transformation: {}",
-            parts[0]
-        )),
-    }
+        ParamKind::Toggle => 0.0,
+    };
+
+    Ok(Transform {
+        shader_id: reg.meta.id,
+        value,
+    })
 }
 
 fn main() -> anyhow::Result<()> {
@@ -89,11 +85,7 @@ fn main() -> anyhow::Result<()> {
         let mut current_texture = renderer.ingest(&engine, &uploaded_texture);
         for transform in &transforms {
             println!("Applying {:?}", transform);
-            current_texture = renderer.apply(
-                &engine,
-                &current_texture,
-                &Transform::from_legacy(transform),
-            );
+            current_texture = renderer.apply(&engine, &current_texture, transform);
         }
         timer.lap("gpu execute");
 

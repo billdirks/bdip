@@ -1,8 +1,8 @@
-use crate::transformation::Transformation;
+use crate::gpu::shaders::Transform;
 
 pub struct HistoryManager {
-    applied_transforms: Vec<Transformation>,
-    redo_stack: Vec<Transformation>,
+    applied_transforms: Vec<Transform>,
+    redo_stack: Vec<Transform>,
 }
 
 impl Default for HistoryManager {
@@ -19,7 +19,7 @@ impl HistoryManager {
         }
     }
 
-    pub fn apply(&mut self, t: Transformation) {
+    pub fn apply(&mut self, t: Transform) {
         if self.applied_transforms.last() == Some(&t) {
             return;
         }
@@ -47,7 +47,7 @@ impl HistoryManager {
         Some(())
     }
 
-    pub fn applied_transforms(&self) -> &[Transformation] {
+    pub fn applied_transforms(&self) -> &[Transform] {
         &self.applied_transforms
     }
 
@@ -63,7 +63,7 @@ impl HistoryManager {
 
     /// Returns the redo stack in redo order: index 0 is the next item that would be
     /// re-applied by a call to `redo()`.
-    pub fn redo_transforms(&self) -> &[Transformation] {
+    pub fn redo_transforms(&self) -> &[Transform] {
         &self.redo_stack
     }
 
@@ -86,7 +86,10 @@ mod tests {
     #[test]
     fn test_apply_and_clear() {
         let mut hm = HistoryManager::new();
-        hm.apply(Transformation::Grayscale);
+        hm.apply(Transform {
+            shader_id: "grayscale",
+            value: 0.0,
+        });
         assert_eq!(hm.applied_transforms().len(), 1);
         hm.clear();
         assert_eq!(hm.applied_transforms().len(), 0);
@@ -95,8 +98,14 @@ mod tests {
     #[test]
     fn test_undo_redo() {
         let mut hm = HistoryManager::new();
-        hm.apply(Transformation::Grayscale);
-        hm.apply(Transformation::Invert);
+        hm.apply(Transform {
+            shader_id: "grayscale",
+            value: 0.0,
+        });
+        hm.apply(Transform {
+            shader_id: "invert",
+            value: 0.0,
+        });
 
         assert_eq!(hm.undo(), Some(()));
         assert_eq!(hm.applied_transforms().len(), 1);
@@ -108,9 +117,15 @@ mod tests {
     #[test]
     fn test_apply_clears_redo() {
         let mut hm = HistoryManager::new();
-        hm.apply(Transformation::Grayscale);
+        hm.apply(Transform {
+            shader_id: "grayscale",
+            value: 0.0,
+        });
         hm.undo();
-        hm.apply(Transformation::Contrast(0.8));
+        hm.apply(Transform {
+            shader_id: "contrast",
+            value: 0.8,
+        });
         assert_eq!(hm.redo(), None);
     }
 
@@ -130,14 +145,20 @@ mod tests {
     #[test]
     fn test_can_undo_after_apply() {
         let mut hm = HistoryManager::new();
-        hm.apply(Transformation::Grayscale);
+        hm.apply(Transform {
+            shader_id: "grayscale",
+            value: 0.0,
+        });
         assert!(hm.can_undo());
     }
 
     #[test]
     fn test_can_undo_false_after_all_undone() {
         let mut hm = HistoryManager::new();
-        hm.apply(Transformation::Grayscale);
+        hm.apply(Transform {
+            shader_id: "grayscale",
+            value: 0.0,
+        });
         hm.undo();
         assert!(!hm.can_undo());
     }
@@ -151,7 +172,10 @@ mod tests {
     #[test]
     fn test_can_redo_after_undo() {
         let mut hm = HistoryManager::new();
-        hm.apply(Transformation::Invert);
+        hm.apply(Transform {
+            shader_id: "invert",
+            value: 0.0,
+        });
         hm.undo();
         assert!(hm.can_redo());
     }
@@ -159,43 +183,82 @@ mod tests {
     #[test]
     fn test_can_redo_false_after_apply() {
         let mut hm = HistoryManager::new();
-        hm.apply(Transformation::Invert);
+        hm.apply(Transform {
+            shader_id: "invert",
+            value: 0.0,
+        });
         hm.undo();
-        hm.apply(Transformation::Grayscale);
+        hm.apply(Transform {
+            shader_id: "grayscale",
+            value: 0.0,
+        });
         assert!(!hm.can_redo());
     }
 
     #[test]
     fn test_apply_duplicate_top_is_ignored() {
         let mut hm = HistoryManager::new();
-        hm.apply(Transformation::Brightness(0.8));
-        hm.apply(Transformation::Brightness(0.8));
+        hm.apply(Transform {
+            shader_id: "brightness",
+            value: 0.8,
+        });
+        hm.apply(Transform {
+            shader_id: "brightness",
+            value: 0.8,
+        });
         assert_eq!(hm.applied_transforms().len(), 1);
     }
 
     #[test]
     fn test_apply_duplicate_does_not_clear_redo() {
         let mut hm = HistoryManager::new();
-        hm.apply(Transformation::Brightness(0.8));
-        hm.apply(Transformation::Saturation(0.5));
+        hm.apply(Transform {
+            shader_id: "brightness",
+            value: 0.8,
+        });
+        hm.apply(Transform {
+            shader_id: "saturation",
+            value: 0.5,
+        });
         hm.undo();
-        // Redo stack now has S(0.5). Pushing the same B(0.8) that is on top should
-        // be a no-op and must not wipe the redo stack.
-        hm.apply(Transformation::Brightness(0.8));
+        // Redo stack now has saturation(0.5). Pushing the same brightness(0.8) that is on top
+        // should be a no-op and must not wipe the redo stack.
+        hm.apply(Transform {
+            shader_id: "brightness",
+            value: 0.8,
+        });
         assert!(hm.can_redo());
     }
 
     #[test]
     fn test_redo_transforms_order() {
         let mut hm = HistoryManager::new();
-        hm.apply(Transformation::Brightness(0.3));
-        hm.apply(Transformation::Saturation(0.5));
-        hm.undo(); // undoes S(0.5)
-        hm.undo(); // undoes B(0.3) — last undone, so next to redo
-        // redo_transforms()[0] must be the next item re-applied by redo(): B(0.3).
+        hm.apply(Transform {
+            shader_id: "brightness",
+            value: 0.3,
+        });
+        hm.apply(Transform {
+            shader_id: "saturation",
+            value: 0.5,
+        });
+        hm.undo(); // undoes saturation(0.5)
+        hm.undo(); // undoes brightness(0.3) — last undone, so next to redo
+        // redo_transforms()[0] must be the next item re-applied by redo(): brightness(0.3).
         let redo = hm.redo_transforms();
         assert_eq!(redo.len(), 2);
-        assert_eq!(redo[0], Transformation::Brightness(0.3));
-        assert_eq!(redo[1], Transformation::Saturation(0.5));
+        assert_eq!(
+            redo[0],
+            Transform {
+                shader_id: "brightness",
+                value: 0.3
+            }
+        );
+        assert_eq!(
+            redo[1],
+            Transform {
+                shader_id: "saturation",
+                value: 0.5
+            }
+        );
     }
 }

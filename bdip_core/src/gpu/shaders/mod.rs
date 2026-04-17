@@ -62,32 +62,17 @@ pub struct Transform {
     pub value: f32,
 }
 
-impl Transform {
-    /// Temporary bridge: converts from the legacy `Transformation` enum.
-    /// Removed in PR 5 when `Transformation` is deleted.
-    pub fn from_legacy(t: &crate::Transformation) -> Self {
-        match t {
-            crate::Transformation::Brightness(v) => Transform {
-                shader_id: "brightness",
-                value: *v,
-            },
-            crate::Transformation::Saturation(v) => Transform {
-                shader_id: "saturation",
-                value: *v,
-            },
-            crate::Transformation::Contrast(v) => Transform {
-                shader_id: "contrast",
-                value: *v,
-            },
-            crate::Transformation::Grayscale => Transform {
-                shader_id: "grayscale",
-                value: 0.0,
-            },
-            crate::Transformation::Invert => Transform {
-                shader_id: "invert",
-                value: 0.0,
-            },
-        }
+/// Pick-list item for the sidebar transform selector. Built from the shader
+/// registry; one per registered shader.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ShaderOption {
+    pub id: &'static str,
+    pub display_name: &'static str,
+}
+
+impl std::fmt::Display for ShaderOption {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.display_name)
     }
 }
 
@@ -115,6 +100,13 @@ pub fn registry_by_id(id: &str) -> Option<&'static ShaderRegistration> {
 /// Returns an iterator over all registered shaders (in linker order).
 pub fn all_registrations() -> impl Iterator<Item = &'static ShaderRegistration> {
     inventory::iter::<ShaderRegistration>.into_iter()
+}
+
+/// Returns all registered shaders sorted alphabetically by display name.
+pub fn sorted_registrations() -> Vec<&'static ShaderRegistration> {
+    let mut regs: Vec<&'static ShaderRegistration> = all_registrations().collect();
+    regs.sort_by_key(|r| r.meta.display_name);
+    regs
 }
 
 #[cfg(test)]

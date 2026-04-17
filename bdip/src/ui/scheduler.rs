@@ -1,17 +1,17 @@
-use bdip_core::Transformation;
+use bdip_core::Transform;
 
 /// Captures everything the background worker needs to replay a render.
 #[derive(Debug, Clone)]
 pub(super) enum RenderRequest {
     /// Standard preview or commit render — produces an iced image handle.
     Preview {
-        render_list: Vec<Transformation>,
+        render_list: Vec<Transform>,
         width: u32,
         height: u32,
     },
     /// Full-resolution 16-bit render for saving.
     Save {
-        render_list: Vec<Transformation>,
+        render_list: Vec<Transform>,
         width: u32,
         height: u32,
     },
@@ -123,13 +123,19 @@ mod tests {
         let mut sched = RenderScheduler::new();
         sched.request(make_preview_request());
         sched.request(RenderRequest::Preview {
-            render_list: vec![Transformation::Brightness(0.3)],
+            render_list: vec![Transform {
+                shader_id: "brightness",
+                value: 0.3,
+            }],
             width: 100,
             height: 100,
         });
         // Third request should overwrite the second.
         sched.request(RenderRequest::Preview {
-            render_list: vec![Transformation::Brightness(0.9)],
+            render_list: vec![Transform {
+                shader_id: "brightness",
+                value: 0.9,
+            }],
             width: 100,
             height: 100,
         });
@@ -140,7 +146,13 @@ mod tests {
         let RenderRequest::Preview { render_list, .. } = pending else {
             panic!("expected Preview variant");
         };
-        assert_eq!(render_list, vec![Transformation::Brightness(0.9)]);
+        assert_eq!(
+            render_list,
+            vec![Transform {
+                shader_id: "brightness",
+                value: 0.9
+            }]
+        );
     }
 
     #[test]
