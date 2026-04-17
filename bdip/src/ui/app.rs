@@ -5,7 +5,7 @@ use bdip_core::gpu::shaders::{
     ParamKind, ShaderMeta, ShaderOption, Transform, registry_by_id, sorted_registrations,
 };
 use bdip_core::gpu::texture::upload_texture;
-use iced::widget::{column, container, row};
+use iced::widget::{Space, column, container, mouse_area, row, rule, stack};
 use iced::{Element, Length, Subscription, Task};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -62,6 +62,7 @@ pub struct BdipApp {
     pub error_message: Option<String>,
     pub is_loading: bool,
     pub is_saving: bool,
+    pub menu_open: bool,
 }
 
 impl BdipApp {
@@ -105,6 +106,7 @@ impl BdipApp {
                 error_message,
                 is_loading: has_input,
                 is_saving: false,
+                menu_open: false,
             },
             task,
         )
@@ -116,6 +118,7 @@ impl BdipApp {
                 if self.is_loading {
                     return Task::none();
                 }
+                self.menu_open = false;
                 self.is_loading = true;
                 Task::perform(
                     async {
@@ -133,11 +136,7 @@ impl BdipApp {
                             None => Err("cancelled".to_string()),
                         }
                     },
-                    |result: Result<(PathBuf, bdip_core::Rgba16Image), String>| match result {
-                        Ok(pair) => Message::ImageLoaded(Ok(pair)),
-                        Err(e) if e == "cancelled" => Message::Noop,
-                        Err(e) => Message::ImageLoaded(Err(e)),
-                    },
+                    Message::ImageLoaded,
                 )
             }
 
@@ -168,12 +167,15 @@ impl BdipApp {
             }
 
             Message::ImageLoaded(Err(e)) => {
-                self.error_message = Some(e);
                 self.is_loading = false;
+                if e != "cancelled" {
+                    self.error_message = Some(e);
+                }
                 Task::none()
             }
 
             Message::SaveImagePressed => {
+                self.menu_open = false;
                 if self.is_saving || !self.has_base_texture() {
                     return Task::none();
                 }
@@ -370,6 +372,16 @@ impl BdipApp {
                 Task::none()
             }
 
+            Message::ToggleFileMenu => {
+                self.menu_open = !self.menu_open;
+                Task::none()
+            }
+
+            Message::CloseFileMenu => {
+                self.menu_open = false;
+                Task::none()
+            }
+
             Message::Noop => Task::none(),
         }
     }
@@ -379,20 +391,48 @@ impl BdipApp {
         let sidebar = sidebar::view(self);
         let canvas = canvas::view(self);
 
-        let content = row![
+        let content_row = row![
             container(sidebar).width(Length::Fixed(250.0)),
             container(canvas).width(Length::Fill).height(Length::Fill),
-        ];
+        ]
+        .width(Length::Fill)
+        .height(Length::Fill);
 
-        column![menu, content]
+        let full_app = column![menu, rule::horizontal(1), content_row]
             .width(Length::Fill)
-            .height(Length::Fill)
-            .into()
+            .height(Length::Fill);
+
+        // When the pulldown is open, layer a full-window dismiss backdrop and the
+        // floating pulldown over the entire app. The backdrop covers the menu bar too,
+        // so clicking anywhere outside the pulldown (including empty menu bar space)
+        // closes it. The pulldown sits on top of the backdrop so its buttons fire first.
+        if self.menu_open {
+            let backdrop = mouse_area(
+                container(Space::new())
+                    .width(Length::Fill)
+                    .height(Length::Fill),
+            )
+            .on_press(Message::CloseFileMenu);
+            // Offset the pulldown below the menu bar (height ~27px) + separator (1px).
+            let floating_pulldown = container(menu_bar::pulldown(self))
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .align_x(iced::alignment::Horizontal::Left)
+                .align_y(iced::alignment::Vertical::Top)
+                .padding(iced::Padding::default().top(28));
+            stack![full_app, backdrop, floating_pulldown]
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into()
+        } else {
+            full_app.into()
+        }
     }
 
     pub fn subscription(&self) -> Subscription<Message> {
         use iced::keyboard::Event;
         use iced::keyboard::Key;
+        use iced::keyboard::key;
 
         iced::keyboard::listen().map(|event| match event {
             Event::KeyPressed { key, modifiers, .. } => {
@@ -403,6 +443,9 @@ impl BdipApp {
                     } else {
                         return Message::Undo;
                     }
+                }
+                if key.as_ref() == Key::Named(key::Named::Escape) {
+                    return Message::CloseFileMenu;
                 }
                 Message::Noop
             }

@@ -38,6 +38,10 @@ pub enum Message {
     // Error handling
     DismissError,
 
+    // File menu
+    ToggleFileMenu,
+    CloseFileMenu,
+
     // Misc
     Noop,
 }
