@@ -42,24 +42,6 @@ This document tracks known architectural shortcuts, generic naming, and structur
   but should be addressed before `bdip_core` is used by additional consumers or exposed
   as a library API.
 
-## GPU Pipeline Extensibility
-
-### Shader Isolation — Per-Shader Touch Points in `pipeline.rs`
-- **Location:** `bdip_core/src/gpu/pipeline.rs`
-- **Current Pattern:** Adding a new transform shader requires modifying 4 locations in
-  `pipeline.rs`: a params struct, a `TransformKind` variant (+ `From` impl), a
-  `PipelineCache::compile()` match arm, and a `Renderer::apply()` match arm. The
-  `TransformKind::from()` and `apply()` functions panic at runtime on unhandled variants.
-- **Risk:** As the shader count grows, `pipeline.rs` becomes a long file of mechanically
-  similar match arms. New shader authors must read through unrelated shader definitions to
-  find insertion points. Missing a match arm is a runtime panic, not a compile-time error.
-- **Suggested Remediation:** Extract each shader into a self-contained module implementing a
-  `TransformShader` trait, with a single registration point for dispatch. See
-  `specs/isolating_shaders_plan.md` for the full design. The current process is documented
-  in `specs/adding_a_shader.md`.
-- **Priority:** Low. The current architecture works well at 2 shaders. Becomes worthwhile at
-  4-5 shaders or when shader authors should not need to understand pipeline internals.
-
 ## Future Considerations
 *(Add new items here as they are discovered during development)*
 

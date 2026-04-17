@@ -1,308 +1,176 @@
-# Adding a New Shader (Current Process)
+# Adding a New Shader
 
-This document describes the steps required to add a new GPU transform shader
-to `bdip_core` under the current architecture. It serves as a practical
-checklist and as a baseline for the future refactor described in
-`specs/isolating_shaders_plan.md`.
+Adding a shader requires two new files and one line in `shaders/mod.rs`. See
+`brightness` (slider) and `grayscale` (toggle) in
+`bdip_core/src/gpu/shaders/` for complete working examples.
 
 ---
 
 ## Prerequisites
 
-- The new transformation variant already exists in `Transformation`
-  (`bdip_core/src/transformation.rs`), or you are adding it as part of
-  this work.
-- The shader operates on linear-light `Rgba16Float` textures using the
-  standard bind group contract (see below).
+- The shader operates on linear-light `Rgba16Float` textures using the standard bind
+  group contract (see below).
+- The shader ID (a short ASCII string like `"hsl_hue"`) must be unique across all
+  registered shaders.
 
 ## Bind Group Contract
 
-All transform shaders share the same two-group layout:
+All transform shaders use this two-group layout:
 
 | Group | Binding | Resource |
 |-------|---------|----------|
 | 0 | 0 | Source texture (`texture_2d<f32>`, read) |
 | 0 | 1 | Destination texture (`texture_storage_2d<rgba16float, write>`) |
-| 1 | 0 | Uniform buffer (shader-specific params) |
+| 1 | 0 | Uniform buffer (shader-specific params, minimum 16 bytes) |
 
-This layout is enforced by `PipelineCache::compile()` in `pipeline.rs`.
-All current shaders (brightness, saturation, contrast) follow it. New shaders
-must also follow it unless the architecture is changed.
-
-## Step-by-Step Checklist
-
-### 1. Write the WGSL shader file
-
-Create `bdip_core/src/gpu/<name>.wgsl`. Follow the existing pattern in
-`brightness.wgsl` or `saturation.wgsl`:
-
-- Declare bindings matching the bind group contract above.
-- Define a params struct matching your Rust-side uniform (see step 2).
-- Use `@workgroup_size(16, 16)` and an entry point named `main`.
-- Operate in linear color space (input textures have already been
-  ingested from sRGB).
-
-For parameterless transforms (Grayscale, Invert), a dummy 16-byte uniform
-must still be declared to satisfy the bind group layout (see step 2).
-
-### 2. Add a uniform params struct (`pipeline.rs`)
-
-Near the top of `bdip_core/src/gpu/pipeline.rs`, add a `#[repr(C)]`
-struct deriving `Copy`, `Clone`, `Debug`, `bytemuck::Pod`, and
-`bytemuck::Zeroable`. WebGPU uniforms require 16-byte alignment, so
-pad to 16 bytes:
-
-```rust
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-struct ExampleParams {
-    value: f32,
-    _padding: [f32; 3],
-}
-```
-
-For parameterless transforms, use a dummy struct with no meaningful fields:
-
-```rust
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-struct GrayscaleParams {
-    _unused: [f32; 4],
-}
-```
-
-### 3. Add a `TransformKind` variant (`pipeline.rs`)
-
-Add the new variant to the `TransformKind` enum and update the
-`From<&Transformation>` impl to map from the corresponding
-`Transformation` variant:
-
-```rust
-enum TransformKind {
-    Brightness,
-    Saturation,
-    Contrast,
-    Example,       // <-- new
-}
-
-impl From<&Transformation> for TransformKind {
-    fn from(t: &Transformation) -> Self {
-        match t {
-            Transformation::Brightness(_) => TransformKind::Brightness,
-            Transformation::Saturation(_) => TransformKind::Saturation,
-            Transformation::Contrast(_) => TransformKind::Contrast,
-            Transformation::Example(_) => TransformKind::Example, // <-- new
-            other => panic!("TransformKind not implemented for {:?}", other),
-        }
-    }
-}
-```
-
-### 4. Add a match arm in `PipelineCache::compile()` (`pipeline.rs`)
-
-In the `compile` function's match expression, add an arm that provides
-the shader source and label strings:
-
-```rust
-TransformKind::Example => (
-    include_str!("example.wgsl"),
-    "Example Shader",
-    "Example Pipeline",
-    "Example Texture BGL",
-    "Example Params BGL",
-    "Example Pipeline Layout",
-),
-```
-
-No other changes are needed in `compile()` — the bind group layout
-creation, pipeline layout, and pipeline compilation are shared.
-
-### 5. Add a match arm in `Renderer::apply()` (`pipeline.rs`)
-
-In the `apply` method's `params_buffer` match, add an arm that packs
-your params into a uniform buffer:
-
-```rust
-Transformation::Example(val) => {
-    let p = ExampleParams {
-        value: *val,
-        _padding: [0.0; 3],
-    };
-    engine.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("Apply Params Buffer"),
-        contents: bytemuck::cast_slice(&[p]),
-        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-    })
-}
-```
-
-For parameterless transforms, the payload-less variant still needs an arm
-that creates a zeroed dummy buffer:
-
-```rust
-Transformation::Grayscale => {
-    let p = GrayscaleParams { _unused: [0.0; 4] };
-    engine.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("Apply Params Buffer"),
-        contents: bytemuck::cast_slice(&[p]),
-        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-    })
-}
-```
-
-### 6. Add the `Transformation` variant (if not already present)
-
-In `bdip_core/src/transformation.rs`, add the new variant to the
-`Transformation` enum and update the `Display` impl with its formatted
-string. Parameterized variants should format as `"Name: {v:.2}"`;
-parameterless variants as just `"Name"`.
-
-### 7. Add CLI parsing (if applicable)
-
-In the headless CLI (`bdip/src/main.rs`), add a match arm in the
-`parse_transform` function to accept the new shader name and its
-parameter:
-
-```rust
-"example" => {
-    if parts.len() != 2 {
-        return Err(anyhow::anyhow!(
-            "Example requires a float value. E.g., example:0.5"
-        ));
-    }
-    let val = parts[1].parse::<f32>()?;
-    Ok(Transformation::Example(val))
-}
-```
-
-For parameterless transforms, expect no colon-separated value:
-
-```rust
-"grayscale" => Ok(Transformation::Grayscale),
-```
-
-### 8. Add the variant to the UI pick list (`bdip/src/ui/sidebar.rs`)
-
-Add the corresponding `TransformOption` variant to the `TRANSFORM_OPTIONS`
-slice in `sidebar.rs`. The sidebar already handles the two control paths:
-
-- **Parameterized transforms** (those matching the slider arm in
-  `transform_view`): add the variant to the `pick_list` and the slider
-  match arm in `sidebar.rs`. The slider range is `-1.0..=1.0` with step
-  `0.01`.
-- **Parameterless transforms**: add the variant to the `pick_list` and the
-  toggle match arm in `sidebar.rs`. The toggle displays an "Apply" label on
-  the left and an `iced::widget::toggler` on the right. Its active state
-  reflects whether the selected transform is the most recent entry in
-  `HistoryManager`.
-
-`TransformOption` is defined in `bdip/src/ui/message.rs`. Add the variant
-there too, along with its `Display` and `from_transformation` arms.
-
-**Slider/parameterless routing in `sidebar.rs`:**
-
-```rust
-const TRANSFORM_OPTIONS: &[TransformOption] = &[
-    TransformOption::Brightness,
-    TransformOption::Saturation,
-    TransformOption::Contrast,
-    TransformOption::Example,  // <-- new
-];
-
-fn transform_view(app: &BdipApp) -> Element<'_, Message> {
-    let transform_control: Element<'_, Message> = match app.selected_transform {
-        // parameterized → slider
-        TransformOption::Brightness 
-        | TransformOption::Saturation 
-        | TransformOption::Contrast 
-        | TransformOption::Example => { /* slider widget */ }
-        
-        // parameterless → "Apply" label + toggler
-        TransformOption::Grayscale | TransformOption::Invert | TransformOption::ExampleParamless => {
-            let is_active = app.is_transform_active(&app.selected_transform);
-            row![
-                text("Apply"),
-                toggler(is_active).on_toggle(|_| Message::ToggleParameterless),
-            ]
-            .spacing(8)
-            .align_y(iced::Alignment::Center)
-            .into()
-        }
-    };
-    // ...
-}
-```
-
-**UI Logic in `app.rs`:**
-
-You must update **two helper functions** in `bdip/src/ui/app.rs` to glue the
-UI and history together:
-
-1.  **`make_transform()`**: This helper converts the UI's `TransformOption`
-    selection and live slider value into a `bdip_core::Transformation`. Add
-    a match arm for your new variant:
-
-    ```rust
-    TransformOption::Example => Transformation::Example(val),
-    ```
-
-2.  **`active_transform_value()`**: This helper is called when you select a
-    variant from the pick list. It scans the history to see if that variant is
-    already active and, if so, returns its current value so the slider moves
-    to the correct position. Add your variant to the parameterized match arm:
-
-    ```rust
-    match last {
-        Transformation::Brightness(v)
-        | Transformation::Saturation(v)
-        | Transformation::Contrast(v)
-        | Transformation::Example(v) => *v, // <-- add here
-        Transformation::Grayscale | Transformation::Invert => 0.0,
-    }
-    ```
-
-### 9. Write tests
-
-At minimum, write unit tests in `pipeline.rs` for:
-
-- **Identity case** — parameter value `0.0` (or equivalent no-op input)
-  produces output that matches the input within f16 rounding tolerance (±64
-  u16 units).
-- **Extreme values** — verify clamping behavior at the parameter range
-  boundaries (e.g., max positive pushes pixels in the expected direction,
-  max negative collapses or flattens as expected).
-- **Alpha preservation** — alpha channel is unchanged by the transform.
-- **Chaining** — applying the new shader in combination with an existing
-  shader (e.g., brightness then the new shader) produces numerically
-  expected results.
-
-Follow the `make_solid_image` + `roundtrip` helper pattern established in
-the existing test suite. Each test must cover a single, isolated behavior
-(see `AGENTS.md` Unit Testing Standards).
+Parameterless shaders must still declare a 16-byte dummy uniform to satisfy the layout.
+This should be defaulted to 0.
 
 ---
 
-## Files Modified (Summary)
+## Steps
 
-| File | Change |
-|------|--------|
-| `bdip_core/src/gpu/<name>.wgsl` | New file |
-| `bdip_core/src/gpu/pipeline.rs` | Params struct, `TransformKind` variant, `compile()` arm, `apply()` arm, tests |
-| `bdip_core/src/transformation.rs` | `Transformation` variant + `Display` arm (if new) |
-| `bdip/src/main.rs` | `parse_transform` arm |
-| `bdip/src/ui/message.rs` | `TransformOption` variant, `Display` arm, `from_transformation` arm |
-| `bdip/src/ui/sidebar.rs` | `TRANSFORM_OPTIONS` slice, `transform_view` match arms |
-| `bdip/src/ui/app.rs` | `make_transform` and `active_transform_value` helpers |
+### Step 1 — Create `bdip_core/src/gpu/shaders/<name>/mod.rs`
 
-## Touch Points in `pipeline.rs`
+Define a params struct, implement `TransformShader`, and submit the registration.
 
-Adding a shader currently requires modifying **4 locations** in
-`pipeline.rs`:
+**Parameterized shader (slider):**
 
-1. Uniform params struct (top of file)
-2. `TransformKind` enum + `From` impl
-3. `PipelineCache::compile()` match arm
-4. `Renderer::apply()` match arm
+```rust
+use crate::gpu::shaders::{ParamKind, ShaderMeta, TransformShader};
 
-The future refactor in `specs/isolating_shaders_plan.md` aims to reduce
-this to a single registration point per shader.
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct ExampleParams {
+    pub value: f32,
+    pub _padding: [f32; 3],   // pad to 16 bytes for WebGPU uniform alignment
+}
+
+impl TransformShader for ExampleParams {
+    const META: ShaderMeta = ShaderMeta {
+        id: "example",
+        display_name: "Example",
+        wgsl_source: include_str!("example.wgsl"),
+        param: ParamKind::Slider { min: -1.0, max: 1.0, default: 0.0 },
+    };
+
+    fn from_value(value: f32) -> Self {
+        Self { value, _padding: [0.0; 3] }
+    }
+}
+
+inventory::submit!(crate::gpu::shaders::ShaderRegistration::new::<ExampleParams>());
+```
+
+**Parameterless shader (toggle):**
+
+```rust
+use crate::gpu::shaders::{ParamKind, ShaderMeta, TransformShader};
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct ExampleParams {
+    pub _unused: [f32; 4],
+}
+
+impl TransformShader for ExampleParams {
+    const META: ShaderMeta = ShaderMeta {
+        id: "example",
+        display_name: "Example",
+        wgsl_source: include_str!("example.wgsl"),
+        param: ParamKind::Toggle,
+    };
+
+    fn from_value(_: f32) -> Self {
+        Self { _unused: [0.0; 4] }
+    }
+}
+
+inventory::submit!(crate::gpu::shaders::ShaderRegistration::new::<ExampleParams>());
+```
+
+### Step 2 — Create `bdip_core/src/gpu/shaders/<name>/<name>.wgsl`
+
+Follow the existing shaders as a pattern. Key requirements:
+
+- Use `@workgroup_size(16, 16)` and entry point `main`.
+- Operate in linear color space — inputs are linear-light `rgba16float`.
+- Declare a params struct matching your Rust-side uniform (same field layout and
+  padding).
+
+**Parameterized shader skeleton:**
+
+```wgsl
+struct ExampleParams {
+    value: f32,
+    _padding1: f32,
+    _padding2: f32,
+    _padding3: f32,
+}
+
+@group(0) @binding(0) var input_texture:  texture_2d<f32>;
+@group(0) @binding(1) var output_texture: texture_storage_2d<rgba16float, write>;
+@group(1) @binding(0) var<uniform> params: ExampleParams;
+
+@compute @workgroup_size(16, 16)
+fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let dims = textureDimensions(input_texture);
+    if global_id.x >= dims.x || global_id.y >= dims.y { return; }
+
+    let coord = vec2<i32>(global_id.xy);
+    let pixel = textureLoad(input_texture, coord, 0);
+
+    let out = vec4<f32>(
+        clamp(pixel.rgb + params.value, vec3<f32>(0.0), vec3<f32>(1.0)),
+        pixel.a,
+    );
+    textureStore(output_texture, coord, out);
+}
+```
+
+**Parameterless shader skeleton:**
+
+```wgsl
+struct Params {
+    _unused: vec4<f32>,
+}
+
+@group(0) @binding(0) var input_texture:  texture_2d<f32>;
+@group(0) @binding(1) var output_texture: texture_storage_2d<rgba16float, write>;
+@group(1) @binding(0) var<uniform> params: Params;
+
+@compute @workgroup_size(16, 16)
+fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let dims = textureDimensions(input_texture);
+    if global_id.x >= dims.x || global_id.y >= dims.y { return; }
+
+    let coord = vec2<i32>(global_id.xy);
+    let pixel = textureLoad(input_texture, coord, 0);
+
+    let out = vec4<f32>(/* ... */, pixel.a);
+    textureStore(output_texture, coord, out);
+}
+```
+
+### Step 3 — Add `pub mod <name>;` to `shaders/mod.rs`
+
+```rust
+pub mod example;
+```
+
+### Step 4 — Write tests
+
+Add a `#[cfg(test)] mod tests` block in your `mod.rs`. At minimum, include:
+
+- `test_<name>_registry_entry_exists` — `registry_by_id("<id>")` returns `Some`.
+- `test_<name>_registry_metadata` — verify `display_name` and `param` values.
+- `test_<name>_make_uniform_known_value` — call `(reg.make_uniform)(val)` and assert
+  the returned bytes match `bytemuck::bytes_of(&ExampleParams { value: val, .. })`.
+- **GPU roundtrip tests** covering: identity (no-op value), extreme parameter values,
+  alpha preservation, and chaining with an existing shader.
+
+Use the `make_solid_image` + `roundtrip` helpers from the existing tests. Each test
+must cover a single isolated behavior (see `AGENTS.md` Unit Testing Standards).
+
+Run `cargo test test_shader_registry_no_duplicate_ids` after adding your shader to
+confirm the ID is unique.
