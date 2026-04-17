@@ -4,6 +4,9 @@ pub mod grayscale;
 pub mod invert;
 pub mod saturation;
 
+#[cfg(test)]
+mod cross_shader_tests;
+
 /// Metadata that the UI, CLI, and pipeline all read from a registered shader.
 #[derive(Debug, Clone)]
 pub struct ShaderMeta {

@@ -24,7 +24,10 @@ inventory::submit!(crate::gpu::shaders::ShaderRegistration::new::<InvertParams>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gpu::shaders::registry_by_id;
+    use crate::gpu::engine::GpuEngine;
+    use crate::gpu::pipeline::Renderer;
+    use crate::gpu::shaders::{Transform, registry_by_id};
+    use crate::gpu::test_util::{make_solid_image, roundtrip};
 
     #[test]
     fn test_invert_registry_entry_exists() {
@@ -44,5 +47,78 @@ mod tests {
         let bytes = (reg.make_uniform)(0.0);
         let expected = bytemuck::bytes_of(&InvertParams { _unused: [0.0; 4] });
         assert_eq!(bytes, expected);
+    }
+
+    #[test]
+    fn test_invert_shader() {
+        let engine = GpuEngine::new().unwrap();
+        let mut renderer = Renderer::new(&engine);
+
+        // Note: linear-light invert means 1.0 - linear_value.
+        let img = make_solid_image(2, 2, 0, 65535, 32767);
+        let out_img = roundtrip(
+            &mut renderer,
+            &engine,
+            &img,
+            &[Transform {
+                shader_id: "invert",
+                value: 0.0,
+            }],
+        );
+
+        for pixel in out_img.pixels() {
+            // R: 0 → inverted → 65535
+            assert!(
+                (pixel[0] as i32 - 65535).abs() <= 100,
+                "R: expected ~65535, got {}",
+                pixel[0]
+            );
+            // G: 65535 → inverted → 0
+            assert!(pixel[1] <= 100, "G: expected ~0, got {}", pixel[1]);
+            // Alpha preserved
+            assert_eq!(pixel[3], 65535);
+        }
+    }
+
+    #[test]
+    fn test_double_invert_restores_original() {
+        let engine = GpuEngine::new().unwrap();
+        let mut renderer = Renderer::new(&engine);
+
+        let img = make_solid_image(2, 2, 10794, 25700, 51400);
+        let out_img = roundtrip(
+            &mut renderer,
+            &engine,
+            &img,
+            &[
+                Transform {
+                    shader_id: "invert",
+                    value: 0.0,
+                },
+                Transform {
+                    shader_id: "invert",
+                    value: 0.0,
+                },
+            ],
+        );
+
+        for pixel in out_img.pixels() {
+            assert!(
+                (pixel[0] as i32 - 10794).abs() <= 128,
+                "R: expected ~10794, got {}",
+                pixel[0]
+            );
+            assert!(
+                (pixel[1] as i32 - 25700).abs() <= 128,
+                "G: expected ~25700, got {}",
+                pixel[1]
+            );
+            assert!(
+                (pixel[2] as i32 - 51400).abs() <= 128,
+                "B: expected ~51400, got {}",
+                pixel[2]
+            );
+            assert_eq!(pixel[3], 65535);
+        }
     }
 }
