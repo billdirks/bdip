@@ -89,6 +89,43 @@ impl TransformShader for ExampleParams {
 inventory::submit!(crate::gpu::shaders::ShaderRegistration::new::<ExampleParams>());
 ```
 
+**Multi-parameter shader (multiple named sliders):**
+
+```rust
+use crate::gpu::shaders::{ParamKind, ShaderMeta, SliderDef, TransformShader};
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct ExampleParams {
+    pub amount: f32,
+    pub range: f32,
+    pub start: f32,
+    pub _padding: f32,   // pad to 16 bytes for WebGPU uniform alignment
+}
+
+impl TransformShader for ExampleParams {
+    const META: ShaderMeta = ShaderMeta {
+        id: "example",
+        display_name: "Example",
+        wgsl_source: include_str!("example.wgsl"),
+        param: ParamKind::Sliders(&[
+            SliderDef { name: "Amount", min: -1.0, max: 1.0, default: 0.0 },
+            SliderDef { name: "Range",  min:  0.0, max: 1.0, default: 0.4 },
+            SliderDef { name: "Start",  min:  0.0, max: 1.0, default: 0.05 },
+        ]),
+    };
+
+    fn from_values(values: &[f32]) -> Self {
+        Self { amount: values[0], range: values[1], start: values[2], _padding: 0.0 }
+    }
+}
+
+inventory::submit!(crate::gpu::shaders::ShaderRegistration::new::<ExampleParams>());
+```
+
+Each index in `from_values` corresponds to the `SliderDef` at the same index. The sidebar
+renders one labelled slider row per entry in the slice.
+
 ### Step 2 — Create `bdip_core/src/gpu/shaders/<name>/<name>.wgsl`
 
 Follow the existing shaders as a pattern. Key requirements:

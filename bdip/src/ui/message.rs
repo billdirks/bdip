@@ -13,8 +13,14 @@ pub enum Message {
 
     // Transform controls
     TransformSelected(ShaderOption),
-    SliderChanged(f32),
-    SliderReleased,
+    SliderChanged {
+        param_index: usize,
+        value: f32,
+    },
+    SliderReleased {
+        param_index: usize,
+        value: f32,
+    },
     ToggleParameterless,
 
     // History

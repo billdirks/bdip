@@ -2,7 +2,7 @@ use bdip_core::HistoryManager;
 use bdip_core::gpu::engine::GpuEngine;
 use bdip_core::gpu::pipeline::Renderer;
 use bdip_core::gpu::shaders::{
-    ParamKind, ShaderOption, Transform, registry_by_id, sorted_registrations,
+    ParamKind, ShaderMeta, ShaderOption, Transform, registry_by_id, sorted_registrations,
 };
 use bdip_core::gpu::texture::upload_texture;
 use iced::widget::{column, container, row};
@@ -31,6 +31,14 @@ struct GpuState {
     cached_base_texture: Option<bdip_core::wgpu::Texture>,
 }
 
+/// Tracks an in-progress slider drag: which slider (by index within the shader's
+/// `SliderDef` list) and its current live value.
+#[derive(Debug, Clone)]
+pub struct PreviewSlider {
+    pub param_index: usize,
+    pub value: f32,
+}
+
 pub struct BdipApp {
     // Image state
     pub base_image: Option<bdip_core::Rgba16Image>,
@@ -45,11 +53,10 @@ pub struct BdipApp {
     // Transform state
     pub history: HistoryManager,
     pub selected_transform: ShaderOption,
-    /// Current slider display value. During a drag this is the live position;
-    /// otherwise it equals the last committed value for the selected transform
-    /// (derived from the trailing run in history).
-    pub preview_value: f32,
-    pub is_previewing: bool,
+    /// Live slider drag state. `Some` while a slider is being dragged;
+    /// `None` at rest. Sidebar derives display values from `current_values_for`
+    /// when this is `None`.
+    pub preview_slider: Option<PreviewSlider>,
 
     // UI state
     pub error_message: Option<String>,
@@ -94,8 +101,7 @@ impl BdipApp {
                         display_name: r.meta.display_name,
                     })
                     .expect("shader registry must not be empty"),
-                preview_value: 0.0,
-                is_previewing: false,
+                preview_slider: None,
                 error_message,
                 is_loading: has_input,
                 is_saving: false,
@@ -149,8 +155,7 @@ impl BdipApp {
                 }
                 self.base_image = Some(img);
                 self.history.clear();
-                self.preview_value = 0.0;
-                self.is_previewing = false;
+                self.preview_slider = None;
                 self.is_loading = false;
                 self.error_message = None;
                 // Dispatch the initial preview render asynchronously.
@@ -196,15 +201,13 @@ impl BdipApp {
             }
 
             Message::TransformSelected(opt) => {
-                self.preview_value = self.active_transform_value(&opt);
                 self.selected_transform = opt;
-                self.is_previewing = false;
+                self.preview_slider = None;
                 Task::none()
             }
 
-            Message::SliderChanged(val) => {
-                self.preview_value = val;
-                self.is_previewing = true;
+            Message::SliderChanged { param_index, value } => {
+                self.preview_slider = Some(PreviewSlider { param_index, value });
                 if !self.has_base_texture() {
                     return Task::none();
                 }
@@ -212,10 +215,7 @@ impl BdipApp {
                     return Task::none();
                 };
                 let (w, h) = base_image.dimensions();
-                let preview = Transform {
-                    shader_id: self.selected_transform.id,
-                    values: vec![val],
-                };
+                let preview = self.build_slider_transform(param_index, value);
                 let render_list = build_render_list(&self.history, Some(&preview));
                 self.spawn_render(RenderRequest::Preview {
                     render_list,
@@ -224,17 +224,13 @@ impl BdipApp {
                 })
             }
 
-            Message::SliderReleased => {
-                if !self.is_previewing {
+            Message::SliderReleased { param_index, value } => {
+                if self.preview_slider.is_none() {
                     return Task::none();
                 }
-                let t = Transform {
-                    shader_id: self.selected_transform.id,
-                    values: vec![self.preview_value],
-                };
+                let t = self.build_slider_transform(param_index, value);
                 self.history.apply(t);
-                self.is_previewing = false;
-                // preview_value stays at its current position — the slider does not reset.
+                self.preview_slider = None;
                 if !self.has_base_texture() {
                     return Task::none();
                 }
@@ -278,7 +274,7 @@ impl BdipApp {
 
             Message::Undo => {
                 if self.history.undo().is_some() && self.has_base_texture() {
-                    self.preview_value = self.active_transform_value(&self.selected_transform);
+                    self.preview_slider = None;
                     let Some(base_image) = &self.base_image else {
                         return Task::none();
                     };
@@ -295,7 +291,7 @@ impl BdipApp {
 
             Message::Redo => {
                 if self.history.redo().is_some() && self.has_base_texture() {
-                    self.preview_value = self.active_transform_value(&self.selected_transform);
+                    self.preview_slider = None;
                     let Some(base_image) = &self.base_image else {
                         return Task::none();
                     };
@@ -489,6 +485,22 @@ impl BdipApp {
             .is_some_and(|t| t.shader_id == opt.id)
     }
 
+    /// Builds a `Transform` for the currently selected shader by reading base
+    /// values from history and overriding the parameter at `param_index` with
+    /// `value`.
+    fn build_slider_transform(&self, param_index: usize, value: f32) -> Transform {
+        let mut values = registry_by_id(self.selected_transform.id)
+            .map(|r| current_values_for(self.selected_transform.id, &self.history, &r.meta))
+            .unwrap_or_default();
+        if param_index < values.len() {
+            values[param_index] = value;
+        }
+        Transform {
+            shader_id: self.selected_transform.id,
+            values,
+        }
+    }
+
     /// Returns true if the GPU is initialized and a base image is currently
     /// resident in GPU memory as a texture.
     fn has_base_texture(&self) -> bool {
@@ -496,25 +508,23 @@ impl BdipApp {
             .as_ref()
             .is_some_and(|g| g.lock().unwrap().cached_base_texture.is_some())
     }
+}
 
-    /// Returns the slider value for `opt` by examining the trailing run of the
-    /// history. If the last entry in `history` is of type `opt`, returns that
-    /// value. Otherwise returns the shader's declared default, or 0.0 if
-    /// unavailable.
-    pub fn active_transform_value(&self, opt: &ShaderOption) -> f32 {
-        self.history
-            .applied_transforms()
-            .last()
-            .filter(|t| t.shader_id == opt.id)
-            .and_then(|t| t.values.first().copied())
-            .unwrap_or_else(|| {
-                registry_by_id(opt.id)
-                    .and_then(|r| match &r.meta.param {
-                        ParamKind::Sliders(defs) => defs.first().map(|d| d.default),
-                        ParamKind::Toggle => None,
-                    })
-                    .unwrap_or(0.0)
-            })
+/// Returns the current parameter values for a shader by checking the last history entry.
+/// If the last entry matches `shader_id`, returns its values; otherwise returns the
+/// `SliderDef` defaults from `meta`.
+pub(crate) fn current_values_for(
+    shader_id: &'static str,
+    history: &HistoryManager,
+    meta: &ShaderMeta,
+) -> Vec<f32> {
+    let ParamKind::Sliders(defs) = &meta.param else {
+        return vec![];
+    };
+    let defaults = || defs.iter().map(|d| d.default).collect::<Vec<_>>();
+    match history.applied_transforms().last() {
+        Some(t) if t.shader_id == shader_id => t.values.clone(),
+        _ => defaults(),
     }
 }
 
@@ -601,6 +611,7 @@ fn execute_render_pipeline(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bdip_core::gpu::shaders::{ParamKind, ShaderMeta, SliderDef};
 
     #[test]
     fn test_collapse_adjacent_empty() {
@@ -701,79 +712,95 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_slider_value_trailing_run_matches() {
-        let (mut app, _) = BdipApp::new(None);
-        app.history.apply(Transform {
-            shader_id: "brightness",
-            values: vec![0.3],
-        });
-        app.history.apply(Transform {
-            shader_id: "saturation",
-            values: vec![0.5],
-        });
-        assert_eq!(
-            app.active_transform_value(&ShaderOption {
-                id: "saturation",
-                display_name: "Saturation"
-            }),
-            0.5
-        );
+    fn brightness_meta() -> ShaderMeta {
+        ShaderMeta {
+            id: "brightness",
+            display_name: "Brightness",
+            wgsl_source: "",
+            param: ParamKind::Sliders(&[SliderDef {
+                name: "Amount",
+                min: -1.0,
+                max: 1.0,
+                default: 0.0,
+            }]),
+        }
+    }
+
+    fn two_param_meta() -> ShaderMeta {
+        ShaderMeta {
+            id: "test_two",
+            display_name: "Test Two",
+            wgsl_source: "",
+            param: ParamKind::Sliders(&[
+                SliderDef {
+                    name: "A",
+                    min: 0.0,
+                    max: 1.0,
+                    default: 0.1,
+                },
+                SliderDef {
+                    name: "B",
+                    min: 0.0,
+                    max: 1.0,
+                    default: 0.2,
+                },
+            ]),
+        }
     }
 
     #[test]
-    fn test_slider_value_trailing_run_interrupted() {
-        let (mut app, _) = BdipApp::new(None);
-        app.history.apply(Transform {
-            shader_id: "brightness",
-            values: vec![0.3],
-        });
-        app.history.apply(Transform {
-            shader_id: "saturation",
-            values: vec![0.5],
-        });
-        assert_eq!(
-            app.active_transform_value(&ShaderOption {
-                id: "brightness",
-                display_name: "Brightness"
-            }),
-            0.0
-        );
+    fn test_current_values_for_empty_history_returns_defaults() {
+        let history = HistoryManager::new();
+        let meta = brightness_meta();
+        let vals = current_values_for("brightness", &history, &meta);
+        assert_eq!(vals, vec![0.0]);
     }
 
     #[test]
-    fn test_slider_value_empty_history() {
-        let (app, _) = BdipApp::new(None);
-        assert_eq!(
-            app.active_transform_value(&ShaderOption {
-                id: "brightness",
-                display_name: "Brightness"
-            }),
-            0.0
-        );
+    fn test_current_values_for_last_entry_same_shader_returns_its_values() {
+        let mut history = HistoryManager::new();
+        history.apply(Transform {
+            shader_id: "brightness",
+            values: vec![0.4],
+        });
+        let meta = brightness_meta();
+        let vals = current_values_for("brightness", &history, &meta);
+        assert_eq!(vals, vec![0.4]);
     }
 
     #[test]
-    fn test_slider_value_multiple_trailing_same_type() {
-        let (mut app, _) = BdipApp::new(None);
-        app.history.apply(Transform {
+    fn test_current_values_for_last_entry_different_shader_returns_defaults() {
+        let mut history = HistoryManager::new();
+        history.apply(Transform {
             shader_id: "brightness",
-            values: vec![0.3],
+            values: vec![0.4],
         });
-        app.history.apply(Transform {
+        history.apply(Transform {
             shader_id: "saturation",
-            values: vec![0.2],
+            values: vec![0.9],
         });
-        app.history.apply(Transform {
-            shader_id: "saturation",
-            values: vec![0.5],
+        let meta = brightness_meta();
+        let vals = current_values_for("brightness", &history, &meta);
+        assert_eq!(vals, vec![0.0]);
+    }
+
+    #[test]
+    fn test_current_values_for_multi_param_empty_history_returns_all_defaults() {
+        let history = HistoryManager::new();
+        let meta = two_param_meta();
+        let vals = current_values_for("test_two", &history, &meta);
+        assert_eq!(vals, vec![0.1, 0.2]);
+    }
+
+    #[test]
+    fn test_current_values_for_multi_param_last_entry_same_shader_returns_all_values() {
+        let mut history = HistoryManager::new();
+        history.apply(Transform {
+            shader_id: "test_two",
+            values: vec![0.5, 0.7],
         });
-        assert_eq!(
-            app.active_transform_value(&ShaderOption {
-                id: "saturation",
-                display_name: "Saturation"
-            }),
-            0.5
-        );
+        let meta = two_param_meta();
+        let vals = current_values_for("test_two", &history, &meta);
+        assert_eq!(vals, vec![0.5, 0.7]);
     }
 }

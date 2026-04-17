@@ -3,6 +3,7 @@ pub mod contrast;
 pub mod grayscale;
 pub mod invert;
 pub mod saturation;
+pub mod vignette;
 
 #[cfg(test)]
 mod cross_shader_tests;

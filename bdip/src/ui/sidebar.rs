@@ -5,7 +5,7 @@ use iced::{Element, Length};
 
 use bdip_core::gpu::shaders::{ParamKind, ShaderOption, registry_by_id, sorted_registrations};
 
-use super::app::BdipApp;
+use super::app::{BdipApp, current_values_for};
 use super::message::Message;
 use super::style;
 
@@ -44,16 +44,37 @@ fn transform_view(app: &BdipApp) -> Element<'_, Message> {
     );
 
     let selected_reg = registry_by_id(app.selected_transform.id);
-    let transform_control: Element<'_, Message> = match selected_reg.map(|r| &r.meta.param) {
-        Some(ParamKind::Sliders(defs)) => {
-            let def = &defs[0];
-            let s = slider(def.min..=def.max, app.preview_value, Message::SliderChanged)
+    let transform_control: Element<'_, Message> = match selected_reg.map(|r| &r.meta) {
+        Some(meta) if matches!(meta.param, ParamKind::Sliders(_)) => {
+            let ParamKind::Sliders(defs) = &meta.param else {
+                unreachable!()
+            };
+            let base_vals = current_values_for(app.selected_transform.id, &app.history, meta);
+            let mut col = column![].spacing(8);
+            for (i, def) in defs.iter().enumerate() {
+                let display_val = match &app.preview_slider {
+                    Some(ps) if ps.param_index == i => ps.value,
+                    _ => base_vals.get(i).copied().unwrap_or(def.default),
+                };
+                let label_row =
+                    row![text(def.name), text(format!("{:.2}", display_val)),].spacing(8);
+                let s = slider(def.min..=def.max, display_val, move |val| {
+                    Message::SliderChanged {
+                        param_index: i,
+                        value: val,
+                    }
+                })
                 .step(0.01)
-                .on_release(Message::SliderReleased);
-            let value_label = text(format!("{:.2}", app.preview_value));
-            column![s, value_label].spacing(4).into()
+                .on_release(Message::SliderReleased {
+                    param_index: i,
+                    value: display_val,
+                });
+                col = col.push(label_row);
+                col = col.push(s);
+            }
+            col.into()
         }
-        Some(ParamKind::Toggle) | None => {
+        _ => {
             let is_active = app.is_transform_active(&app.selected_transform);
             row![
                 text("Apply"),
