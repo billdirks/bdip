@@ -445,6 +445,12 @@ impl BdipApp {
                         return Message::Undo;
                     }
                 }
+                if modifiers.command() && key.as_ref() == Key::Character("o") {
+                    return Message::LoadImagePressed;
+                }
+                if modifiers.command() && key.as_ref() == Key::Character("s") {
+                    return Message::SaveImagePressed;
+                }
                 if key.as_ref() == Key::Named(key::Named::Escape) {
                     return Message::CloseFileMenu;
                 }

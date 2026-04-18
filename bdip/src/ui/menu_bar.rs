@@ -1,4 +1,4 @@
-use iced::widget::{button, column, container, text};
+use iced::widget::{Space, button, column, container, row, text};
 use iced::{Element, Length};
 
 use super::app::BdipApp;
@@ -21,7 +21,12 @@ pub fn view(app: &BdipApp) -> Element<'_, Message> {
 
 /// Renders the open pulldown panel. Only called when `app.menu_open` is true.
 pub fn pulldown(app: &BdipApp) -> Element<'_, Message> {
-    let load_btn = button(text("Load Image"))
+    let load_row = row![
+        text("Load Image"),
+        Space::new().width(Length::Fill),
+        text("⌘O").style(style::dimmed_text),
+    ];
+    let load_btn = button(load_row)
         .padding([3, 16])
         .width(Length::Fill)
         .style(style::menu_item_button);
@@ -31,7 +36,12 @@ pub fn pulldown(app: &BdipApp) -> Element<'_, Message> {
         load_btn
     };
 
-    let save_btn = button(text("Save Image"))
+    let save_row = row![
+        text("Save Image"),
+        Space::new().width(Length::Fill),
+        text("⌘S").style(style::dimmed_text),
+    ];
+    let save_btn = button(save_row)
         .padding([3, 16])
         .width(Length::Fill)
         .style(style::menu_item_button);
@@ -41,7 +51,7 @@ pub fn pulldown(app: &BdipApp) -> Element<'_, Message> {
         save_btn
     };
 
-    container(column![load_item, save_item].width(Length::Fixed(130.0)))
+    container(column![load_item, save_item].width(Length::Fixed(170.0)))
         .padding([10, 0])
         .style(style::menu_pulldown_container)
         .into()
