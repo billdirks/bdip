@@ -51,12 +51,16 @@ pub fn view(app: &BdipApp) -> Element<'_, Message> {
         .height(Length::Fill)
         .into()
     } else {
-        container(text("Load an image to begin."))
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .center_x(Length::Fill)
-            .center_y(Length::Fill)
-            .into()
+        container(
+            button(text("Load an image to begin."))
+                .style(style::link_button)
+                .on_press(Message::LoadImagePressed),
+        )
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .center_x(Length::Fill)
+        .center_y(Length::Fill)
+        .into()
     };
 
     if let Some(err) = &app.error_message {

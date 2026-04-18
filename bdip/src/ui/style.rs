@@ -105,6 +105,29 @@ pub fn menu_item_button(theme: &Theme, status: button::Status) -> button::Style 
     }
 }
 
+/// Style for an inline link-styled button: no background or border, near-white resting text
+/// that brightens fully on hover to signal interactivity.
+pub fn link_button(theme: &Theme, status: button::Status) -> button::Style {
+    let palette = theme.extended_palette();
+    let base = button::Style {
+        background: None,
+        text_color: Color {
+            a: 0.85,
+            ..palette.background.base.text
+        },
+        border: Border::default(),
+        shadow: Shadow::default(),
+        snap: true,
+    };
+    match status {
+        button::Status::Hovered | button::Status::Pressed => button::Style {
+            text_color: palette.background.base.text,
+            ..base
+        },
+        _ => base,
+    }
+}
+
 pub const SECTION_HEADER_SIZE: f32 = 12.0;
 pub const SECTION_HEADER_SPACING: f32 = 8.0;
 pub const SECTION_SIDEBAR_PADDING: f32 = 8.0;
