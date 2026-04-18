@@ -237,3 +237,37 @@ pub fn error_banner(_theme: &Theme) -> container::Style {
         ..Default::default()
     }
 }
+
+/// Style for the "Dismiss" button on the error banner. Ghost-styled against the red
+/// background: white outline and text with a subtle white fill on hover.
+pub fn dismiss_button(_theme: &Theme, status: button::Status) -> button::Style {
+    let base = button::Style {
+        background: None,
+        text_color: Color::WHITE,
+        border: Border {
+            color: Color {
+                a: 0.55,
+                ..Color::WHITE
+            },
+            width: 1.0,
+            radius: 4.0.into(),
+        },
+        shadow: Shadow::default(),
+        snap: true,
+    };
+    match status {
+        button::Status::Active => base,
+        button::Status::Hovered | button::Status::Pressed => button::Style {
+            background: Some(Background::Color(Color {
+                a: 0.15,
+                ..Color::WHITE
+            })),
+            border: Border {
+                color: Color::WHITE,
+                ..base.border
+            },
+            ..base
+        },
+        button::Status::Disabled => base,
+    }
+}

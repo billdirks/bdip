@@ -1,7 +1,7 @@
 use bdip_core::gpu::engine::GpuEngine;
 use bdip_core::gpu::pipeline::Renderer;
-use iced::widget::{button, column, container, image, row, text};
-use iced::{ContentFit, Element, Length};
+use iced::widget::{button, container, image, row, stack, text};
+use iced::{Alignment, ContentFit, Element, Length};
 
 use super::app::BdipApp;
 use super::message::Message;
@@ -64,20 +64,23 @@ pub fn view(app: &BdipApp) -> Element<'_, Message> {
     };
 
     if let Some(err) = &app.error_message {
-        // Show a dismissible error banner above the canvas content so the image
-        // (or placeholder) remains visible while the error is displayed.
+        // Overlay the error banner on top of the canvas so the image (or placeholder)
+        // remains fully visible and no reflow occurs.
         let banner = container(
             row![
                 text(err.as_str()).width(Length::Fill),
-                button("Dismiss").on_press(Message::DismissError),
+                button("Dismiss")
+                    .style(style::dismiss_button)
+                    .on_press(Message::DismissError),
             ]
             .spacing(8)
-            .padding(8),
+            .padding(8)
+            .align_y(Alignment::Center),
         )
         .style(style::error_banner)
         .width(Length::Fill);
 
-        column![banner, canvas_content]
+        stack![canvas_content, banner]
             .width(Length::Fill)
             .height(Length::Fill)
             .into()
