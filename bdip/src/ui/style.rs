@@ -105,6 +105,18 @@ pub fn menu_item_button(theme: &Theme, status: button::Status) -> button::Style 
     }
 }
 
+pub const SECTION_HEADER_SIZE: f32 = 12.0;
+pub const SECTION_HEADER_SPACING: f32 = 8.0;
+pub const SECTION_SIDEBAR_PADDING: f32 = 8.0;
+
+/// Style for sidebar section header titles.
+pub fn section_header_text(theme: &Theme) -> text::Style {
+    let palette = theme.extended_palette();
+    text::Style {
+        color: Some(palette.background.strong.text),
+    }
+}
+
 /// Style for the error banner displayed at the top of the canvas area.
 pub fn error_banner(_theme: &Theme) -> container::Style {
     container::Style {

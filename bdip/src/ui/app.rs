@@ -393,6 +393,7 @@ impl BdipApp {
 
         let content_row = row![
             container(sidebar).width(Length::Fixed(250.0)),
+            rule::vertical(1),
             container(canvas).width(Length::Fill).height(Length::Fill),
         ]
         .width(Length::Fill)

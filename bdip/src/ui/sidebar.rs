@@ -86,9 +86,19 @@ fn transform_view(app: &BdipApp) -> Element<'_, Message> {
         }
     };
 
-    column![transform_picker, transform_control]
-        .spacing(16)
-        .padding(8)
+    let header = text("TRANSFORMATIONS")
+        .size(style::SECTION_HEADER_SIZE)
+        .font(iced::Font {
+            weight: iced::font::Weight::Bold,
+            ..iced::Font::DEFAULT
+        })
+        .style(style::section_header_text);
+
+    let content = column![transform_picker, transform_control].spacing(16);
+
+    column![header, content]
+        .spacing(style::SECTION_HEADER_SPACING)
+        .padding(style::SECTION_SIDEBAR_PADDING)
         .width(Length::Fill)
         .into()
 }
@@ -138,9 +148,17 @@ fn history_view(app: &BdipApp) -> Element<'_, Message> {
     // The scrollable expands to fill whatever height the container gives this section.
     let history_scroll = scrollable(list.width(Length::Fill)).height(Length::Fill);
 
-    column![controls, history_scroll]
-        .spacing(8)
-        .padding(8)
+    let header = text("HISTORY")
+        .size(style::SECTION_HEADER_SIZE)
+        .font(iced::Font {
+            weight: iced::font::Weight::Bold,
+            ..iced::Font::DEFAULT
+        })
+        .style(style::section_header_text);
+
+    column![header, controls, history_scroll]
+        .spacing(style::SECTION_HEADER_SPACING)
+        .padding(style::SECTION_SIDEBAR_PADDING)
         .width(Length::Fill)
         .height(Length::Fill)
         .into()

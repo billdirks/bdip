@@ -51,7 +51,7 @@ pub fn view(app: &BdipApp) -> Element<'_, Message> {
         .height(Length::Fill)
         .into()
     } else {
-        container(text("No image loaded — click Load Image to begin."))
+        container(text("Load an image to begin."))
             .width(Length::Fill)
             .height(Length::Fill)
             .center_x(Length::Fill)
