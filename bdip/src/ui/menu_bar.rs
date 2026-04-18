@@ -64,7 +64,22 @@ pub fn pulldown(app: &BdipApp) -> Element<'_, Message> {
         save_btn
     };
 
-    container(column![load_item, save_item].width(Length::Fixed(170.0)))
+    let save_transforms_row = row![
+        text("Export Pipeline"),
+        Space::new().width(Length::Fill),
+        text("⌘E").style(style::dimmed_text),
+    ];
+    let save_transforms_btn = button(save_transforms_row)
+        .padding([3, 16])
+        .width(Length::Fill)
+        .style(style::menu_item_button);
+    let save_transforms_item = if app.history.applied_transforms().is_empty() {
+        save_transforms_btn
+    } else {
+        save_transforms_btn.on_press(Message::ExportPipelinePressed)
+    };
+
+    container(column![load_item, save_item, save_transforms_item].width(Length::Fixed(180.0)))
         .padding([10, 0])
         .style(style::menu_pulldown_container)
         .into()

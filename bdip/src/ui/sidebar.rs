@@ -9,6 +9,15 @@ use super::app::{BdipApp, current_values_for};
 use super::message::Message;
 use super::style;
 
+/// Decimal places required to represent any slider value exactly in decimal
+/// notation. Used by the sidebar value readout and by pipeline export.
+pub const SLIDER_DECIMAL_PLACES: u32 = 2;
+
+/// Step size for all parameter sliders, derived from `SLIDER_DECIMAL_PLACES`
+/// so the two cannot desync. Values snap to multiples of this step starting
+/// from integer anchors.
+pub const SLIDER_STEP: f32 = 1.0 / 10_i32.pow(SLIDER_DECIMAL_PLACES) as f32;
+
 pub fn view(app: &BdipApp) -> Element<'_, Message> {
     let transform_section = transform_view(app);
     let history_section = history_view(app);
@@ -56,15 +65,21 @@ fn transform_view(app: &BdipApp) -> Element<'_, Message> {
                     Some(ps) if ps.param_index == i => ps.value,
                     _ => base_vals.get(i).copied().unwrap_or(def.default),
                 };
-                let label_row =
-                    row![text(def.name), text(format!("{:.2}", display_val)),].spacing(8);
+                let label_row = row![
+                    text(def.name),
+                    text(format!(
+                        "{:.*}",
+                        SLIDER_DECIMAL_PLACES as usize, display_val
+                    )),
+                ]
+                .spacing(8);
                 let s = slider(def.min..=def.max, display_val, move |val| {
                     Message::SliderChanged {
                         param_index: i,
                         value: val,
                     }
                 })
-                .step(0.01)
+                .step(SLIDER_STEP)
                 .on_release(Message::SliderReleased {
                     param_index: i,
                     value: display_val,

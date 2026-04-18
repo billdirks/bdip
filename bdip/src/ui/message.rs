@@ -41,6 +41,8 @@ pub enum Message {
     // File menu
     ToggleFileMenu,
     CloseFileMenu,
+    ExportPipelinePressed,
+    PipelineExported(Result<(), String>),
 
     // Misc
     Noop,

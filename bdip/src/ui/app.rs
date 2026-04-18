@@ -385,6 +385,41 @@ impl BdipApp {
                 Task::none()
             }
 
+            Message::ExportPipelinePressed => {
+                self.menu_open = false;
+                let render_list = build_render_list(&self.history, None);
+                if render_list.is_empty() {
+                    return Task::none();
+                }
+                let content = render_list
+                    .iter()
+                    .map(serialize_transform)
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                Task::perform(
+                    async move {
+                        let handle = rfd::AsyncFileDialog::new()
+                            .add_filter("Text", &["txt"])
+                            .save_file()
+                            .await;
+                        match handle {
+                            Some(h) => std::fs::write(h.path(), content).map_err(|e| e.to_string()),
+                            None => Err("cancelled".to_string()),
+                        }
+                    },
+                    Message::PipelineExported,
+                )
+            }
+
+            Message::PipelineExported(result) => {
+                match result {
+                    Ok(()) => {}
+                    Err(e) if e == "cancelled" => {}
+                    Err(e) => self.error_message = Some(e),
+                }
+                Task::none()
+            }
+
             Message::Noop => Task::none(),
         }
     }
@@ -453,6 +488,9 @@ impl BdipApp {
                 }
                 if modifiers.command() && key.as_ref() == Key::Character("s") {
                     return Message::SaveImagePressed;
+                }
+                if modifiers.command() && key.as_ref() == Key::Character("e") {
+                    return Message::ExportPipelinePressed;
                 }
                 if key.as_ref() == Key::Named(key::Named::Escape) {
                     return Message::CloseFileMenu;
@@ -591,6 +629,48 @@ fn load_image_task(path: PathBuf) -> Task<Message> {
     )
 }
 
+/// Formats an f32 slider value for pipeline export.
+///
+/// Sliders snap to multiples of `SLIDER_STEP`, so formatting at
+/// `SLIDER_DECIMAL_PLACES` produces clean output like `0.43`. However, the
+/// stored f32 (e.g. `0.42999997735...`) may not be the exact nearest f32 to
+/// that decimal (e.g. `0.43000000745...`) because `SLIDER_STEP` itself isn't
+/// representable exactly in binary. When those two f32s differ, we fall back
+/// to `to_string()`, which prints the shortest decimal that parses back to
+/// the exact original f32 bits (may be `0.42999998`). This guarantees
+/// bit-exact round-trip through `parse_transform` at the cost of some ugly
+/// values.
+fn format_value(v: f32) -> String {
+    let clean = {
+        let s = format!("{:.*}", super::sidebar::SLIDER_DECIMAL_PLACES as usize, v);
+        let s = s.trim_end_matches('0').trim_end_matches('.');
+        s.to_string()
+    };
+    if clean.parse::<f32>() == Ok(v) {
+        clean
+    } else {
+        v.to_string()
+    }
+}
+
+/// Serializes a `Transform` to the pipeline file line format understood by
+/// `bdip --headless --pipeline`.
+///
+/// Parameterless shaders: `shader_id`
+/// Slider shaders: `shader_id:val1:val2:...`
+fn serialize_transform(t: &Transform) -> String {
+    if t.values.is_empty() {
+        t.shader_id.to_string()
+    } else {
+        let mut s = t.shader_id.to_string();
+        for v in &t.values {
+            s.push(':');
+            s.push_str(&format_value(*v));
+        }
+        s
+    }
+}
+
 /// Collapses adjacent runs of the same transform type, keeping only the last
 /// entry in each run.
 ///
@@ -665,6 +745,48 @@ fn execute_render_pipeline(
 mod tests {
     use super::*;
     use bdip_core::gpu::shaders::{ParamKind, ShaderMeta, SliderDef};
+
+    #[test]
+    fn test_serialize_transform_parameterless() {
+        let t = Transform {
+            shader_id: "grayscale",
+            values: vec![],
+        };
+        assert_eq!(serialize_transform(&t), "grayscale");
+    }
+
+    #[test]
+    fn test_serialize_transform_single_value() {
+        let t = Transform {
+            shader_id: "brightness",
+            values: vec![0.5],
+        };
+        assert_eq!(serialize_transform(&t), "brightness:0.5");
+    }
+
+    #[test]
+    fn test_serialize_transform_multiple_values() {
+        // 0.3f32 and -0.7f32 round-trip exactly at SLIDER_DECIMAL_PLACES.
+        let t = Transform {
+            shader_id: "multi",
+            values: vec![0.3f32, -0.7f32],
+        };
+        assert_eq!(serialize_transform(&t), "multi:0.3:-0.7");
+    }
+
+    #[test]
+    fn test_format_value_round_trips_to_original_f32() {
+        // Every exported value, clean or ugly, must parse back to the exact
+        // f32 bits it was serialized from.
+        for v in [0.43f32, -0.7, 1.49, 0.0, 43.0 * 0.01, 0.32999998] {
+            assert_eq!(
+                format_value(v).parse::<f32>().ok(),
+                Some(v),
+                "round-trip failed for {}",
+                v
+            );
+        }
+    }
 
     #[test]
     fn test_collapse_adjacent_empty() {
