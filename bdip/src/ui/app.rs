@@ -63,6 +63,7 @@ pub struct BdipApp {
     pub is_loading: bool,
     pub is_saving: bool,
     pub menu_open: bool,
+    pub loaded_path: Option<PathBuf>,
 }
 
 impl BdipApp {
@@ -107,6 +108,7 @@ impl BdipApp {
                 is_loading: has_input,
                 is_saving: false,
                 menu_open: false,
+                loaded_path: None,
             },
             task,
         )
@@ -140,7 +142,7 @@ impl BdipApp {
                 )
             }
 
-            Message::ImageLoaded(Ok((_, img))) => {
+            Message::ImageLoaded(Ok((path, img))) => {
                 let (w, h) = img.dimensions();
                 // Upload and ingest synchronously: these two operations are fast (they
                 // submit GPU commands without blocking on completion) and must finish
@@ -153,6 +155,7 @@ impl BdipApp {
                     gpu.cached_base_texture = Some(linear);
                 }
                 self.base_image = Some(img);
+                self.loaded_path = Some(path);
                 self.history.clear();
                 self.preview_slider = None;
                 self.is_loading = false;
@@ -195,7 +198,7 @@ impl BdipApp {
             Message::ImageSaved(result) => {
                 self.is_saving = false;
                 match result {
-                    Ok(_) => {}                      // File saved — no banner needed.
+                    Ok(path) => self.loaded_path = Some(path),
                     Err(e) if e == "cancelled" => {} // User cancelled — not an error.
                     Err(e) => self.error_message = Some(e),
                 }

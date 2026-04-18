@@ -5,7 +5,7 @@ use super::app::BdipApp;
 use super::message::Message;
 use super::style;
 
-/// Renders the top menu bar strip containing the "File" label.
+/// Renders the top menu bar strip containing the "File" label and the loaded filename.
 pub fn view(app: &BdipApp) -> Element<'_, Message> {
     let is_open = app.menu_open;
     let file_btn = button(text("File"))
@@ -13,10 +13,23 @@ pub fn view(app: &BdipApp) -> Element<'_, Message> {
         .style(move |theme, status| style::menu_file_button(theme, status, is_open))
         .on_press(Message::ToggleFileMenu);
 
-    container(file_btn)
-        .width(Length::Fill)
-        .style(style::menu_bar_container)
-        .into()
+    let basename = app
+        .loaded_path
+        .as_ref()
+        .and_then(|p| p.file_name())
+        .and_then(|n| n.to_str())
+        .unwrap_or("\u{2014}"); // em dash when no file is loaded
+    let filename_label = container(text(basename).style(style::filename_text))
+        .padding(iced::Padding::default().top(6).bottom(4).right(12));
+
+    container(row![
+        file_btn,
+        Space::new().width(Length::Fill),
+        filename_label
+    ])
+    .width(Length::Fill)
+    .style(style::menu_bar_container)
+    .into()
 }
 
 /// Renders the open pulldown panel. Only called when `app.menu_open` is true.

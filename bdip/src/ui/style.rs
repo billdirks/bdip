@@ -1,5 +1,45 @@
+use iced::theme::palette::Extended;
 use iced::widget::{button, container, text};
 use iced::{Background, Border, Color, Shadow, Theme};
+
+/// Alpha applied to menu bar and pulldown text (File label, item rows, inline shortcuts).
+/// Slightly off-white so the menu bar doesn't feel glaring against a dark background.
+pub const MENU_TEXT_ALPHA: f32 = 0.85;
+
+/// Alpha applied to disabled or inactive text (undone history entries, disabled menu items).
+pub const DIMMED_TEXT_ALPHA: f32 = 0.4;
+
+/// Alpha applied to the loaded-filename label in the menu bar.
+/// Softer than MENU_TEXT_ALPHA so it reads as an orientation cue, not an action.
+pub const FILENAME_TEXT_ALPHA: f32 = 0.5;
+
+/// Background color shared by all menu chrome surfaces (menu bar strip and pulldown panel).
+fn menu_surface_color(palette: &Extended) -> Color {
+    palette.background.weak.color
+}
+
+/// Base text color shared by all text rendered on menu chrome surfaces (File label,
+/// pulldown item rows, and the filename label).
+fn menu_text_base(palette: &Extended) -> Color {
+    palette.background.weak.text
+}
+
+/// Base text color for disabled or inactive text (undone history entries, disabled menu items).
+fn disabled_text_base(palette: &Extended) -> Color {
+    palette.background.strong.text
+}
+
+/// Base for all in-window button styles: no background, no border, no shadow, pixel-snapped.
+/// Callers override `text_color` (and `background` when needed) via struct update syntax.
+fn no_chrome_button_base() -> button::Style {
+    button::Style {
+        background: None,
+        text_color: Color::TRANSPARENT, // always overridden by caller
+        border: Border::default(),
+        shadow: Shadow::default(),
+        snap: true,
+    }
+}
 
 /// Style for history entries that have been undone. Renders text in a dimmed
 /// gray to signal that these entries are inactive and would be restored by Redo.
@@ -7,8 +47,8 @@ pub fn dimmed_text(theme: &Theme) -> text::Style {
     let palette = theme.extended_palette();
     text::Style {
         color: Some(Color {
-            a: 0.4,
-            ..palette.background.strong.text
+            a: DIMMED_TEXT_ALPHA,
+            ..disabled_text_base(palette)
         }),
     }
 }
@@ -17,7 +57,7 @@ pub fn dimmed_text(theme: &Theme) -> text::Style {
 pub fn menu_bar_container(theme: &Theme) -> container::Style {
     let palette = theme.extended_palette();
     container::Style {
-        background: Some(Background::Color(palette.background.weak.color)),
+        background: Some(Background::Color(menu_surface_color(palette))),
         ..Default::default()
     }
 }
@@ -26,7 +66,7 @@ pub fn menu_bar_container(theme: &Theme) -> container::Style {
 pub fn menu_pulldown_container(theme: &Theme) -> container::Style {
     let palette = theme.extended_palette();
     container::Style {
-        background: Some(Background::Color(palette.background.weak.color)),
+        background: Some(Background::Color(menu_surface_color(palette))),
         border: Border {
             color: palette.background.strong.color,
             width: 1.0,
@@ -41,8 +81,8 @@ pub fn menu_pulldown_container(theme: &Theme) -> container::Style {
 pub fn menu_file_button(theme: &Theme, status: button::Status, is_open: bool) -> button::Style {
     let palette = theme.extended_palette();
     let text_color = Color {
-        a: 0.85,
-        ..palette.background.weak.text
+        a: MENU_TEXT_ALPHA,
+        ..menu_text_base(palette)
     };
     let open_bg = Color {
         a: 0.18,
@@ -54,14 +94,12 @@ pub fn menu_file_button(theme: &Theme, status: button::Status, is_open: bool) ->
     };
     let base = button::Style {
         text_color,
-        border: Border::default(),
-        shadow: Shadow::default(),
-        snap: true,
         background: if is_open {
             Some(Background::Color(open_bg))
         } else {
             None
         },
+        ..no_chrome_button_base()
     };
     match status {
         button::Status::Active => base,
@@ -78,15 +116,12 @@ pub fn menu_file_button(theme: &Theme, status: button::Status, is_open: bool) ->
 pub fn menu_item_button(theme: &Theme, status: button::Status) -> button::Style {
     let palette = theme.extended_palette();
     let resting_text = Color {
-        a: 0.85,
-        ..palette.background.weak.text
+        a: MENU_TEXT_ALPHA,
+        ..menu_text_base(palette)
     };
     let base = button::Style {
-        background: None,
         text_color: resting_text,
-        border: Border::default(),
-        shadow: Shadow::default(),
-        snap: true,
+        ..no_chrome_button_base()
     };
     match status {
         button::Status::Active => base,
@@ -97,8 +132,8 @@ pub fn menu_item_button(theme: &Theme, status: button::Status) -> button::Style 
         },
         button::Status::Disabled => button::Style {
             text_color: Color {
-                a: 0.4,
-                ..palette.background.strong.text
+                a: DIMMED_TEXT_ALPHA,
+                ..disabled_text_base(palette)
             },
             ..base
         },
@@ -110,14 +145,11 @@ pub fn menu_item_button(theme: &Theme, status: button::Status) -> button::Style 
 pub fn link_button(theme: &Theme, status: button::Status) -> button::Style {
     let palette = theme.extended_palette();
     let base = button::Style {
-        background: None,
         text_color: Color {
-            a: 0.85,
+            a: MENU_TEXT_ALPHA,
             ..palette.background.base.text
         },
-        border: Border::default(),
-        shadow: Shadow::default(),
-        snap: true,
+        ..no_chrome_button_base()
     };
     match status {
         button::Status::Hovered | button::Status::Pressed => button::Style {
@@ -137,6 +169,18 @@ pub fn section_header_text(theme: &Theme) -> text::Style {
     let palette = theme.extended_palette();
     text::Style {
         color: Some(palette.background.strong.text),
+    }
+}
+
+/// Style for the loaded filename shown on the right side of the menu bar.
+/// Dimmed so it reads as an orientation cue rather than an interactive element.
+pub fn filename_text(theme: &Theme) -> text::Style {
+    let palette = theme.extended_palette();
+    text::Style {
+        color: Some(Color {
+            a: FILENAME_TEXT_ALPHA,
+            ..menu_text_base(palette)
+        }),
     }
 }
 
