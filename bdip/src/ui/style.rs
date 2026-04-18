@@ -184,6 +184,51 @@ pub fn filename_text(theme: &Theme) -> text::Style {
     }
 }
 
+/// Ghost/outline button: thin border, no fill, muted text. Use for low-priority actions
+/// that should not compete visually with the primary canvas content.
+pub fn ghost_button(theme: &Theme, status: button::Status) -> button::Style {
+    let palette = theme.extended_palette();
+    let resting_text = Color {
+        a: MENU_TEXT_ALPHA,
+        ..palette.background.base.text
+    };
+    let base = button::Style {
+        background: None,
+        text_color: resting_text,
+        border: Border {
+            color: palette.background.strong.color,
+            width: 1.0,
+            radius: 4.0.into(),
+        },
+        shadow: Shadow::default(),
+        snap: true,
+    };
+    match status {
+        button::Status::Active => base,
+        button::Status::Hovered | button::Status::Pressed => button::Style {
+            background: Some(Background::Color(Color {
+                a: 0.08,
+                ..disabled_text_base(palette)
+            })),
+            ..base
+        },
+        button::Status::Disabled => button::Style {
+            text_color: Color {
+                a: DIMMED_TEXT_ALPHA,
+                ..disabled_text_base(palette)
+            },
+            border: Border {
+                color: Color {
+                    a: DIMMED_TEXT_ALPHA,
+                    ..palette.background.strong.color
+                },
+                ..base.border
+            },
+            ..base
+        },
+    }
+}
+
 /// Style for the error banner displayed at the top of the canvas area.
 pub fn error_banner(_theme: &Theme) -> container::Style {
     container::Style {

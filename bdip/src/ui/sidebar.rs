@@ -108,7 +108,7 @@ fn history_view(app: &BdipApp) -> Element<'_, Message> {
     let can_redo = app.history.can_redo();
 
     let undo_btn = {
-        let b = button("Undo (⌘Z)");
+        let b = button("Undo (⌘Z)").style(style::ghost_button);
         if can_undo {
             b.on_press(Message::Undo)
         } else {
@@ -117,7 +117,7 @@ fn history_view(app: &BdipApp) -> Element<'_, Message> {
     };
 
     let redo_btn = {
-        let b = button("Redo (⌘⇧Z)");
+        let b = button("Redo (⌘⇧Z)").style(style::ghost_button);
         if can_redo {
             b.on_press(Message::Redo)
         } else {
