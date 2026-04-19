@@ -62,11 +62,16 @@ Carried from `specs/multi-pass-research.md` § "Option C" and § "The one gotcha
 2. **Passes are declared, not orchestrated.** Each multi-pass shader supplies a static
    `PassDef` array listing its passes in order. The engine walks the array and dispatches;
    shaders do not call into `Renderer`.
-3. **Passes name their inputs and output with typed identifiers.** `PassInput::Source` is
-   the Transform's input texture (output of the previous Transform in the stack).
-   `PassInput::Scratch("name")` is the output of an earlier pass in the same Transform.
-   `PassOutput::Scratch("name")` is a recycled intermediate; `PassOutput::Final` is the
-   Transform's output texture.
+3. **Passes name their inputs and output with typed identifiers.** `PassInput::Source`
+   and `PassOutput::Final` are special tokens for the Transform's boundaries —
+   `Source` is the input texture (output of the previous Transform in the stack);
+   `Final` is the output texture handed to the next Transform. Everything else is a
+   named scratch: `PassInput::Scratch("h")` and `PassOutput::Scratch("h")` refer to the
+   *same* scratch texture owned by the pool — one variant is the write handle (an
+   earlier pass declares `PassOutput::Scratch("h")`), the other is the read handle (a
+   later pass declares `PassInput::Scratch("h")`). The split exists only because input
+   slots and output slots have different types in the bind group; the `"h"` identifier
+   resolves to one underlying texture.
 4. **Bindings are position-indexed, derived from declared arity.** A pass declaring N
    inputs binds them to `@group(0) @binding(0)` through `@group(0) @binding(N-1)`. The
    output storage texture binds to `@group(0) @binding(N)`. The uniform buffer stays on
@@ -90,21 +95,25 @@ Carried from `specs/multi-pass-research.md` § "Option C" and § "The one gotcha
 ### New types in `bdip_core/src/gpu/shaders/mod.rs`
 
 ```rust
-/// Which resource a pass reads.
+/// Which resource a pass reads. `Source` / `Scratch("name")` are the read-side view
+/// of the same name-space as `PassOutput`. A pass reading `Scratch("h")` reads the
+/// texture written by an earlier pass that declared `PassOutput::Scratch("h")`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PassInput {
     /// The Transform's input texture (output of the previous Transform).
     Source,
-    /// Output of a prior pass in this same Transform, by name.
+    /// A scratch texture written by an earlier pass in this same Transform.
     Scratch(&'static str),
 }
 
-/// Where a pass writes its output.
+/// Where a pass writes its output. `Scratch("name")` is the write-side view of the same
+/// name-space as `PassInput`. The same `"name"` resolves to the same texture in the pool.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PassOutput {
-    /// Intermediate — engine allocates/recycles a scratch texture by this name.
+    /// Write to the named scratch texture. A later pass reads it via
+    /// `PassInput::Scratch("name")`. The engine allocates and recycles the texture.
     Scratch(&'static str),
-    /// Final output of the Transform.
+    /// Write to the Transform's final output texture (handed to the next Transform).
     Final,
 }
 
