@@ -14,7 +14,7 @@ pub mod vignette;
 mod cross_shader_tests;
 
 /// A named slider definition — one entry per adjustable parameter on a shader.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SliderDef {
     pub name: &'static str,
     pub min: f32,
@@ -22,27 +22,53 @@ pub struct SliderDef {
     pub default: f32,
 }
 
-/// Metadata that the UI, CLI, and pipeline all read from a registered shader.
-#[derive(Debug, Clone)]
-pub struct ShaderMeta {
-    pub id: &'static str,
-    pub display_name: &'static str,
-    pub wgsl_source: &'static str,
-    pub param: ParamKind,
-}
-
 /// Describes what kind of parameter a shader accepts.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ParamKind {
     Sliders(&'static [SliderDef]),
     Toggle,
 }
 
+/// Which resource a pass reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PassInput {
+    Source,
+    Scratch(&'static str),
+}
+
+/// Where a pass writes its output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PassOutput {
+    Scratch(&'static str),
+    Final,
+}
+
+/// Declarative description of one compute pass.
+#[derive(Debug, Clone, Copy)]
+pub struct PassDef {
+    pub label: &'static str,
+    pub wgsl_source: &'static str,
+    pub inputs: &'static [PassInput],
+    pub output: PassOutput,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct RuntimeShaderMeta {
+    pub id: &'static str,
+    pub display_name: &'static str,
+    pub passes: &'static [PassDef],
+    pub param: ParamKind,
+}
+
 /// Type-erased registration entry collected by `inventory` at link time.
 pub struct ShaderRegistration {
-    pub meta: ShaderMeta,
+    pub meta: RuntimeShaderMeta,
     /// Creates the uniform byte buffer from parameter values.
     pub make_uniform: fn(&[f32]) -> Vec<u8>,
+}
+
+pub const fn validate_pass_list(_passes: &[PassDef]) {
+    // Implemented in PR 1
 }
 
 inventory::collect!(ShaderRegistration);
@@ -53,8 +79,14 @@ fn make_uniform_for<T: TransformShader>(values: &[f32]) -> Vec<u8> {
 
 impl ShaderRegistration {
     pub const fn new<T: TransformShader>() -> Self {
+        validate_pass_list(T::PASSES);
         Self {
-            meta: T::META,
+            meta: RuntimeShaderMeta {
+                id: T::ID,
+                display_name: T::DISPLAY_NAME,
+                passes: T::PASSES,
+                param: T::PARAM,
+            },
             make_uniform: make_uniform_for::<T>,
         }
     }
@@ -62,8 +94,16 @@ impl ShaderRegistration {
 
 /// Implemented by each shader's params struct. The `inventory::submit!` call in
 /// each shader module registers it without editing any central list.
+///
+/// Implemented by each shader's params struct. Single-pass shaders provide a
+/// one-element `PASSES` slice with `inputs: &[PassInput::Source]` and
+/// `output: PassOutput::Final`. Multi-pass shaders provide the full ordered pass list.
 pub trait TransformShader: bytemuck::Pod {
-    const META: ShaderMeta;
+    const ID: &'static str;
+    const DISPLAY_NAME: &'static str;
+    const PARAM: ParamKind;
+    const PASSES: &'static [PassDef];
+
     fn from_values(values: &[f32]) -> Self;
     fn to_bytes(&self) -> &[u8] {
         bytemuck::bytes_of(self)

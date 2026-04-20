@@ -1,4 +1,4 @@
-use crate::gpu::shaders::{ParamKind, ShaderMeta, SliderDef, TransformShader};
+use crate::gpu::shaders::{ParamKind, PassDef, PassInput, PassOutput, SliderDef, TransformShader};
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -9,25 +9,28 @@ pub struct VignetteParams {
 }
 
 impl TransformShader for VignetteParams {
-    const META: ShaderMeta = ShaderMeta {
-        id: "vignette",
-        display_name: "Vignette",
+    const ID: &'static str = "vignette";
+    const DISPLAY_NAME: &'static str = "Vignette";
+    const PARAM: ParamKind = ParamKind::Sliders(&[
+        SliderDef {
+            name: "Radius",
+            min: 0.0,
+            max: 1.5,
+            default: 0.8,
+        },
+        SliderDef {
+            name: "Softness",
+            min: 0.0,
+            max: 1.0,
+            default: 0.5,
+        },
+    ]);
+    const PASSES: &'static [PassDef] = &[PassDef {
+        label: "vignette",
         wgsl_source: include_str!("vignette.wgsl"),
-        param: ParamKind::Sliders(&[
-            SliderDef {
-                name: "Radius",
-                min: 0.0,
-                max: 1.5,
-                default: 0.8,
-            },
-            SliderDef {
-                name: "Softness",
-                min: 0.0,
-                max: 1.0,
-                default: 0.5,
-            },
-        ]),
-    };
+        inputs: &[PassInput::Source],
+        output: PassOutput::Final,
+    }];
 
     fn from_values(values: &[f32]) -> Self {
         Self {

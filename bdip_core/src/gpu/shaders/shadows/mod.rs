@@ -1,4 +1,4 @@
-use crate::gpu::shaders::{ParamKind, ShaderMeta, SliderDef, TransformShader};
+use crate::gpu::shaders::{ParamKind, PassDef, PassInput, PassOutput, SliderDef, TransformShader};
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -10,31 +10,34 @@ pub struct ShadowsParams {
 }
 
 impl TransformShader for ShadowsParams {
-    const META: ShaderMeta = ShaderMeta {
-        id: "shadows",
-        display_name: "Shadows",
+    const ID: &'static str = "shadows";
+    const DISPLAY_NAME: &'static str = "Shadows";
+    const PARAM: ParamKind = ParamKind::Sliders(&[
+        SliderDef {
+            name: "Amount",
+            min: -1.0,
+            max: 1.0,
+            default: 0.0,
+        },
+        SliderDef {
+            name: "Range",
+            min: 0.0,
+            max: 1.0,
+            default: 0.4,
+        },
+        SliderDef {
+            name: "Start",
+            min: 0.0,
+            max: 1.0,
+            default: 0.05,
+        },
+    ]);
+    const PASSES: &'static [PassDef] = &[PassDef {
+        label: "shadows",
         wgsl_source: include_str!("shadows.wgsl"),
-        param: ParamKind::Sliders(&[
-            SliderDef {
-                name: "Amount",
-                min: -1.0,
-                max: 1.0,
-                default: 0.0,
-            },
-            SliderDef {
-                name: "Range",
-                min: 0.0,
-                max: 1.0,
-                default: 0.4,
-            },
-            SliderDef {
-                name: "Start",
-                min: 0.0,
-                max: 1.0,
-                default: 0.05,
-            },
-        ]),
-    };
+        inputs: &[PassInput::Source],
+        output: PassOutput::Final,
+    }];
 
     fn from_values(values: &[f32]) -> Self {
         Self {

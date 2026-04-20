@@ -1,4 +1,4 @@
-use crate::gpu::shaders::{ParamKind, ShaderMeta, SliderDef, TransformShader};
+use crate::gpu::shaders::{ParamKind, PassDef, PassInput, PassOutput, SliderDef, TransformShader};
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -8,17 +8,20 @@ pub struct ExposureParams {
 }
 
 impl TransformShader for ExposureParams {
-    const META: ShaderMeta = ShaderMeta {
-        id: "exposure",
-        display_name: "Exposure",
+    const ID: &'static str = "exposure";
+    const DISPLAY_NAME: &'static str = "Exposure";
+    const PARAM: ParamKind = ParamKind::Sliders(&[SliderDef {
+        name: "Exposure",
+        min: -4.0,
+        max: 4.0,
+        default: 0.0,
+    }]);
+    const PASSES: &'static [PassDef] = &[PassDef {
+        label: "exposure",
         wgsl_source: include_str!("exposure.wgsl"),
-        param: ParamKind::Sliders(&[SliderDef {
-            name: "Exposure",
-            min: -4.0,
-            max: 4.0,
-            default: 0.0,
-        }]),
-    };
+        inputs: &[PassInput::Source],
+        output: PassOutput::Final,
+    }];
 
     fn from_values(values: &[f32]) -> Self {
         Self {

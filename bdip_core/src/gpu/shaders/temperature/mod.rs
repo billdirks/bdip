@@ -1,4 +1,4 @@
-use crate::gpu::shaders::{ParamKind, ShaderMeta, SliderDef, TransformShader};
+use crate::gpu::shaders::{ParamKind, PassDef, PassInput, PassOutput, SliderDef, TransformShader};
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -8,17 +8,20 @@ pub struct TemperatureParams {
 }
 
 impl TransformShader for TemperatureParams {
-    const META: ShaderMeta = ShaderMeta {
-        id: "temperature",
-        display_name: "Temperature",
+    const ID: &'static str = "temperature";
+    const DISPLAY_NAME: &'static str = "Temperature";
+    const PARAM: ParamKind = ParamKind::Sliders(&[SliderDef {
+        name: "Temperature",
+        min: -1.0,
+        max: 1.0,
+        default: 0.0,
+    }]);
+    const PASSES: &'static [PassDef] = &[PassDef {
+        label: "temperature",
         wgsl_source: include_str!("temperature.wgsl"),
-        param: ParamKind::Sliders(&[SliderDef {
-            name: "Temperature",
-            min: -1.0,
-            max: 1.0,
-            default: 0.0,
-        }]),
-    };
+        inputs: &[PassInput::Source],
+        output: PassOutput::Final,
+    }];
 
     fn from_values(values: &[f32]) -> Self {
         Self {

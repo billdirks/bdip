@@ -1,4 +1,4 @@
-use crate::gpu::shaders::{ParamKind, ShaderMeta, SliderDef, TransformShader};
+use crate::gpu::shaders::{ParamKind, PassDef, PassInput, PassOutput, SliderDef, TransformShader};
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -8,17 +8,20 @@ pub struct ContrastParams {
 }
 
 impl TransformShader for ContrastParams {
-    const META: ShaderMeta = ShaderMeta {
-        id: "contrast",
-        display_name: "Contrast",
+    const ID: &'static str = "contrast";
+    const DISPLAY_NAME: &'static str = "Contrast";
+    const PARAM: ParamKind = ParamKind::Sliders(&[SliderDef {
+        name: "Amount",
+        min: -1.0,
+        max: 1.0,
+        default: 0.0,
+    }]);
+    const PASSES: &'static [PassDef] = &[PassDef {
+        label: "contrast",
         wgsl_source: include_str!("contrast.wgsl"),
-        param: ParamKind::Sliders(&[SliderDef {
-            name: "Amount",
-            min: -1.0,
-            max: 1.0,
-            default: 0.0,
-        }]),
-    };
+        inputs: &[PassInput::Source],
+        output: PassOutput::Final,
+    }];
 
     fn from_values(values: &[f32]) -> Self {
         Self {

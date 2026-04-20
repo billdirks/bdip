@@ -83,6 +83,15 @@ This document tracks known architectural shortcuts, generic naming, and structur
 - **Suggested Remediation:** 
   During active slider interaction (the `is_previewing` state), the pipeline should be dispatched against a downscaled proxy texture (e.g., a display-resolution proxy of ~2–5MP) rather than the full-resolution source (e.g., 24MP+). On slider release, the full-resolution result is computed once to ensure the final preview and history entries are high-fidelity. The internal `Renderer::apply` and `Renderer::present` methods are already resolution-independent, so this primarily requires managing the lifecycle of the proxy texture in `BdipApp`.
 
+### Pipeline Latency Investigation (Profiling)
+- **Location:** `bdip_core/src/gpu/pipeline.rs` (`test_perf_gpu_roundtrip_24mp`)
+- **Goal:** Profile the warm editing path to identify bottlenecks and understand if there are opportunities for further speed improvements on 24MP+ images.
+- **Suggested Profiling Tools:**
+  - **Xcode Instruments (Metal System Trace):** Measures exact GPU execution timing and command submission overhead on macOS/Metal.
+  - **RenderDoc:** Provides a frame-level view of all commands, bindings, and state transitions sent to the GPU.
+  - **wgpu Timestamp Queries:** Measures the duration of specific compute passes directly on the GPU, helping isolate execution time from CPU driver overhead.
+- **Priority:** Low. (Currently meeting targets, but serves as a placeholder for analysis after the multi-pass architecture is stable).
+
 ## User Interface & Metadata
 
 ### Missing Parameter Descriptions

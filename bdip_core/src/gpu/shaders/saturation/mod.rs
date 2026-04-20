@@ -1,4 +1,4 @@
-use crate::gpu::shaders::{ParamKind, ShaderMeta, SliderDef, TransformShader};
+use crate::gpu::shaders::{ParamKind, PassDef, PassInput, PassOutput, SliderDef, TransformShader};
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -8,17 +8,20 @@ pub struct SaturationParams {
 }
 
 impl TransformShader for SaturationParams {
-    const META: ShaderMeta = ShaderMeta {
-        id: "saturation",
-        display_name: "Saturation",
+    const ID: &'static str = "saturation";
+    const DISPLAY_NAME: &'static str = "Saturation";
+    const PARAM: ParamKind = ParamKind::Sliders(&[SliderDef {
+        name: "Amount",
+        min: -1.0,
+        max: 1.0,
+        default: 0.0,
+    }]);
+    const PASSES: &'static [PassDef] = &[PassDef {
+        label: "saturation",
         wgsl_source: include_str!("saturation.wgsl"),
-        param: ParamKind::Sliders(&[SliderDef {
-            name: "Amount",
-            min: -1.0,
-            max: 1.0,
-            default: 0.0,
-        }]),
-    };
+        inputs: &[PassInput::Source],
+        output: PassOutput::Final,
+    }];
 
     fn from_values(values: &[f32]) -> Self {
         Self {

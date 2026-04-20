@@ -102,11 +102,11 @@ Carried from `specs/multi-pass-research.md` § "Option C" and § "The one gotcha
     mip chains) are explicitly out of scope and are the first thing that would force an
     Option E render graph (see "Non-goals").
 6. **Every shader resolves to a pass list internally — no `Single`/`MultiPass` branch
-   in the engine.** The engine works on a `RuntimeShader { passes: &'static [PassDef],
+   in the engine.** The engine works on a `RuntimeShaderMeta { passes: &'static [PassDef],
    ... }` that it retrieves from the registry. Single-pass shaders' pass lists are
    length-1 with `inputs: &[PassInput::Source]` and `output: PassOutput::Final`.
    `Renderer::apply` has exactly one execution path. Translation from the contributor's
-   `ShaderMeta` (single-pass, carrying `wgsl_source`) to `RuntimeShader` happens inside
+   `ShaderMeta` (single-pass, carrying `wgsl_source`) to `RuntimeShaderMeta` happens inside
    the `register_single_pass_shader!` macro at submission time; the contributor writes
    the same `ShaderMeta` fields they write today and never sees `PassDef`.
 7. **One WGSL file per pass.** A multi-pass shader is a directory with one `mod.rs` and N
@@ -190,13 +190,13 @@ pub struct MultiPassShaderMeta {
 }
 ```
 
-### Internal `RuntimeShader`
+### Internal `RuntimeShaderMeta`
 
 The registry stores and the engine walks this internal form. Contributors never write
 or read it directly.
 
 ```rust
-pub(crate) struct RuntimeShader {
+pub(crate) struct RuntimeShaderMeta {
     pub id: &'static str,
     pub display_name: &'static str,
     pub passes: &'static [PassDef],
@@ -204,8 +204,8 @@ pub(crate) struct RuntimeShader {
 }
 ```
 
-`registry_by_id(id)` returns `&'static RuntimeShader`. Both `ShaderMeta` and
-`MultiPassShaderMeta` are translated to `RuntimeShader` at registration-macro expansion
+`registry_by_id(id)` returns `&'static RuntimeShaderMeta`. Both `ShaderMeta` and
+`MultiPassShaderMeta` are translated to `RuntimeShaderMeta` at registration-macro expansion
 time, so the registry holds a homogeneous pool and `Renderer::apply` never branches on
 shader kind.
 
@@ -228,7 +228,7 @@ register_single_pass_shader! {
 }
 ```
 
-The macro expands to `inventory::submit!` of a `ShaderRegistration` whose `RuntimeShader`
+The macro expands to `inventory::submit!` of a `ShaderRegistration` whose `RuntimeShaderMeta`
 has `passes = &[PassDef { label: "brightness", wgsl_source: <from meta>,
 inputs: &[PassInput::Source], output: PassOutput::Final }]`. The `ShaderMeta` literal the
 contributor writes has the exact four fields it had before — `id`, `display_name`,
@@ -256,17 +256,9 @@ register_multi_pass_shader! {
 }
 ```
 
-The macro forwards `passes` unchanged and fills in `RuntimeShader`. All multi-pass
+The macro forwards `passes` unchanged and fills in `RuntimeShaderMeta`. All multi-pass
 vocabulary lives in this single type and this single macro — single-pass contributors
 never import or reference them.
-
-### Note on macro vs. `const fn`
-
-Using a declarative macro for the translation avoids the const-fn limitations around
-constructing `&'static [T; N]` literals inside a `const fn`. The macro expands at the
-submit site to a literal array expression, which the compiler handles without
-complaint. PR 0's evaluation criterion #1 verifies the macro expansion produces a
-shape `inventory::submit!` accepts.
 
 ### Registration-time validation of multi-pass pass lists
 
@@ -310,7 +302,7 @@ seeing the validator.
 
 Regardless of whether tier 1 catches a given class of error, a dedicated test walks
 `inventory::iter::<ShaderRegistration>()` and runs the same validation logic on every
-registered `RuntimeShader.passes`. This:
+registered `RuntimeShaderMeta.passes`. This:
 
 - Catches any validation failure even if a shader ships without dispatch tests.
 - Exercises the validator on every contributor's shader automatically — no per-shader
@@ -383,7 +375,7 @@ follows this rule trivially (one WGSL file, one declaration).
 
 ### Single-pass representation in the engine
 
-A single-pass shader's `RuntimeShader.passes` is a slice of length 1 whose sole pass
+A single-pass shader's `RuntimeShaderMeta.passes` is a slice of length 1 whose sole pass
 has `inputs: &[PassInput::Source]` and `output: PassOutput::Final`. Single-pass WGSL
 files stay exactly as they are today (source at `@binding(0)`, dest at `@binding(1)`,
 uniform at `@group(1) @binding(0)`). The engine has one execution path — see the
@@ -892,13 +884,13 @@ Tests live in `bdip_core/src/gpu/pipeline.rs` and `bdip_core/src/gpu/shaders/mod
   correctly reads all three and writes the expected combination. This is the explicit
   regression guard against reverting to hardcoded binding slots.
 - `test_single_pass_macro_synthesizes_one_pass_def` —
-  `register_single_pass_shader!` produces a `RuntimeShader` whose `passes` slice has
+  `register_single_pass_shader!` produces a `RuntimeShaderMeta` whose `passes` slice has
   length 1 with `inputs == &[PassInput::Source]` and `output == PassOutput::Final`, and
   `wgsl_source` copied through from the `ShaderMeta` literal. Locks the single-pass
   translation so future edits to the macro cannot silently change the shape.
 - `test_all_registered_pass_lists_validate` — walks
   `inventory::iter::<ShaderRegistration>()` and runs `validate_pass_list` on every
-  registered `RuntimeShader.passes`. Safety net for the const-fn validator: catches
+  registered `RuntimeShaderMeta.passes`. Safety net for the const-fn validator: catches
   malformed pass lists even in shaders that ship without dispatch tests, and guarantees
   coverage if the const-fn tier is ever relaxed. (See "Registration-time validation of
   multi-pass pass lists" for the rules it enforces.)
@@ -1011,7 +1003,7 @@ throwaway spike that produces a go/no-go signal for PR 1.
 
 - This whole plan, with particular attention to:
   - § "Core abstractions" (`PassInput`, `PassOutput`, `PassDef`, `MultiPassShaderMeta`,
-    `RuntimeShader`, the two registration macros, const-fn validator).
+    `RuntimeShaderMeta`, the two registration macros, const-fn validator).
   - § "Renderer changes" (`PipelineCache` change, scratch pool, `apply_passes` steps,
     single-pass fast path).
   - § "Architecture decisions" items 1–10.
@@ -1028,12 +1020,12 @@ throwaway spike that produces a go/no-go signal for PR 1.
 Modify:
 
 - `bdip_core/src/gpu/shaders/mod.rs`:
-  - Add `PassInput`, `PassOutput`, `PassDef`, `MultiPassShaderMeta`, `RuntimeShader`.
+  - Add `PassInput`, `PassOutput`, `PassDef`, `MultiPassShaderMeta`, `RuntimeShaderMeta`.
     Definitions are copied verbatim from § "Core abstractions".
   - Keep `ShaderMeta` exactly as today.
   - Add `register_single_pass_shader!` and `register_multi_pass_shader!` macros; only
     the single-pass one is exercised this PR.
-  - Change `registry_by_id` to return `&'static RuntimeShader`.
+  - Change `registry_by_id` to return `&'static RuntimeShaderMeta`.
   - Add the `validate_pass_list` `const fn` and have
     `register_multi_pass_shader!` invoke it via `const _: () = ...`. Not exercised by
     the single-pass migration but must compile.
@@ -1048,7 +1040,7 @@ Modify:
   single-pass fast path yet (speculative — add only if criterion #3 fails).
 - Temporary compat glue for the other 10 shaders — the minimum needed so the crate
   compiles and existing tests pass. The concrete shape (e.g., a `submit_legacy!` macro
-  that wraps the old `inventory::submit!` form into a `RuntimeShader`) is left to the
+  that wraps the old `inventory::submit!` form into a `RuntimeShaderMeta`) is left to the
   implementer since it is discarded in PR 1.
 
 Do **not** modify `brightness.wgsl` or any other `.wgsl` file.
@@ -1056,10 +1048,10 @@ Do **not** modify `brightness.wgsl` or any other `.wgsl` file.
 **Implementation details:**
 
 - `PassInput` and `PassOutput` definitions — copy verbatim from § "Core abstractions".
-- `PassDef` / `MultiPassShaderMeta` / `RuntimeShader` — copy verbatim from § "Core
+- `PassDef` / `MultiPassShaderMeta` / `RuntimeShaderMeta` — copy verbatim from § "Core
   abstractions".
 - `register_single_pass_shader!` expansion — per § "Core abstractions" § "Registration
-  macros". The expansion synthesizes a `RuntimeShader` whose `passes` is a 1-element
+  macros". The expansion synthesizes a `RuntimeShaderMeta` whose `passes` is a 1-element
   slice: `&[PassDef { label: META.id, wgsl_source: META.wgsl_source,
   inputs: &[PassInput::Source], output: PassOutput::Final }]`.
 - `apply_passes` steps — implement exactly the 8 steps in § "Renderer::apply dispatch".
@@ -1135,7 +1127,7 @@ Modify:
 
 - `bdip_core/src/gpu/shaders/mod.rs` — finalized versions of the types and macros from
   PR 0. Remove the temporary compat shim. Ensure `registry_by_id` returns
-  `&'static RuntimeShader` and nothing else.
+  `&'static RuntimeShaderMeta` and nothing else.
 - `bdip_core/src/gpu/pipeline.rs`:
   - `PipelineCache` = `HashMap<&'static str, Vec<CachedPipeline>>`.
   - `Renderer::scratch_pool: HashMap<(u32, u32), Vec<wgpu::Texture>>`.
@@ -1166,7 +1158,7 @@ Modify:
 **Implementation details:**
 
 - Types — final versions of `PassInput`, `PassOutput`, `PassDef`, `MultiPassShaderMeta`,
-  `RuntimeShader` per § "Core abstractions".
+  `RuntimeShaderMeta` per § "Core abstractions".
 - `validate_pass_list` — `const fn` enforcing the three rules in § "Registration-time
   validation of multi-pass pass lists". Panics in const context on violation. Write
   `validate_pass_list` as pure `const fn` taking `&[PassDef]` and returning `()`; use

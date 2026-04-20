@@ -58,7 +58,8 @@ fn transform_view(app: &BdipApp) -> Element<'_, Message> {
             let ParamKind::Sliders(defs) = &meta.param else {
                 unreachable!()
             };
-            let base_vals = current_values_for(app.selected_transform.id, &app.history, meta);
+            let base_vals =
+                current_values_for(app.selected_transform.id, &app.history, &meta.param);
             let mut col = column![].spacing(8);
             for (i, def) in defs.iter().enumerate() {
                 let display_val = match &app.preview_slider {

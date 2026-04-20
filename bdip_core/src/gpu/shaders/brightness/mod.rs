@@ -1,4 +1,4 @@
-use crate::gpu::shaders::{ParamKind, ShaderMeta, SliderDef, TransformShader};
+use crate::gpu::shaders::{ParamKind, PassDef, PassInput, PassOutput, SliderDef, TransformShader};
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -8,17 +8,20 @@ pub struct BrightnessParams {
 }
 
 impl TransformShader for BrightnessParams {
-    const META: ShaderMeta = ShaderMeta {
-        id: "brightness",
-        display_name: "Brightness",
+    const ID: &'static str = "brightness";
+    const DISPLAY_NAME: &'static str = "Brightness";
+    const PARAM: ParamKind = ParamKind::Sliders(&[SliderDef {
+        name: "Amount",
+        min: -1.0,
+        max: 1.0,
+        default: 0.0,
+    }]);
+    const PASSES: &'static [PassDef] = &[PassDef {
+        label: "brightness",
         wgsl_source: include_str!("brightness.wgsl"),
-        param: ParamKind::Sliders(&[SliderDef {
-            name: "Amount",
-            min: -1.0,
-            max: 1.0,
-            default: 0.0,
-        }]),
-    };
+        inputs: &[PassInput::Source],
+        output: PassOutput::Final,
+    }];
 
     fn from_values(values: &[f32]) -> Self {
         Self {

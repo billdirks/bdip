@@ -1,4 +1,4 @@
-use crate::gpu::shaders::{ParamKind, ShaderMeta, TransformShader};
+use crate::gpu::shaders::{ParamKind, PassDef, PassInput, PassOutput, TransformShader};
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -7,12 +7,15 @@ pub struct InvertParams {
 }
 
 impl TransformShader for InvertParams {
-    const META: ShaderMeta = ShaderMeta {
-        id: "invert",
-        display_name: "Invert",
+    const ID: &'static str = "invert";
+    const DISPLAY_NAME: &'static str = "Invert";
+    const PARAM: ParamKind = ParamKind::Toggle;
+    const PASSES: &'static [PassDef] = &[PassDef {
+        label: "invert",
         wgsl_source: include_str!("invert.wgsl"),
-        param: ParamKind::Toggle,
-    };
+        inputs: &[PassInput::Source],
+        output: PassOutput::Final,
+    }];
 
     fn from_values(_: &[f32]) -> Self {
         Self { _unused: [0.0; 4] }

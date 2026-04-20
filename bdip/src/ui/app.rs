@@ -1,9 +1,7 @@
 use bdip_core::HistoryManager;
 use bdip_core::gpu::engine::GpuEngine;
 use bdip_core::gpu::pipeline::Renderer;
-use bdip_core::gpu::shaders::{
-    ParamKind, ShaderMeta, ShaderOption, Transform, registry_by_id, sorted_registrations,
-};
+use bdip_core::gpu::shaders::{ShaderOption, Transform, registry_by_id, sorted_registrations};
 use bdip_core::gpu::texture::upload_texture;
 use iced::widget::{Space, column, container, mouse_area, row, rule, stack};
 use iced::{Element, Length, Subscription, Task};
@@ -581,7 +579,7 @@ impl BdipApp {
     /// `value`.
     fn build_slider_transform(&self, param_index: usize, value: f32) -> Transform {
         let mut values = registry_by_id(self.selected_transform.id)
-            .map(|r| current_values_for(self.selected_transform.id, &self.history, &r.meta))
+            .map(|r| current_values_for(self.selected_transform.id, &self.history, &r.meta.param))
             .unwrap_or_default();
         if param_index < values.len() {
             values[param_index] = value;
@@ -607,9 +605,9 @@ impl BdipApp {
 pub(crate) fn current_values_for(
     shader_id: &'static str,
     history: &HistoryManager,
-    meta: &ShaderMeta,
+    param: &bdip_core::gpu::shaders::ParamKind,
 ) -> Vec<f32> {
-    let ParamKind::Sliders(defs) = &meta.param else {
+    let bdip_core::gpu::shaders::ParamKind::Sliders(defs) = param else {
         return vec![];
     };
     let defaults = || defs.iter().map(|d| d.default).collect::<Vec<_>>();
@@ -744,7 +742,7 @@ fn execute_render_pipeline(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bdip_core::gpu::shaders::{ParamKind, ShaderMeta, SliderDef};
+    use bdip_core::gpu::shaders::{ParamKind, RuntimeShaderMeta, SliderDef};
 
     #[test]
     fn test_serialize_transform_parameterless() {
@@ -887,11 +885,11 @@ mod tests {
         );
     }
 
-    fn brightness_meta() -> ShaderMeta {
-        ShaderMeta {
+    fn brightness_meta() -> RuntimeShaderMeta {
+        RuntimeShaderMeta {
             id: "brightness",
             display_name: "Brightness",
-            wgsl_source: "",
+            passes: &[],
             param: ParamKind::Sliders(&[SliderDef {
                 name: "Amount",
                 min: -1.0,
@@ -901,11 +899,11 @@ mod tests {
         }
     }
 
-    fn two_param_meta() -> ShaderMeta {
-        ShaderMeta {
+    fn two_param_meta() -> RuntimeShaderMeta {
+        RuntimeShaderMeta {
             id: "test_two",
             display_name: "Test Two",
-            wgsl_source: "",
+            passes: &[],
             param: ParamKind::Sliders(&[
                 SliderDef {
                     name: "A",
@@ -927,7 +925,7 @@ mod tests {
     fn test_current_values_for_empty_history_returns_defaults() {
         let history = HistoryManager::new();
         let meta = brightness_meta();
-        let vals = current_values_for("brightness", &history, &meta);
+        let vals = current_values_for("brightness", &history, &meta.param);
         assert_eq!(vals, vec![0.0]);
     }
 
@@ -939,7 +937,7 @@ mod tests {
             values: vec![0.4],
         });
         let meta = brightness_meta();
-        let vals = current_values_for("brightness", &history, &meta);
+        let vals = current_values_for("brightness", &history, &meta.param);
         assert_eq!(vals, vec![0.4]);
     }
 
@@ -955,7 +953,7 @@ mod tests {
             values: vec![0.9],
         });
         let meta = brightness_meta();
-        let vals = current_values_for("brightness", &history, &meta);
+        let vals = current_values_for("brightness", &history, &meta.param);
         assert_eq!(vals, vec![0.0]);
     }
 
@@ -963,7 +961,7 @@ mod tests {
     fn test_current_values_for_multi_param_empty_history_returns_all_defaults() {
         let history = HistoryManager::new();
         let meta = two_param_meta();
-        let vals = current_values_for("test_two", &history, &meta);
+        let vals = current_values_for("test_two", &history, &meta.param);
         assert_eq!(vals, vec![0.1, 0.2]);
     }
 
@@ -975,7 +973,7 @@ mod tests {
             values: vec![0.5, 0.7],
         });
         let meta = two_param_meta();
-        let vals = current_values_for("test_two", &history, &meta);
+        let vals = current_values_for("test_two", &history, &meta.param);
         assert_eq!(vals, vec![0.5, 0.7]);
     }
 }
