@@ -82,3 +82,18 @@ This document tracks known architectural shortcuts, generic naming, and structur
 - **Priority:** **Lowest.** (We will see if we can hit sub-20ms goals on primary target hardware without this complexity).
 - **Suggested Remediation:** 
   During active slider interaction (the `is_previewing` state), the pipeline should be dispatched against a downscaled proxy texture (e.g., a display-resolution proxy of ~2–5MP) rather than the full-resolution source (e.g., 24MP+). On slider release, the full-resolution result is computed once to ensure the final preview and history entries are high-fidelity. The internal `Renderer::apply` and `Renderer::present` methods are already resolution-independent, so this primarily requires managing the lifecycle of the proxy texture in `BdipApp`.
+
+## User Interface & Metadata
+
+### Missing Parameter Descriptions
+- **Location:** `bdip_core/src/gpu/shaders/mod.rs` (`SliderDef`), `bdip/src/ui/sidebar.rs`
+- **Current Pattern:** Shader parameters (sliders) only have a name and numeric bounds.
+  Descriptions are not defined in the shader metadata.
+- **Risk:** Users may not understand the specific effect of a parameter without experimentation.
+  Lack of inline documentation/tooltips makes the application less accessible.
+- **Suggested Remediation:**
+  1.  Extend `SliderDef` in `bdip_core` with a `description: &'static str` field.
+  2.  Update all shader `META` definitions to include concise, helpful descriptions.
+  3.  Implement hover tooltips in the `bdip` UI (via `iced` or similar) to show these descriptions
+      when hovering over parameter names in the sidebar.
+- **Priority:** Low. Beneficial for UX and discoverability as the shader library grows.
