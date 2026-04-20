@@ -1078,9 +1078,8 @@ Do **not** modify `brightness.wgsl` or any other `.wgsl` file.
 2. **Zero WGSL diff.** `git diff` on
    `bdip_core/src/gpu/shaders/brightness/brightness.wgsl` is empty.
 3. **Warm-path 24 MP performance within +5% of baseline.**
-   - Baseline: run `cargo test --release -p bdip_core -- --ignored
-     test_perf_gpu_roundtrip_24mp` on the parent commit, record 20-iteration warm-path
-     `execute` mean.
+   - Baseline: run `cargo test --release -p bdip_core -- test_perf_gpu_roundtrip_24mp`
+     on the parent commit, record 20-iteration warm-path `execute` mean.
    - Post-change: run the same command on the spike commit.
    - Assertion: warm mean ≤ 1.05 × baseline mean.
    - If the regression exceeds 5%, add the single-pass fast path from § "Renderer
