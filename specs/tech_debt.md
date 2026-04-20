@@ -45,6 +45,35 @@ This document tracks known architectural shortcuts, generic naming, and structur
 ## Future Considerations
 *(Add new items here as they are discovered during development)*
 
+### Cartoon (sRGB-quantization variant)
+- **Location:** `bdip_core/src/gpu/shaders/cartoon/` (`quantize.wgsl`)
+- **Current Pattern:** Cartoon's `quantize` pass applies `floor(c * L) / (L - 1)` in
+  linear-light space, consistent with the rest of the pipeline (`Rgba16Float`, linear
+  throughout). Banding boundaries fall at energy-uniform intervals. The `quantize.wgsl`
+  carries an inline comment calling this out.
+- **Risk:** Users familiar with Photoshop's Posterize, GIMP's Posterize, or other tools
+  that quantize in sRGB-gamma space will see visibly different band placement for the
+  same `levels` value. On a linear ramp, linear quantization puts more bands near black
+  (where human perception already has finer discrimination) and fewer near white.
+  sRGB-space quantization is the opposite — perceptually-even bands that match user
+  intuition from those tools. This is a stylistic difference, not a correctness bug.
+- **Suggested Remediation:** If PR 3 review or user feedback indicates the linear
+  banding feels "wrong" for the toon aesthetic, ship a second `cartoon_srgb` shader
+  that mirrors `cartoon`'s pass list but with an sRGB-encode / linear-decode around the
+  quantize step:
+  ```wgsl
+  // In quantize.wgsl (variant)
+  let srgb = pow(smoothed.rgb, vec3<f32>(1.0 / 2.2));
+  let q    = floor(srgb * L) / (L - 1.0);
+  let quantized_rgb = pow(clamp(q, 0.0, 1.0), vec3<f32>(2.2));
+  ```
+  The variant ships as a parallel shader (not a toggle inside `cartoon`) so users can
+  pick the aesthetic directly and both stay testable with their own fixtures. Reuses
+  the same smooth/edges/combine passes unchanged.
+- **Priority:** Low. Only worth building if users report the linear-quantized aesthetic
+  is a dealbreaker. A comment in `quantize.wgsl` explaining the choice is enough
+  until then.
+
 ## Potential Improvements
 
 ### Proxy Resolution During Live Preview

@@ -87,9 +87,20 @@ Carried from `specs/multi-pass-research.md` § "Option C" and § "The one gotcha
    output storage texture binds to `@group(0) @binding(N)`. The uniform buffer stays on
    `@group(1) @binding(0)`. This is the single most important architectural commitment in
    the plan — it is what makes a future Option E migration touch zero existing WGSL.
-5. **Scratch textures are owned by `Renderer` and recycled.** Keyed by
-   `(shader_id, scratch_name, width, height)`. Pool is dropped on image-resize. Mirrors
-   existing patterns (`present_tile_buffer`, `staging_buffer`).
+5. **Scratch textures are owned by `Renderer` and recycled via a shared free list.**
+   Pool is keyed by `(width, height)` only. `apply_passes` borrows one texture per
+   distinct scratch name on entry and returns them on exit, so the same physical
+   textures are reused across passes-within-a-shader *and* shaders-within-a-stack. Pool
+   is dropped on image-resize. Mirrors existing patterns (`present_tile_buffer`,
+   `staging_buffer`).
+10. **All passes of a multi-pass shader run at the Transform's input resolution.** Every
+    scratch texture is allocated at `(input_width, input_height)` and every pass
+    dispatches `ceil(input_width / 16)` × `ceil(input_height / 16)` × 1 workgroups with
+    `@workgroup_size(16, 16)` — the same sizing today's single-pass `Renderer::apply`
+    uses for its lone dispatch. No pass declares or receives a resolution different
+    from the Transform's input. Downsampled/upsampled intermediates (pyramids, variable
+    mip chains) are explicitly out of scope and are the first thing that would force an
+    Option E render graph (see "Non-goals").
 6. **Every shader resolves to a pass list internally — no `Single`/`MultiPass` branch
    in the engine.** The engine works on a `RuntimeShader { passes: &'static [PassDef],
    ... }` that it retrieves from the registry. Single-pass shaders' pass lists are
@@ -257,6 +268,68 @@ submit site to a literal array expression, which the compiler handles without
 complaint. PR 0's evaluation criterion #1 verifies the macro expansion produces a
 shape `inventory::submit!` accepts.
 
+### Registration-time validation of multi-pass pass lists
+
+Malformed pass lists (typos in scratch names, `Final` in the wrong position, duplicate
+scratch outputs) are caught as early as possible. The plan uses a two-tier strategy:
+**try const-fn first** so the error fires at `cargo build`; **always ship a registry-walk
+test** as the guaranteed safety net so shaders without dispatch tests still get
+validated in CI.
+
+**Tier 1 — `const fn` validator invoked by `register_multi_pass_shader!`.**
+
+The macro emits, next to the `inventory::submit!` call, a `const _: () = validate_pass_list(PASSES);`
+block where `validate_pass_list` is a `const fn` in `bdip_core/src/gpu/shaders/mod.rs`.
+The validator enforces:
+
+1. **Exactly one `PassOutput::Final`, at the last pass.** No earlier pass may output
+   `Final`.
+2. **Every `PassInput::Scratch(s)` resolves to a prior write.** Walk the pass list in
+   order; for each input `Scratch(s)` at index `i`, assert some pass at index `j < i`
+   declared `PassOutput::Scratch(s)`.
+3. **No duplicate `PassOutput::Scratch(name)` across the pass list.** Reusing a name as
+   an output in two passes is forbidden — the pool borrow is per-name, and a second
+   write would silently overwrite the first without the engine knowing to allocate a
+   second texture.
+
+On violation, the validator invokes `panic!` in const context (stabilized Rust 1.79+),
+which the compiler reports at the build site referencing the offending shader's
+`mod.rs`. Error messages name the shader id, the pass index, and the offending scratch
+name.
+
+Const-fn string equality uses stable byte-by-byte comparison on
+`&'static str::as_bytes()`. The validator is ~30–50 lines of const code; complexity
+stays localized to `shaders/mod.rs`.
+
+**Single-pass is trivially valid by construction.** `register_single_pass_shader!`
+synthesizes a 1-element pass list with `inputs: &[PassInput::Source]` and
+`output: PassOutput::Final`, which satisfies all three rules without the contributor
+seeing the validator.
+
+**Tier 2 — `test_all_registered_pass_lists_validate` (in `shaders/mod.rs`).**
+
+Regardless of whether tier 1 catches a given class of error, a dedicated test walks
+`inventory::iter::<ShaderRegistration>()` and runs the same validation logic on every
+registered `RuntimeShader.passes`. This:
+
+- Catches any validation failure even if a shader ships without dispatch tests.
+- Exercises the validator on every contributor's shader automatically — no per-shader
+  opt-in.
+- Provides the safety net if the const-fn validator has to be disabled (e.g., a future
+  Rust regression around `panic!` in const, or complexity in the validator grows beyond
+  the ~50-line budget).
+
+**Fallback plan.** If const-fn string comparison turns out awkward during PR 1
+implementation, the macro-level check degrades to a purely structural subset ("last
+pass is `Final`, only one `Final`") that does not touch strings, and tier 2 becomes the
+sole check for scratch-name resolution. Strictly worse than dual-tier but still catches
+the error before any dispatch runs.
+
+**What is not validated here.** WGSL binding *types* and binding counts matching the
+declared arity are validated at pipeline-creation time (first `apply`, caught in
+`test_pipeline_cache_compiles_per_pass` and the per-shader dispatch tests). Adding a
+build-time naga compile step is out of scope for this plan.
+
 ### Bind-group contract (multi-pass passes)
 
 Each pass's bind group 0 is built from the declared `inputs` slice plus one output slot.
@@ -269,10 +342,44 @@ Group 1 continues to carry the uniform buffer.
 | 1     | 0          | Uniform buffer (same shader-wide params for all passes)             |
 
 **All passes in one shader share the same uniform buffer.** Parameters are shader-level,
-not pass-level. A Clarity pass and Cartoon pass each have one params struct; internal
-passes read whichever fields they need. Keeping uniforms shader-scoped (not pass-scoped)
-avoids a second uniform-buffer allocation per pass for data that never changes between
-passes within a single Transform.
+not pass-level — this is the intended design, not a V1 deferral. A Clarity pass and a
+Cartoon pass each have one params struct; internal passes read whichever fields they
+need and ignore the rest. WGSL compilers dead-code-eliminate unreferenced struct
+members at compile time, so an unused field costs neither CPU nor GPU cycles. The
+"waste" is at worst ~20 bytes of unread uniform memory per Transform — strictly
+cheaper than the alternative (N separate uniform structs, N buffer allocations, N
+bind-group layouts, N `make_uniform` functions, new per-pass uniform field on
+`PassDef`).
+
+**Alignment rule: every `.wgsl` file in the shader declares the full, identical params
+struct.** Not just the fields its pass reads. WebGPU validates the uniform binding's
+size against the pipeline layout at creation time; a pass whose WGSL declares a
+truncated struct fails pipeline creation with a cryptic byte-mismatch error rather
+than silently reading the wrong offsets.
+
+Concretely for Cartoon: all five WGSL files (`smooth_h.wgsl`, `smooth_v.wgsl`,
+`quantize.wgsl`, `edges.wgsl`, `combine.wgsl`) declare:
+
+```wgsl
+struct CartoonParams {
+    strength:       f32,
+    levels:         f32,
+    edge_threshold: f32,
+    edge_softness:  f32,
+    edge_darkness:  f32,
+    _padding0:      f32,
+    _padding1:      f32,
+    _padding2:      f32,   // pad to 32 bytes, matching Rust-side #[repr(C)]
+}
+
+@group(1) @binding(0) var<uniform> params: CartoonParams;
+```
+
+— even though `smooth_h` and `smooth_v` reference none of these fields (they derive
+sigma from `textureDimensions`, not uniforms), and `quantize` only reads `levels`. The
+Rust-side `CartoonParams` with its `_padding: [f32; 3]` is the source of truth; every
+WGSL declaration must match its byte layout exactly. A single-pass shader already
+follows this rule trivially (one WGSL file, one declaration).
 
 ### Single-pass representation in the engine
 
@@ -304,82 +411,107 @@ Compilation is still lazy per shader_id. When compiling a multi-pass shader, eac
 New field on `Renderer`:
 
 ```rust
-// Keyed by (shader_id, scratch_name, width, height). All scratch textures are
-// Rgba16Float — same format as the main pipeline, so no precision loss.
-scratch_pool: HashMap<(&'static str, &'static str, u32, u32), wgpu::Texture>,
+// Pool of reusable Rgba16Float scratch textures keyed only by (width, height).
+// Textures are borrowed by an `apply_passes` invocation on entry and returned on exit,
+// so the peak footprint equals `max(scratches_needed_by_any_one_shader) × texture_size`
+// regardless of how many multi-pass Transforms stack in one Clean Slate Replay.
+scratch_pool: HashMap<(u32, u32), Vec<wgpu::Texture>>,
 ```
 
-Scratch textures are allocated on first miss and retained for subsequent invocations at
-the same `(shader_id, scratch_name, dims)` key. When `Renderer::apply` sees a new image
-size for a key already in the pool at different dims, the old entry is dropped and
-replaced. For V1, **any `apply` call at dims different from the majority of pool entries
-triggers a full pool reset** (simpler than per-key tracking, and image resize is rare).
+Semantics:
 
-#### Design choice: per-shader pool vs. shared scratch textures
+- The pool is a free list per `(width, height)`. Textures are never freed mid-session;
+  they are re-used across both passes-within-a-shader and shaders-within-a-stack.
+- `apply_passes` **borrows** one texture per distinct `PassOutput::Scratch(name)`
+  declared in its pass list, pulling from the free list or allocating on miss. Borrows
+  stay checked out for the duration of that `apply_passes` call.
+- When `apply_passes` returns, every borrowed texture is **returned** to the free list.
+  The next Transform's `apply_passes` (Clarity → Cartoon, for example) finds those same
+  textures waiting and reuses them.
+- On image-size change, the whole pool is dropped and rebuilt. For V1, **any `apply`
+  call at dims different from the majority of pool entries triggers a full pool reset**
+  — simpler than per-key tracking, and image resize is rare.
 
-The pool is partitioned per `shader_id`. Clarity's `"h"` and `"v"` textures are distinct
-entries from Cartoon's `"sh"` / `"smooth"` / `"quant"` / `"edges"`, even though nothing
-would go wrong *physically* if both shaders shared one set of scratch textures at the same
-dims. We chose per-shader partitioning for V1 over a shared pool for the following
-reasons; a later optimization pass may revisit this.
+This design relies on two invariants already present in the engine:
 
-**Why per-shader is the right V1 choice**
+1. **Transforms execute strictly sequentially.** `Renderer::apply` is `&mut self`; there
+   is no concurrent `apply` on one `Renderer`. A Transform's `apply_passes` submits its
+   command encoder before returning, so the next Transform's passes are queued after
+   everything the previous Transform wrote.
+2. **Within one `apply_passes`, each scratch name is bound to its own borrowed texture
+   for the whole call.** No intra-shader aliasing — a pass that declares
+   `PassInput::Scratch("h")` always sees the texture the earlier pass wrote to `"h"`.
+   Liveness analysis inside a single shader is therefore unnecessary; the cost is one
+   borrowed texture per distinct scratch name, which caps at the per-shader maximum.
 
-- **Simpler lifetime reasoning.** Each shader's scratches are sized and named
-  independently. Within a `shader_id`, pass order implies the read/write windows
-  automatically — no liveness analysis needed. A shared pool would have to track which
-  scratch texture is currently "in use" during a single `apply` call to avoid aliasing a
-  still-live scratch to a new pass's output.
-- **Naturally correct across Transforms.** Multiple multi-pass Transforms in a Clean Slate
-  Replay (e.g., Clarity followed by Cartoon) each look up their own textures by
-  `shader_id` with no cross-shader coordination. A shared pool is also correct here —
-  Clarity's scratches are fully consumed before Cartoon starts, so the same physical
-  texture *could* be reused — but it requires the engine to understand that invariant
-  rather than fall out of the key shape.
-- **Better debugging.** `wgpu` texture labels like `"clarity::h"` and `"cartoon::smooth"`
-  appear directly in RenderDoc / Xcode GPU captures. A shared pool would produce generic
-  labels (`"scratch_0"`) and lose that affordance at the exact moment debugging needs it.
-- **VRAM is fine in realistic stacks.** A 24 MP `Rgba16Float` scratch is ~185 MB. Clarity
-  uses 2 scratches, Cartoon uses 4 — a stack of both simultaneously is ~1.1 GB. Comfortable
-  on discrete GPUs and on the primary target hardware (Apple Silicon unified memory).
-  Tight but survivable on low-end integrated GPUs.
+#### Why this beats per-shader partitioning
 
-**When a shared pool would be worth building**
+- **Bounded peak VRAM.** 24 MP `Rgba16Float` scratch ≈ 185 MB. Cartoon (4 scratches)
+  caps the pool at ~740 MB regardless of how many multi-pass shaders stack above it.
+  Per-shader partitioning would scale with `sum(scratches_per_shader)` and reach
+  ~1.1 GB for Clarity + Cartoon today, worse as the multi-pass roadmap grows.
+- **No reliance on Clean Slate Replay as a load-bearing correctness invariant.** The
+  borrow/return discipline makes the pool correct under any call pattern that respects
+  `&mut self` — we are not encoding "Transforms never overlap" into the pool's key shape.
+- **Simpler code.** One free list, no `shader_id` threading into the key, no per-shader
+  bookkeeping.
 
-The win from sharing is strictly VRAM reduction. A shared pool keyed by `(width, height)`
-alone caps scratch footprint at `max_scratches_needed_by_any_one_shader × texture_size` —
-roughly 4 × 185 MB = ~740 MB for a 24 MP workload on today's shaders, vs. ~1.1 GB with
-per-shader partitioning. The ratio worsens as more multi-pass shaders get added:
-partitioning scales linearly with `sum(scratches_per_shader)` while sharing scales with
-`max(scratches_per_shader)`.
+#### Mitigating the debugging-label cost
 
-Concretely, consider building the shared variant if:
+A naive shared pool loses `"clarity::h"` / `"cartoon::smooth"` labels in RenderDoc /
+Xcode GPU captures, since one physical texture gets handed to multiple shaders over the
+course of a session. The mitigations, in order of effort:
 
-1. A user-reported OOM occurs on a realistic stack (e.g., ≥3 multi-pass shaders active at
-   24 MP+ on integrated GPUs).
-2. The multi-pass roadmap grows to the point where `sum(scratches)` crosses a GPU's safe
-   working-set budget on the primary target hardware.
-3. Telemetry (or perf profiling) shows scratch-pool memory dominates the app's total VRAM
-   footprint and forces texture eviction elsewhere.
+1. **Relabel on borrow (V1 default).** When `apply_passes` borrows a texture, it calls
+   `texture.set_label(Some(&format!("{}::{}", shader_id, scratch_name)))` (or whatever
+   the wgpu-equivalent re-labeling mechanism is on the current wgpu version — fall back
+   to labeling only at allocation if the runtime does not support re-labeling). The
+   label in a GPU capture reflects **the most recent borrower**, which matches what a
+   developer is actually debugging at capture time.
+2. **Debug-build label suffixes.** Under `#[cfg(debug_assertions)]`, append a monotonic
+   borrow counter (`"clarity::h#17"`) so a capture spanning multiple `apply_passes`
+   calls disambiguates which Transform wrote which frame. Release builds keep the clean
+   name.
+3. **Opt-in "no-reuse" mode for GPU captures.** Behind an env var (e.g.
+   `BDIP_SCRATCH_NO_REUSE=1`), the pool skips the free list and allocates fresh per
+   borrow. Captures taken with this flag set produce the per-shader label hierarchy that
+   per-shader partitioning would have given for free, at the VRAM cost per-shader would
+   have imposed anyway. Intended only for the narrow case where someone is hunting a
+   cross-shader scratch-aliasing bug.
 
-**Migration path**
+V1 ships (1) and (2). (3) is a follow-up if we actually encounter a debugging scenario
+that (1) + (2) cannot resolve.
 
-The change is entirely internal to `Renderer` — `PassDef` and every existing WGSL file
-stay untouched because the name `"h"` is still just an identifier, but now resolved
-against a pool keyed by `(width, height)` with a per-pass liveness check. The work is:
+#### Test-only accessor for pool introspection
 
-1. Add liveness analysis to `apply_multi_pass`: before each pass, mark as free any scratch
-   whose last reader is strictly below the current pass index.
-2. Introduce a "scratch allocator" that, for each pass's output, returns either a freshly
-   allocated texture or a previously freed one at matching dims.
-3. Key the pool by `(width, height)` only.
+The pool is private to `Renderer`, but the infrastructure and shader tests need a way
+to observe recycling without relying on GPU-capture labels or pointer-bit reinterpret.
+`Renderer` exposes:
 
-Labels can preserve the `shader_id::scratch_name` naming by updating the label each time
-a shared texture is reassigned — slightly ugly in RenderDoc but no worse than generic
-names.
+```rust
+#[cfg(test)]
+impl Renderer {
+    /// Number of textures currently in the free list for the given dims.
+    /// Does NOT count textures currently checked out by an in-flight `apply_passes`
+    /// — since `Renderer::apply` is `&mut self`, tests only observe the pool at
+    /// rest (between calls).
+    pub(crate) fn scratch_pool_len(&self, dims: (u32, u32)) -> usize { ... }
 
-The shift from `(shader_id, scratch_name, w, h)` to `(w, h)` is the entire structural
-change. No shader, no WGSL file, no test outside the pool itself needs to move.
+    /// Pointer-equality handle on a specific pool slot for same-texture assertions
+    /// across runs. Returns `None` if `index >= scratch_pool_len(dims)`.
+    pub(crate) fn scratch_pool_handle(&self, dims: (u32, u32), index: usize) -> Option<*const wgpu::Texture> { ... }
+}
+```
+
+`scratch_pool_len` is the assertion surface for "how many scratch textures exist for
+these dims"; `scratch_pool_handle` lets `test_clarity_scratch_pool_reuses_across_runs`
+prove the *same physical texture* came back on the second run, not merely "a texture
+of the same shape."
+
+Both accessors are `#[cfg(test)]`-gated so they do not appear in release builds and
+cannot be called from outside the crate. This replaces the earlier hand-wavy "read
+back pool state or observe via labels" language in the test plan with a concrete,
+testable API.
 
 ### `Renderer::apply` dispatch
 
@@ -395,26 +527,40 @@ pub fn apply(&mut self, engine: &GpuEngine, src_texture: &wgpu::Texture, transfo
 
 `apply_passes`:
 
-1. Allocate the `Final` destination texture (same size as input) — this matches today's
+1. Read `(width, height)` from the input texture. These are the **Transform dims**;
+   every scratch allocation and every pass dispatch in this call uses them.
+2. Allocate the `Final` destination texture at Transform dims — this matches today's
    single-pass destination allocation exactly.
-2. For every `PassOutput::Scratch(name)` referenced by the pass list, look up or lazily
-   create the scratch texture in the pool. (Single-pass shaders never hit this step —
-   their pass list contains no `Scratch` output.)
-3. Build the uniform buffer once from `transform.values`.
-4. For each pass in declaration order:
+3. For every **distinct** `PassOutput::Scratch(name)` referenced by the pass list,
+   **borrow** one texture at Transform dims from the pool's `(width, height)` free
+   list (allocating on miss). Each borrow is associated with its `name` for the
+   duration of this `apply_passes` call, and — under `#[cfg(debug_assertions)]` plus on
+   allocation — its wgpu label is set to `"{shader_id}::{scratch_name}"` (see
+   "Mitigating the debugging-label cost"). Single-pass shaders never hit this step —
+   their pass list contains no `Scratch` output.
+4. Build the uniform buffer once from `transform.values`.
+5. For each pass in declaration order:
    - Resolve each `PassInput` to a concrete `wgpu::TextureView` (Source = input texture,
-     Scratch = pool entry).
-   - Resolve `PassOutput` to a concrete destination view (Scratch = pool entry, Final =
-     output texture).
+     Scratch = the borrow mapped to that name).
+   - Resolve `PassOutput` to a concrete destination view (Scratch = the borrow mapped to
+     that name, Final = output texture).
    - Build bind group 0 from `inputs.len()` input views plus the destination view.
    - Build bind group 1 from the shared uniform buffer.
-   - Dispatch the pass's pipeline.
-5. Submit one command encoder containing all passes (single submission per Transform —
+   - Dispatch the pass's pipeline at **Transform dims**:
+     `dispatch_workgroups(ceil(width / 16), ceil(height / 16), 1)` with the shader's
+     `@workgroup_size(16, 16)`. Every pass uses the same dispatch — no per-pass
+     resolution override exists.
+6. Submit one command encoder containing all passes (single submission per Transform —
    matches single-pass today).
-6. Return the `Final` texture.
+7. **Return every borrowed texture to the pool's free list.** The next Transform's
+   `apply_passes` (same dims) reuses them.
+8. Return the `Final` texture.
 
-All scratch textures stay in the pool after the call returns; the next Clarity invocation
-at the same dims reuses them.
+**Invariant: no variable-resolution scratch.** Every texture allocated or dispatched
+against during `apply_passes` is at Transform dims. A future shader that needs a
+downsampled intermediate (Bloom, Laplacian pyramid) cannot be expressed under this
+model — that is the feature that forces Option E and is explicitly out of scope per
+"Non-goals".
 
 **Single-pass fast path (speculative; add only if PR 0 measures a regression).**
 The generic loop is correct for single-pass shaders: the pass list has one entry, the
@@ -537,18 +683,46 @@ endpoints), and `C_blurred` is a Gaussian-smoothed copy of `C_in`.
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct ClarityParams {
     pub amount: f32,          // u_Clarity ∈ [-1.0, 1.0]
-    pub blur_sigma: f32,      // fixed default e.g., 2.0% of image diagonal
-    pub _padding: [f32; 2],
+    pub _padding: [f32; 3],
 }
 ```
 
-For V1, `blur_sigma` is not exposed — it is a fixed value set by `from_values(amount)`.
-Exposing it as a second slider is a later, separate decision.
+**Blur sigma is derived in the shader, not the uniform.** `ClarityParams` carries only
+`amount`. The "2% of image diagonal" sigma rule lives inside each blur-pass WGSL file,
+where `textureDimensions(input_texture)` is already available:
 
-**Blur kernel size.** A 1D Gaussian with σ=2% of image width (e.g., ~100 px on a 24 MP
-image) truncated at 3σ gives ~600 taps per invocation per pass. This is the professional
-range. On 24 MP M4 Pro, ~0.4 ms per pass × 2 blur passes + ~0.05 ms combine = ~0.85 ms.
-Verifiable against the warm perf test.
+```wgsl
+const SIGMA_FRACTION: f32 = 0.02;
+const RADIUS_CAP: i32 = 256;
+
+@compute @workgroup_size(16, 16)
+fn main(...) {
+    let dims = textureDimensions(input_texture);
+    let sigma = SIGMA_FRACTION * f32(max(dims.x, dims.y));
+    let radius = min(i32(ceil(3.0 * sigma)), RADIUS_CAP);
+    // ... separable Gaussian loop over [-radius, +radius]
+}
+```
+
+Rationale: the registry-wide `from_values(&[f32]) -> Self` signature stays unchanged
+(no shader needs image dims on the CPU side), and sigma's unit ("texels") is honest
+where it is consumed. Cartoon's smooth passes follow the same pattern with a larger
+`SIGMA_FRACTION`.
+
+**Data-dependent loop bound.** `radius` is computed from `dims` at dispatch time, so
+the kernel loop is not statically bounded. WGSL permits this, but the `RADIUS_CAP`
+min gives the compiler a compile-time upper bound for unrolling / register-allocation
+decisions and prevents a pathological 100+ MP image from silently ballooning the
+kernel. The cap is only reached for images beyond the 24 MP target envelope anyway.
+
+**Exposing sigma later.** If a "Radius" slider is ever added, it becomes a second
+`ClarityParams` field that scales `SIGMA_FRACTION` — purely additive, no shape change
+to the registration or the pass list.
+
+**Blur kernel size.** At `SIGMA_FRACTION = 0.02` on a 24 MP image (~6000 px wide),
+σ ≈ 120 texels, radius ≈ 360 texels per tap direction. Separable: 2 × 360 = 720 taps
+per output pixel (H pass + V pass combined). On 24 MP M4 Pro, ~0.4 ms per pass × 2
+blur passes + ~0.05 ms combine = ~0.85 ms. Verifiable against the warm perf test.
 
 ### Cartoon
 
@@ -569,21 +743,88 @@ The `combine` pass is the 3-input-combine case. It binds three input textures to
 `@binding(0)`, `@binding(1)`, `@binding(2)`, writes output to `@binding(3)`, reads
 uniforms from `@group(1) @binding(0)`.
 
+**Edges come from `Source`, not `smoothed`.** The smooth pass intentionally erases the
+edges the user wants outlined. Computing Sobel on the original input preserves the
+faithful edge structure of the photograph, consistent with the Kyprianidis/XDoG toon
+literature.
+
 **Params:**
 
 ```rust
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct CartoonParams {
-    pub strength: f32,         // [0.0, 1.0] — 0 = original, 1 = full cartoon
-    pub levels: f32,           // posterization levels per channel ∈ [2.0, 16.0]
-    pub edge_threshold: f32,   // Sobel-magnitude cutoff ∈ [0.0, 1.0]
-    pub edge_darkness: f32,    // how black the overlaid edges are ∈ [0.0, 1.0]
+    pub strength: f32,        // [0.0, 1.0] — 0 = original, 1 = full cartoon
+    pub levels: f32,          // posterization levels per channel ∈ [2.0, 16.0]
+    pub edge_threshold: f32,  // Sobel-magnitude cutoff ∈ [0.0, 1.0]
+    pub edge_softness: f32,   // width of smoothstep ramp above threshold ∈ [0.01, 0.5]
+    pub edge_darkness: f32,   // how black the overlaid edges are ∈ [0.0, 1.0]
+    pub _padding: [f32; 3],   // pad to 32 bytes (WebGPU uniform alignment)
 }
 ```
 
-Four sliders: Strength, Levels, Edge Threshold, Edge Darkness. Matches the 4 sliders other
-multi-param shaders (Shadows, Highlights) already expose.
+Five sliders: Strength, Levels, Edge Threshold, Edge Softness, Edge Darkness. Defaults:
+
+| Slider         | Default | Rationale                                                         |
+|----------------|---------|-------------------------------------------------------------------|
+| Strength       | 0.0     | Zero-amount identity, consistent with every other shader.         |
+| Levels         | 8.0     | Mid-range; visible banding without looking alien.                 |
+| Edge Threshold | 0.15    | Above typical Sobel noise floor on clean photos.                  |
+| Edge Softness  | 0.10    | 10% ramp above threshold — crisp but not aliased.                 |
+| Edge Darkness  | 1.0     | Cartoon without edges is just posterize — 1.0 makes it obvious.   |
+
+**Locked pass math:**
+
+```
+SIGMA_FRACTION_SMOOTH = 0.015     // larger than Clarity's 0.02? No — see note below
+RADIUS_CAP = 256
+
+// smooth_h / smooth_v — separable Gaussian, Rec.709 luma independent per-channel
+sigma  = SIGMA_FRACTION_SMOOTH * f32(max(dims.x, dims.y))
+radius = min(i32(ceil(3.0 * sigma)), RADIUS_CAP)
+
+// quantize — linear-light per-channel floor-quantization.
+// IMPORTANT: quantization runs in linear-light space (same as the rest of the pipeline).
+// Banding boundaries therefore fall at energy-uniform intervals, which differs visibly
+// from sRGB-gamma quantization (e.g., Photoshop Posterize). For a variant with
+// sRGB-space quantization, see specs/tech_debt.md "Cartoon (sRGB-quantization variant)."
+let L = floor(clamp(params.levels, 2.0, 16.0))
+let quantized_rgb = clamp(floor(smoothed.rgb * L) / (L - 1.0), 0.0, 1.0)
+
+// edges — 3x3 Sobel on Rec.709 luma of Source, with user-controlled threshold + ramp
+let luma = dot(sample.rgb, vec3<f32>(0.2126, 0.7152, 0.0722))
+let mag  = length(vec2<f32>(sobel_x(luma_3x3), sobel_y(luma_3x3)))
+let ramp_end = clamp(params.edge_threshold + params.edge_softness, 0.0, 2.83)
+let edge = smoothstep(params.edge_threshold, ramp_end, mag)
+// Store as single-channel mask in .r; alpha = 1, other channels unused.
+
+// combine — 3-input final pass
+let color_base = mix(src.rgb, quant.rgb, params.strength)
+let darken     = 1.0 - params.edge_darkness * edges.r
+let out_rgb    = clamp(color_base * darken, 0.0, 1.0)
+textureStore(output_texture, coord, vec4<f32>(out_rgb, src.a))
+```
+
+Note: Cartoon's smooth σ at 1.5% is *smaller* than Clarity's 2.0%. Clarity's blur is an
+intermediate used to extract high-frequency detail; Cartoon's is the final color base,
+so overshooting its radius erases too much structure the user wanted to keep. The
+numbers were selected independently for what each pass is for, not scaled from each
+other.
+
+**Slider-extrema behavior (locked, asserted in tests):**
+
+| Slider state                                      | Output                                            |
+|---------------------------------------------------|---------------------------------------------------|
+| `strength=0, edge_darkness=0`                     | Pixel-identical to input (identity).              |
+| `strength=1, edge_darkness=0`                     | Pure posterized smoothed image, no edges overlaid.|
+| `edge_darkness=1` on a strong edge (`edge_mask=1`)| `darken=0` → output pure black at that pixel.     |
+| `edge_threshold=1.0`                              | Sobel magnitude never reaches threshold → no edges darkened. |
+| `levels=2, strength=1`                            | 2 bands per channel on the smoothed image.        |
+
+The `test_cartoon_zero_strength_is_identity` row in the shader-level test matrix
+tightens accordingly: set both `strength=0.0` and `edge_darkness=0.0`, assert
+pixel-identical to input (drop the ±128 tolerance — the locked formula is exact
+identity at these parameters).
 
 ### FilmGrainFBM — why it's not here
 
@@ -610,14 +851,22 @@ Tests live in `bdip_core/src/gpu/pipeline.rs` and `bdip_core/src/gpu/shaders/mod
   baseline (captured as a golden byte array; compare to the existing roundtrip
   assertion).
 - `test_single_pass_skips_scratch_pool` — after running a single-pass shader, the
-  scratch pool has zero entries for that `shader_id`. Confirms single-pass shaders do
-  not allocate scratch.
-- `test_multi_pass_scratch_recycling` — a 2-pass test shader whose second pass copies
-  its scratch input to `Final`. Run `apply` twice at the same dims; assert the scratch
-  texture handle is reused (read back pool state for the assertion, or an observable
-  side effect via labels).
+  scratch pool is empty at that shader's dims. Confirms single-pass shaders do not
+  allocate scratch.
+- `test_multi_pass_scratch_recycling_within_shader` — a 2-pass test shader whose second
+  pass copies its scratch input to `Final`. Run `apply` twice at the same dims.
+  Assertions: `scratch_pool_len(dims) == 1` after both runs (free list holds one
+  texture that was returned and then re-borrowed); `scratch_pool_handle(dims, 0)` is
+  the same raw pointer after run 1 and after run 2 (proves the physical texture was
+  re-used, not reallocated).
+- `test_multi_pass_scratch_shared_across_shaders` — run two distinct test multi-pass
+  shaders back-to-back at the same dims, each needing 2 scratches. Assertions:
+  `scratch_pool_len(dims) == 2` after both runs (peak footprint does not grow when the
+  second shader runs); the two `scratch_pool_handle(dims, i)` pointers captured after
+  run 1 match the pointers after run 2 — the second shader borrowed the same physical
+  textures the first shader returned. Regression guard on the shared-pool invariant.
 - `test_multi_pass_image_resize_drops_pool` — `apply` once at 4×4, then once at 8×8;
-  assert the pool has no lingering 4×4 entries (check pool size).
+  assert the pool has no lingering 4×4 entries (check `scratch_pool_len((4,4)) == 0`).
 - `test_multi_pass_final_output_correctness` — a 2-pass identity shader (pass 0: Source
   → Scratch, pass 1: Scratch → Final, both plain copies) returns pixel-identical output
   to the input after `ingest`→`apply`→`present` roundtrip.
@@ -634,6 +883,18 @@ Tests live in `bdip_core/src/gpu/pipeline.rs` and `bdip_core/src/gpu/shaders/mod
   length 1 with `inputs == &[PassInput::Source]` and `output == PassOutput::Final`, and
   `wgsl_source` copied through from the `ShaderMeta` literal. Locks the single-pass
   translation so future edits to the macro cannot silently change the shape.
+- `test_all_registered_pass_lists_validate` — walks
+  `inventory::iter::<ShaderRegistration>()` and runs `validate_pass_list` on every
+  registered `RuntimeShader.passes`. Safety net for the const-fn validator: catches
+  malformed pass lists even in shaders that ship without dispatch tests, and guarantees
+  coverage if the const-fn tier is ever relaxed. (See "Registration-time validation of
+  multi-pass pass lists" for the rules it enforces.)
+- `test_validate_pass_list_rejects_final_in_middle`,
+  `test_validate_pass_list_rejects_missing_scratch_write`,
+  `test_validate_pass_list_rejects_duplicate_scratch_output` — direct unit tests on the
+  `validate_pass_list` `const fn` driven by fixture pass lists. One test per violation
+  class, following the single-behavior rule. Complements tier 2 by proving each rule
+  independently without relying on a malformed shader being registered.
 
 Each test follows `AGENTS.md` single-behavior rule.
 
@@ -651,19 +912,20 @@ Each test follows `AGENTS.md` single-behavior rule.
 | `test_clarity_negative_amount_softens_edge`    | same step image; `amount=-0.5`                     | edge transition is softer than at `amount=0.0`                   |
 | `test_clarity_alpha_preserved`                 | 4×4 solid mid-gray, `amount=0.5`                   | every output pixel's alpha == 65535                              |
 | `test_clarity_deterministic`                   | 16×16 solid mid-gray; run twice at `amount=0.5`    | outputs pixel-identical                                          |
-| `test_clarity_scratch_pool_reuses_across_runs` | run Clarity twice at same dims                     | pool has 2 entries ("h", "v") both times; same texture pointers  |
+| `test_clarity_scratch_pool_reuses_across_runs` | run Clarity twice at same dims                     | `scratch_pool_len(dims) == 2` both times; same two `wgpu::Texture` pointers re-borrowed on the second run |
 
 **Cartoon** (mirrors the same structure):
 
 | Test name                                        | Setup                                             | Assertion                                                        |
 |--------------------------------------------------|---------------------------------------------------|------------------------------------------------------------------|
 | `test_cartoon_registry_entry_exists`             | —                                                 | `registry_by_id("cartoon").is_some()`                            |
-| `test_cartoon_registry_metadata`                 | —                                                 | name, 4 sliders, `passes.len() == 5`                             |
-| `test_cartoon_make_uniform_known_value`          | `reg.make_uniform(&[0.5, 8.0, 0.2, 0.8])`         | bytes equal `bytemuck::bytes_of(&CartoonParams { .. })`          |
-| `test_cartoon_zero_strength_is_identity`         | solid gradient image, `strength=0.0`              | output within ±128 of input per channel                          |
-| `test_cartoon_full_strength_reduces_unique_colors` | smooth gradient, `strength=1.0`, `levels=4`     | unique pixel values in output < unique values in input (posterization works) |
-| `test_cartoon_edges_darken_high_gradient_pixels` | image with sharp black/white edge, `edge_darkness=1.0` | pixels along the edge are darker in the output than in the input|
-| `test_cartoon_no_edges_below_threshold`          | smooth gradient with no edges, `edge_threshold=0.1` | no pixel differs from the pure-posterized version by more than ±64 |
+| `test_cartoon_registry_metadata`                 | —                                                 | name, 5 sliders (Strength, Levels, Edge Threshold, Edge Softness, Edge Darkness), `passes.len() == 5` |
+| `test_cartoon_make_uniform_known_value`          | `reg.make_uniform(&[0.5, 8.0, 0.2, 0.1, 0.8])`    | bytes equal `bytemuck::bytes_of(&CartoonParams { strength: 0.5, levels: 8.0, edge_threshold: 0.2, edge_softness: 0.1, edge_darkness: 0.8, _padding: [0.0; 3] })` |
+| `test_cartoon_zero_strength_and_zero_edge_darkness_is_identity` | solid gradient, `strength=0.0`, `edge_darkness=0.0` | output **pixel-identical** to input (every channel equal, no tolerance) |
+| `test_cartoon_full_strength_reduces_unique_colors` | smooth gradient, `strength=1.0`, `levels=4`, `edge_darkness=0.0` | unique pixel values in output < unique values in input (posterization works; edges disabled so only `levels` matters) |
+| `test_cartoon_edges_darken_high_gradient_pixels` | sharp black/white edge, `edge_darkness=1.0`, `strength=0.0`, `edge_threshold=0.1`, `edge_softness=0.1` | pixels along the edge are darker in the output than in the input |
+| `test_cartoon_higher_edge_softness_widens_edge_band` | sharp edge, `edge_threshold=0.5`, compared at `edge_softness=0.05` vs `edge_softness=0.3` | the count of pixels where `darken > 0` is strictly greater in the higher-softness run (ramp widens the edge band) |
+| `test_cartoon_no_edges_below_threshold`          | smooth gradient with no edges, `edge_threshold=1.0` | output equals pure-posterized version (no edge darkening applied at any pixel) |
 | `test_cartoon_alpha_preserved`                   | 4×4 solid mid-gray                                | every output pixel's alpha == 65535                              |
 | `test_cartoon_deterministic`                     | same image, run twice with same params            | outputs pixel-identical                                          |
 | `test_cartoon_three_input_combine_pass_binds_correctly` | synthetic inputs distinguishable per channel | combine output shows contributions from all 3 inputs (regression guard on binding positions) |
@@ -702,198 +964,703 @@ perf test.
 
 Each PR is a discrete, reviewable unit. No PR leaves the codebase in a broken state.
 
-### PR 0 — Prototype: unified single-pass path via `register_single_pass_shader!`
+### How to use this section
 
-**Scope:** A throwaway spike on a feature branch (not merged to `main` as-is). Its purpose
-is to validate the three unknowns that would force a plan redesign if they don't resolve
-as expected. Outcome is a go/no-go signal for PR 1 plus — if green — a diff that can be
-cleaned up and opened as PR 1.
+An agent invoked with "Implement PR X from `specs/multi-pass-plan.md`" should be able
+to execute the numbered PR end-to-end from the sections below. Each PR has the same
+shape:
 
-**Rationale.** The unified model (no `Single`/`MultiPass` branch in the engine) is a
-readability and migration-path win *only* if three concrete mechanisms hold up. PR 0
-exists because those mechanisms are cheap to check in isolation and expensive to unwind
-after PR 1 ships them to `main`.
+1. **Prerequisites** — what must already be merged / true.
+2. **Required reading** — specific sections of this plan and other specs that define
+   the contracts the PR depends on. Read these *before* editing.
+3. **Files** — exhaustive add / modify list with per-file scope.
+4. **Implementation details** — concrete type signatures, macro expansion shapes,
+   formulas, and code skeletons. If a decision has been locked, it is recorded here —
+   do not re-open it.
+5. **Tests** — exact test names, setup, and assertions. Each test follows `AGENTS.md`'s
+   single-behavior rule.
+6. **Acceptance commands** — literal shell commands that must pass before the PR is
+   considered done.
+7. **Out of scope** — explicit guardrails so scope does not drift.
 
-**What the prototype builds**
+Before any PR: read `AGENTS.md` and `specs/execution_model.md` § 2 ("Clean Slate
+Replay"). Every PR must end with `cargo fmt --all`, `cargo clippy --all-targets`, and
+`cargo test` all clean.
 
-1. Adds `PassInput`, `PassOutput`, `PassDef` to `bdip_core/src/gpu/shaders/mod.rs` exactly
-   as defined in "Core abstractions" above. Keeps `ShaderMeta` unchanged.
-2. Adds `MultiPassShaderMeta` and the internal `RuntimeShader` type.
-3. Adds the `register_single_pass_shader!` and `register_multi_pass_shader!` macros.
-4. Migrates **one** existing single-pass shader — `brightness` — to
-   `register_single_pass_shader!`. The `ShaderMeta` literal inside is identical to what
-   it contains today. Leaves the other 10 single-pass shaders on their pre-migration
-   `inventory::submit!` form via a temporary compat shim, solely so PR 0 compiles and
-   tests pass during the spike.
-5. Reworks the registry so `registry_by_id` returns `&'static RuntimeShader`.
-6. Reworks `Renderer::apply` into the unified `apply_passes` pass-list loop. All current
-   single-pass shaders go through it.
+---
 
-**Evaluation criteria (all three must be green before opening PR 1)**
+### PR 0 — Prototype: validate the unified path on one shader
 
-1. **`register_single_pass_shader!` macro expands and registers correctly.**
-   - The macro accepts a `ShaderMeta { ... }` literal (unchanged from today's four-field
-     shape) plus a constructor expression, expands to an `inventory::submit!` of a
-     `ShaderRegistration` carrying a `RuntimeShader` with a synthesized 1-element
-     `passes` slice, and compiles on stable Rust.
-   - Brightness registers via the macro and is retrievable through
-     `registry_by_id("brightness")`, returning a `RuntimeShader` whose `passes` has the
-     expected shape (`inputs=[Source], output=Final`, `wgsl_source` copied through).
-   - The single-pass contributor's `mod.rs` contains no `PassDef`, `PassInput`, or
-     `PassOutput` references (verify by grep on the migrated `brightness/mod.rs`).
-2. **Single-pass WGSL is a zero-diff migration.** Brightness's `brightness.wgsl` file is
-   not modified at all. The existing `@binding(0)` (source), `@binding(1)` (dest),
-   `@group(1) @binding(0)` (uniform) match the layout the position-indexed contract
-   produces for `inputs=[Source], output=Final`. If any existing single-pass shader would
-   need a WGSL binding edit to run under the unified path, PR 0 documents that and PR 1
-   adjusts scope.
-3. **Single-pass performance does not regress on the 24 MP warm path.**
-   - Run `test_perf_gpu_roundtrip_24mp` before and after PR 0's changes (same commit
-     parent, same hardware, same 20-iteration warm/cold sample policy).
-   - Warm-path `execute` must stay within +5% of the pre-prototype baseline
-     (today's ~0.35 ms → no worse than ~0.37 ms). Cold path is not a gate (pipeline
-     compilation dominates and is not in the interactive critical path).
-   - Also measure brightness specifically (the migrated shader) vs. one unmigrated
-     shader (e.g., exposure) to rule out a per-shader anomaly.
-   - If the generic loop is measurably slower than today's single-pass code, PR 0
-     implements the "single-pass fast path" described in "Renderer changes" and
-     re-measures. The fast path must be enough to restore parity; if not, escalate.
+**Prerequisites:** branched off `main`. No other PRs depend on this one — PR 0 is a
+throwaway spike that produces a go/no-go signal for PR 1.
 
-**Exit criteria**
+**Required reading:**
 
-- All three evaluation criteria green → clean up the prototype into PR 1 (migrate all 11
-  single-pass shaders, remove the compat shim, finalize tests). PR 1's diff is
-  essentially PR 0 plus the other 10 migrations plus the full infrastructure-test suite.
-- Any criterion red → open an issue documenting the failure, update this plan, and
-  reconsider. The most likely failure mode (criterion 1 with a const-fn limitation) is
-  repaired by the macro fallback without changing the contributor surface or the plan
-  structure; the other failure modes would warrant a plan revision.
+- This whole plan, with particular attention to:
+  - § "Core abstractions" (`PassInput`, `PassOutput`, `PassDef`, `MultiPassShaderMeta`,
+    `RuntimeShader`, the two registration macros, const-fn validator).
+  - § "Renderer changes" (`PipelineCache` change, scratch pool, `apply_passes` steps,
+    single-pass fast path).
+  - § "Architecture decisions" items 1–10.
+- `specs/multi-pass-research.md` § "Option C" and § "The one gotcha".
+- `specs/adding_a_shader.md` (current single-pass pattern).
+- `bdip_core/src/gpu/shaders/brightness/mod.rs` and
+  `bdip_core/src/gpu/shaders/brightness/brightness.wgsl` (the migration target).
+- `bdip_core/src/gpu/pipeline.rs` (`Renderer::apply`, `PipelineCache`).
+- `bdip_core/src/gpu/shaders/mod.rs` (current `ShaderMeta`, `ShaderRegistration`,
+  `registry_by_id`).
 
-**Files touched (spike only):**
+**Files (spike; discarded after PR 1 lands):**
 
-- `bdip_core/src/gpu/shaders/mod.rs` (add types, modify `ShaderMeta`)
-- `bdip_core/src/gpu/shaders/brightness/mod.rs` (switch to constructor)
-- `bdip_core/src/gpu/pipeline.rs` (unified `apply_passes`)
-- Temporary compat glue for the other 10 shaders (discarded before PR 1)
+Modify:
 
-**Reporting.** The prototype's result is captured as a short note in the PR 1 description
-(not a separate doc): "PR 0 prototype measured X ms warm-path execute for brightness under
-the unified loop, Y ms baseline; const-fn constructor works / required macro fallback."
+- `bdip_core/src/gpu/shaders/mod.rs`:
+  - Add `PassInput`, `PassOutput`, `PassDef`, `MultiPassShaderMeta`, `RuntimeShader`.
+    Definitions are copied verbatim from § "Core abstractions".
+  - Keep `ShaderMeta` exactly as today.
+  - Add `register_single_pass_shader!` and `register_multi_pass_shader!` macros; only
+    the single-pass one is exercised this PR.
+  - Change `registry_by_id` to return `&'static RuntimeShader`.
+  - Add the `validate_pass_list` `const fn` and have
+    `register_multi_pass_shader!` invoke it via `const _: () = ...`. Not exercised by
+    the single-pass migration but must compile.
+- `bdip_core/src/gpu/shaders/brightness/mod.rs`: replace the `inventory::submit!` call
+  with `register_single_pass_shader! { meta: ShaderMeta { ... }, constructor: |values|
+  Box::new(BrightnessParams::from_values(values)) }`. The `ShaderMeta` literal is
+  unchanged — same four fields (`id`, `display_name`, `wgsl_source`, `param`).
+- `bdip_core/src/gpu/pipeline.rs`: rewrite `Renderer::apply` as the unified
+  `apply_passes` pass-list loop per § "Renderer changes" § "Renderer::apply dispatch".
+  Add the `scratch_pool` field (typed as in § "Scratch pool"), the free-list
+  borrow/return discipline, and the relabel-on-borrow mitigation. Do not implement the
+  single-pass fast path yet (speculative — add only if criterion #3 fails).
+- Temporary compat glue for the other 10 shaders — the minimum needed so the crate
+  compiles and existing tests pass. The concrete shape (e.g., a `submit_legacy!` macro
+  that wraps the old `inventory::submit!` form into a `RuntimeShader`) is left to the
+  implementer since it is discarded in PR 1.
+
+Do **not** modify `brightness.wgsl` or any other `.wgsl` file.
+
+**Implementation details:**
+
+- `PassInput` and `PassOutput` definitions — copy verbatim from § "Core abstractions".
+- `PassDef` / `MultiPassShaderMeta` / `RuntimeShader` — copy verbatim from § "Core
+  abstractions".
+- `register_single_pass_shader!` expansion — per § "Core abstractions" § "Registration
+  macros". The expansion synthesizes a `RuntimeShader` whose `passes` is a 1-element
+  slice: `&[PassDef { label: META.id, wgsl_source: META.wgsl_source,
+  inputs: &[PassInput::Source], output: PassOutput::Final }]`.
+- `apply_passes` steps — implement exactly the 8 steps in § "Renderer::apply dispatch".
+- `PipelineCache` — `HashMap<&'static str, Vec<CachedPipeline>>` per § "PipelineCache".
+  Single-pass compiles into a length-1 vec.
+
+**Evaluation criteria (all three must be green before opening PR 1):**
+
+1. **Macro expands and registers correctly.**
+   - `cargo build -p bdip_core` succeeds on stable Rust.
+   - `registry_by_id("brightness").unwrap().passes` has length 1, with
+     `inputs == &[PassInput::Source]` and `output == PassOutput::Final`.
+   - `brightness/mod.rs` contains no `PassDef`, `PassInput`, or `PassOutput` tokens
+     (verify via `grep -nE 'PassDef|PassInput|PassOutput' bdip_core/src/gpu/shaders/brightness/mod.rs`
+     returning nothing).
+2. **Zero WGSL diff.** `git diff` on
+   `bdip_core/src/gpu/shaders/brightness/brightness.wgsl` is empty.
+3. **Warm-path 24 MP performance within +5% of baseline.**
+   - Baseline: run `cargo test --release -p bdip_core -- --ignored
+     test_perf_gpu_roundtrip_24mp` on the parent commit, record 20-iteration warm-path
+     `execute` mean.
+   - Post-change: run the same command on the spike commit.
+   - Assertion: warm mean ≤ 1.05 × baseline mean.
+   - If the regression exceeds 5%, add the single-pass fast path from § "Renderer
+     changes" § "Single-pass fast path" inside `apply_passes` and re-measure. The fast
+     path must restore parity or the criterion fails.
+
+**Acceptance commands:**
+
+```
+cargo fmt --all
+cargo clippy --all-targets -- -D warnings
+cargo test -p bdip_core
+cargo test --release -p bdip_core -- --ignored test_perf_gpu_roundtrip_24mp
+```
+
+**Exit:**
+
+- All three criteria green → the spike becomes the starting point for PR 1 (migrate
+  the remaining 10 shaders, drop the compat shim, add the full infrastructure test
+  suite).
+- Any criterion red → stop. Document the failure in an issue and revisit this plan;
+  do not open PR 1.
+
+**Out of scope:**
+
+- Multi-pass shaders (Clarity, Cartoon) — PRs 2 and 3.
+- Migrating shaders other than brightness — PR 1.
+- Infrastructure test suite beyond what criterion #1 needs — PR 1.
+- Spec updates to `adding_a_shader.md` — PR 1.
+
+**Reporting:** capture the warm-path mean numbers and whether the fast path was
+needed, in the PR 1 description (not as a separate doc).
+
+---
 
 ### PR 1 — Multi-pass infrastructure + existing-shader migration
 
-**Scope:** All architectural changes needed to support multi-pass, with zero new shaders.
-Every existing shader migrates to `register_single_pass_shader!` in the same PR so
-`main` always has a consistent shape. Assumes PR 0's three evaluation criteria came back
-green.
+**Prerequisites:** PR 0 green (all three evaluation criteria passed). PR 0's spike diff
+is the starting point; PR 1 finishes the migration and adds tests.
 
-**Files to add:** none.
+**Required reading:**
 
-**Files to modify:**
+- This whole plan.
+- `bdip_core/src/gpu/shaders/*/mod.rs` for all 11 existing single-pass shaders (each is
+  a mechanical migration target).
+- `specs/adding_a_shader.md` — this is the spec being rewritten as part of this PR.
 
-- `bdip_core/src/gpu/shaders/mod.rs`:
-  - Add `PassInput`, `PassOutput`, `PassDef`, `MultiPassShaderMeta`, and the internal
-    `RuntimeShader` type. `ShaderMeta` stays exactly as today.
-  - Add the `register_single_pass_shader!` and `register_multi_pass_shader!` macros.
-  - Rework the registry so `registry_by_id` returns `&'static RuntimeShader`.
+**Files:**
+
+Add: none.
+
+Modify:
+
+- `bdip_core/src/gpu/shaders/mod.rs` — finalized versions of the types and macros from
+  PR 0. Remove the temporary compat shim. Ensure `registry_by_id` returns
+  `&'static RuntimeShader` and nothing else.
 - `bdip_core/src/gpu/pipeline.rs`:
-  - `PipelineCache` map value → `Vec<CachedPipeline>` (length 1 for single-pass).
-  - `Renderer::scratch_pool` field.
-  - `Renderer::apply` is a single unified dispatcher (`apply_passes`), with the
-    single-pass short-circuit from "Renderer changes" only if PR 0 measured a
-    regression.
-  - New private `PassBindGroupLayout` helper that builds a layout from declared input
-    arity.
-- `bdip_core/src/gpu/shaders/{brightness,contrast,exposure,grayscale,highlights,invert,saturation,shadows,temperature,tint,vignette}/mod.rs`:
-  swap `inventory::submit! { ShaderRegistration { ... } }` for
-  `register_single_pass_shader! { meta: ShaderMeta { ... }, constructor: ... }` — 11
-  files, mechanical. The `ShaderMeta` literal is unchanged; the only new thing is the
-  macro name wrapping it. No WGSL file changes.
-- `specs/adding_a_shader.md`: single-pass guidance is updated to show the new macro
-  name (but the `ShaderMeta` fields shown inside are identical to today). Add a
-  "Multi-pass shaders" section that introduces `MultiPassShaderMeta`,
-  `register_multi_pass_shader!`, and the position-indexed binding contract — this
-  section is where all pass-related vocabulary is introduced for contributors who need
-  it.
+  - `PipelineCache` = `HashMap<&'static str, Vec<CachedPipeline>>`.
+  - `Renderer::scratch_pool: HashMap<(u32, u32), Vec<wgpu::Texture>>`.
+  - `Renderer::apply` is the single unified `apply_passes` dispatcher.
+  - Single-pass fast path: include only if PR 0 measured a regression and required it.
+    If included, document inline that it is a shape-preserving optimization and not a
+    resurrected `Single`/`MultiPass` branch.
+  - New private helper `build_pass_bind_group_layout(device, input_count) ->
+    wgpu::BindGroupLayout` that derives group 0 from `input_count`.
+  - `#[cfg(test)]` accessors: `scratch_pool_len((u32, u32)) -> usize` and
+    `scratch_pool_handle((u32, u32), usize) -> Option<*const wgpu::Texture>` per
+    § "Test-only accessor for pool introspection".
+- `bdip_core/src/gpu/shaders/{brightness,contrast,exposure,grayscale,highlights,invert,saturation,shadows,temperature,tint,vignette}/mod.rs`
+  — swap each `inventory::submit! { ShaderRegistration { ... } }` for the
+  `register_single_pass_shader! { meta: ShaderMeta { ... }, constructor: |values|
+  Box::new(<Params>::from_values(values)) }` form. The `ShaderMeta` literal is
+  unchanged. No WGSL file modifications.
+- `specs/adding_a_shader.md`:
+  - Update the single-pass example to show `register_single_pass_shader! { ... }` (the
+    `ShaderMeta` fields inside are unchanged from today).
+  - Add a new "Multi-pass shaders" section covering `MultiPassShaderMeta`,
+    `register_multi_pass_shader!`, the position-indexed binding contract (input
+    bindings at `@binding(0..N-1)`, destination at `@binding(N)`, uniform at
+    `@group(1) @binding(0)`), the shared-uniform alignment rule (every `.wgsl` file
+    declares the full struct), the data-dependent loop bound convention
+    (`RADIUS_CAP`), and a pointer to the const-fn validator's error messages.
 
-**Tests shipped:** the Infrastructure tests listed above, plus a test-only 2-pass "copy
-shader" fixture in `pipeline.rs` so the infrastructure has an integration surface without
-needing a real new shader. All ~50+ existing shader tests continue to pass unchanged.
+**Implementation details:**
 
-**Review focus:** the `PassDef` / `MultiPassShaderMeta` shape and the
-`register_single_pass_shader!` / `register_multi_pass_shader!` macro expansions (these
-are the public contract); confirm the single-pass `ShaderMeta` literal is byte-identical
-to today's shape; position-indexed bind-group construction; scratch-pool lifecycle; and
-the single-pass short-circuit (if present) — confirm it is a shape-preserving
-optimization inside `apply_passes` and not a re-emergence of a `Single`/`MultiPass`
-branch.
+- Types — final versions of `PassInput`, `PassOutput`, `PassDef`, `MultiPassShaderMeta`,
+  `RuntimeShader` per § "Core abstractions".
+- `validate_pass_list` — `const fn` enforcing the three rules in § "Registration-time
+  validation of multi-pass pass lists". Panics in const context on violation. Write
+  `validate_pass_list` as pure `const fn` taking `&[PassDef]` and returning `()`; use
+  byte-level comparison on `s.as_bytes()` for scratch-name equality.
+- `register_multi_pass_shader!` expansion emits `const _: () =
+  validate_pass_list(PASSES);` next to the `inventory::submit!` call, so misuse fails
+  `cargo build` at the shader's own `mod.rs`.
+- `apply_passes` — implement all 8 steps from § "Renderer::apply dispatch". Pay
+  particular attention to:
+  - Step 3: distinct `PassOutput::Scratch(name)` set (use a small `Vec<&'static str>`
+    or `heapless` ish structure — 4 scratches is the current maximum).
+  - Step 5: `dispatch_workgroups(ceil(width / 16), ceil(height / 16), 1)` at the
+    Transform's input dims for every pass.
+  - Step 7: every borrowed texture is returned to the pool's free list on exit, even
+    on early `?` returns (use a guard pattern or explicit return before yielding the
+    `Final` texture).
+- Label mitigations (§ "Mitigating the debugging-label cost") — V1 ships tiers (1)
+  (relabel on borrow) and (2) (debug-build `#name` counter suffix). Tier (3) is
+  deferred.
 
-**Rollback characteristics:** if this PR is reverted, nothing on `main` ships multi-pass.
-No user-visible change either way.
+**Tests shipped (add or verify each; see § "Infrastructure tests"):**
+
+- `test_single_pass_macro_round_trips` (pre/post migration byte-identical for
+  brightness).
+- `test_single_pass_skips_scratch_pool`.
+- `test_multi_pass_scratch_recycling_within_shader` (2-pass copy fixture; uses
+  `scratch_pool_len` + `scratch_pool_handle`).
+- `test_multi_pass_scratch_shared_across_shaders` (two distinct 2-pass fixtures;
+  asserts same pointers re-borrowed).
+- `test_multi_pass_image_resize_drops_pool`.
+- `test_multi_pass_final_output_correctness` (2-pass identity copy returns
+  pixel-identical input).
+- `test_pipeline_cache_compiles_per_pass`.
+- `test_position_indexed_bindings_three_inputs` (test fixture shader with 3-input
+  pass, explicit binding regression guard).
+- `test_single_pass_macro_synthesizes_one_pass_def`.
+- `test_all_registered_pass_lists_validate` (walks
+  `inventory::iter::<ShaderRegistration>()`).
+- `test_validate_pass_list_rejects_final_in_middle`,
+  `test_validate_pass_list_rejects_missing_scratch_write`,
+  `test_validate_pass_list_rejects_duplicate_scratch_output` (direct unit tests on the
+  `const fn`).
+
+All existing per-shader tests (≥50 of them) continue to pass unchanged. `cargo test`
+must be fully green; no test is moved to `#[ignore]`.
+
+**Acceptance commands:**
+
+```
+cargo fmt --all
+cargo clippy --all-targets -- -D warnings
+cargo test -p bdip_core
+cargo test --release -p bdip_core -- --ignored test_perf_gpu_roundtrip_24mp
+# Sanity: confirm no shader mod.rs references pass vocabulary
+grep -rn "PassDef\|PassInput\|PassOutput" bdip_core/src/gpu/shaders/ \
+    | grep -v mod.rs:  # allowed only in shaders/mod.rs
+```
+
+**Review focus (capture in PR description):**
+
+- `PassDef` / `MultiPassShaderMeta` shape and macro expansions (the public contract).
+- `register_single_pass_shader!` expansion proves byte-identical `ShaderMeta` fields.
+- Position-indexed bind-group construction handles N=1, 2, 3 inputs correctly.
+- Scratch-pool borrow/return is leak-free (check via `scratch_pool_len` before/after
+  tests).
+- Const-fn validator compile-error messages are actionable.
+- Single-pass fast path, if present, is localized inside `apply_passes` and not a
+  separate public entry point.
+
+**Rollback characteristics:** reverting this PR removes multi-pass infrastructure but
+leaves the single-pass shaders in the old `inventory::submit!` form. No user-visible
+change either way.
+
+**Out of scope:**
+
+- Real multi-pass shaders (Clarity, Cartoon) — PRs 2 and 3.
+- Cross-shader integration tests — PR 4.
+- Perf assertions beyond the PR 0 criterion — PR 4.
+
+---
 
 ### PR 2 — Clarity shader
 
-**Scope:** First real multi-pass shader on top of PR 1's infrastructure.
+**Prerequisites:** PR 1 merged. Multi-pass infrastructure, the const-fn validator, and
+the updated `adding_a_shader.md` guidance exist on `main`.
 
-**Files to add:**
+**Required reading:**
 
-- `bdip_core/src/gpu/shaders/clarity/mod.rs`
-- `bdip_core/src/gpu/shaders/clarity/blur_h.wgsl`
-- `bdip_core/src/gpu/shaders/clarity/blur_v.wgsl`
-- `bdip_core/src/gpu/shaders/clarity/combine.wgsl`
+- This plan, § "Clarity" (pass list, params, locked sigma formula, blur kernel size,
+  extrema behavior).
+- `specs/some_shaders.md` — the Clarity row with the canonical
+  `C_hp = C_in - C_blurred`, `C_out = C_in + C_hp * u_Clarity * W_mid` formulas and
+  the midtone-weight description.
+- `specs/adding_a_shader.md` § "Multi-pass shaders" (as written in PR 1).
+- `bdip_core/src/gpu/shaders/vignette/mod.rs` as a reference for shader-test style
+  (single-behavior tests using `make_solid_image` + `roundtrip` helpers).
 
-**Files to modify:**
+**Files:**
+
+Add:
+
+- `bdip_core/src/gpu/shaders/clarity/mod.rs` — `ClarityParams`, `TransformShader` impl
+  (or whatever PR 1's macro expects), `register_multi_pass_shader!` block, test module.
+- `bdip_core/src/gpu/shaders/clarity/blur_h.wgsl` — separable Gaussian, horizontal.
+- `bdip_core/src/gpu/shaders/clarity/blur_v.wgsl` — separable Gaussian, vertical.
+- `bdip_core/src/gpu/shaders/clarity/combine.wgsl` — 2-input combine pass (reads
+  `Source` and `Scratch("v")`).
+
+Modify:
 
 - `bdip_core/src/gpu/shaders/mod.rs` — add `pub mod clarity;`.
 - `specs/some_shaders.md` — update the Clarity row to note it ships as multi-pass
   (separable Gaussian + combine) and reference this plan.
 
-**Tests shipped:** the Clarity shader-level test matrix above.
+**Implementation details:**
 
-**Review focus:** WGSL correctness of the Gaussian kernel (σ, kernel width, normalization),
-midtone-weight formula, visual result on a real photo (include before/after screenshots
-in the PR description).
+`ClarityParams`:
+
+```rust
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct ClarityParams {
+    pub amount: f32,          // u_Clarity ∈ [-1.0, 1.0]
+    pub _padding: [f32; 3],   // pad to 16 bytes
+}
+```
+
+Slider: `SliderDef { name: "Amount", min: -1.0, max: 1.0, default: 0.0 }`.
+
+`PassDef` list (3 passes):
+
+```
+blur_h:  inputs=[Source],                  output=Scratch("h")
+blur_v:  inputs=[Scratch("h")],            output=Scratch("v")
+combine: inputs=[Source, Scratch("v")],    output=Final
+```
+
+WGSL — all three files declare:
+
+```wgsl
+struct ClarityParams {
+    amount:   f32,
+    _padding0: f32,
+    _padding1: f32,
+    _padding2: f32,
+}
+@group(1) @binding(0) var<uniform> params: ClarityParams;
+```
+
+Locked sigma / kernel code (identical in `blur_h.wgsl` and `blur_v.wgsl`, differing
+only in tap direction):
+
+```wgsl
+const SIGMA_FRACTION: f32 = 0.02;
+const RADIUS_CAP: i32 = 256;
+
+@compute @workgroup_size(16, 16)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let dims = textureDimensions(input_texture);
+    if gid.x >= dims.x || gid.y >= dims.y { return; }
+
+    let sigma  = SIGMA_FRACTION * f32(max(dims.x, dims.y));
+    let radius = min(i32(ceil(3.0 * sigma)), RADIUS_CAP);
+    let two_sigma_sq = 2.0 * sigma * sigma;
+
+    var accum: vec4<f32> = vec4<f32>(0.0);
+    var weight_sum: f32 = 0.0;
+    let coord = vec2<i32>(gid.xy);
+    for (var t: i32 = -radius; t <= radius; t = t + 1) {
+        let offset = vec2<i32>(t, 0);   // blur_v uses vec2<i32>(0, t)
+        let s = textureLoad(input_texture, clamp(coord + offset, vec2<i32>(0), vec2<i32>(dims) - 1), 0);
+        let w = exp(-f32(t * t) / two_sigma_sq);
+        accum = accum + s * w;
+        weight_sum = weight_sum + w;
+    }
+    let out = accum / weight_sum;
+    textureStore(output_texture, coord, vec4<f32>(out.rgb, textureLoad(input_texture, coord, 0).a));
+}
+```
+
+Alpha is copied through from the input pixel — the blur does not smear alpha.
+
+Combine pass (`combine.wgsl`) — 2-input, per `some_shaders.md` Clarity row:
+
+```wgsl
+@group(0) @binding(0) var input_source:  texture_2d<f32>;
+@group(0) @binding(1) var input_blurred: texture_2d<f32>;
+@group(0) @binding(2) var output_texture: texture_storage_2d<rgba16float, write>;
+@group(1) @binding(0) var<uniform> params: ClarityParams;
+
+fn midtone_weight(luma: f32) -> f32 {
+    // Peaks at 0.5 mid-gray; falls smoothly to 0 at 0.0 and 1.0.
+    // One standard form: 1 - (2*luma - 1)^2  ∈ [0, 1].
+    let t = 2.0 * luma - 1.0;
+    return clamp(1.0 - t * t, 0.0, 1.0);
+}
+
+@compute @workgroup_size(16, 16)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let dims = textureDimensions(input_source);
+    if gid.x >= dims.x || gid.y >= dims.y { return; }
+
+    let coord   = vec2<i32>(gid.xy);
+    let src     = textureLoad(input_source, coord, 0);
+    let blurred = textureLoad(input_blurred, coord, 0);
+
+    let c_hp    = src.rgb - blurred.rgb;
+    let luma    = dot(src.rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
+    let w_mid   = midtone_weight(luma);
+    let out_rgb = src.rgb + c_hp * params.amount * w_mid;
+
+    textureStore(output_texture, coord, vec4<f32>(clamp(out_rgb, vec3<f32>(0.0), vec3<f32>(1.0)), src.a));
+}
+```
+
+Note: Clarity's output is clamped to `[0, 1]` because the formula can legitimately
+exceed the range on saturated pixels. `Rgba16Float` still stores any overflow losslessly
+until the readback clamp, but clamping here matches the reference formula's intent.
+
+**Tests shipped (exact names from § "Shader-level tests (PRs 2 & 3)"):**
+
+- `test_clarity_registry_entry_exists`
+- `test_clarity_registry_metadata` — asserts `display_name == "Clarity"`,
+  `param == Sliders([{"Amount", -1.0, 1.0, 0.0}])`, `passes.len() == 3`.
+- `test_clarity_make_uniform_known_value` — `reg.make_uniform(&[0.5])` returns bytes
+  equal to `bytemuck::bytes_of(&ClarityParams { amount: 0.5, _padding: [0.0; 3] })`.
+- `test_clarity_zero_amount_is_identity` — 16×16 solid mid-gray, `amount = 0.0`; every
+  output pixel within ±64 u16 of input. (Clarity is never *bit*-exact at amount=0 due
+  to the blur roundtrip; ±64 matches other shader tests' tolerance.)
+- `test_clarity_positive_amount_increases_contrast_on_edge` — step image; pixels just
+  inside the edge diverge more from the mean at `amount=0.5` than at `amount=0.0`.
+- `test_clarity_negative_amount_softens_edge` — same step image; edge transition at
+  `amount=-0.5` is softer than at `amount=0.0` (compare inter-band pixel differences).
+- `test_clarity_alpha_preserved` — 4×4 solid mid-gray, `amount=0.5`; every output
+  alpha == 65535.
+- `test_clarity_deterministic` — same inputs run twice produce pixel-identical output.
+- `test_clarity_scratch_pool_reuses_across_runs` — run Clarity twice at same dims;
+  `scratch_pool_len(dims) == 2` both times; `scratch_pool_handle(dims, 0)` and
+  `(dims, 1)` produce the same raw pointers on the second run.
+
+**Acceptance commands:**
+
+```
+cargo fmt --all
+cargo clippy --all-targets -- -D warnings
+cargo test -p bdip_core
+cargo test test_shader_registry_no_duplicate_ids
+```
+
+**Review focus (capture in PR description with a 24 MP before/after screenshot):**
+
+- Gaussian kernel math (σ derivation, normalization by `weight_sum`, 3σ truncation,
+  `RADIUS_CAP`).
+- Combine formula matches `some_shaders.md` Clarity row exactly.
+- Midtone-weight curve visibly attenuates strong highlights/shadows (see the step-image
+  test behavior).
+- Warm-path timing on 24 MP — reportable in the PR description but not asserted here
+  (perf assertion is PR 4).
+
+**Out of scope:**
+
+- Exposing `blur_sigma` / radius as a second slider.
+- Cross-shader tests (PR 4).
+- `specs/transformations_reference.md` update — Clarity already exists there.
+
+---
 
 ### PR 3 — Cartoon shader
 
-**Scope:** Second multi-pass shader; exercises the 3-input combine path.
+**Prerequisites:** PR 2 merged. Clarity exists as a working reference for the
+multi-pass pattern. `adding_a_shader.md` § "Multi-pass shaders" exists.
 
-**Files to add:**
+**Required reading:**
 
-- `bdip_core/src/gpu/shaders/cartoon/mod.rs`
+- This plan, § "Cartoon" (pass list, `CartoonParams`, defaults, locked pass math,
+  slider-extrema behavior).
+- This plan, § "Bind-group contract (multi-pass passes)" — especially the shared-uniform
+  alignment rule.
+- `specs/tech_debt.md` entry "Cartoon (sRGB-quantization variant)" — `quantize.wgsl`
+  must carry an inline comment pointing at it.
+- `bdip_core/src/gpu/shaders/clarity/` (reference for the pattern).
+
+**Files:**
+
+Add:
+
+- `bdip_core/src/gpu/shaders/cartoon/mod.rs` — `CartoonParams`, `register_multi_pass_shader!`
+  block, test module.
 - `bdip_core/src/gpu/shaders/cartoon/smooth_h.wgsl`
 - `bdip_core/src/gpu/shaders/cartoon/smooth_v.wgsl`
-- `bdip_core/src/gpu/shaders/cartoon/quantize.wgsl`
+- `bdip_core/src/gpu/shaders/cartoon/quantize.wgsl` — with inline comment explaining
+  linear-light quantization and pointing at `specs/tech_debt.md` "Cartoon
+  (sRGB-quantization variant)".
 - `bdip_core/src/gpu/shaders/cartoon/edges.wgsl`
-- `bdip_core/src/gpu/shaders/cartoon/combine.wgsl`
+- `bdip_core/src/gpu/shaders/cartoon/combine.wgsl` — 3-input pass, first in the tree.
 
-**Files to modify:**
+Modify:
 
 - `bdip_core/src/gpu/shaders/mod.rs` — add `pub mod cartoon;`.
-- `specs/transformations_reference.md` — add a Cartoon section under a new "Stylization"
-  heading referencing the XDoG paper and this plan.
+- `specs/transformations_reference.md` — add a "Stylization" heading with a Cartoon
+  entry that references this plan.
 
-**Tests shipped:** the Cartoon shader-level test matrix above, including the explicit
-3-input binding regression guard.
+**Implementation details:**
 
-**Review focus:** Sobel kernel, posterize math, combine formula, and **the WGSL binding
-indices in `combine.wgsl`** — this is the first 3-input pass on `main` and is the
-production validation of the position-indexed discipline.
+`CartoonParams`:
+
+```rust
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct CartoonParams {
+    pub strength:       f32,
+    pub levels:         f32,
+    pub edge_threshold: f32,
+    pub edge_softness:  f32,
+    pub edge_darkness:  f32,
+    pub _padding:       [f32; 3],   // 32 bytes total
+}
+```
+
+Sliders (in this order — tests depend on it):
+
+```
+SliderDef { name: "Strength",       min: 0.0,  max: 1.0,  default: 0.0 }
+SliderDef { name: "Levels",         min: 2.0,  max: 16.0, default: 8.0 }
+SliderDef { name: "Edge Threshold", min: 0.0,  max: 1.0,  default: 0.15 }
+SliderDef { name: "Edge Softness",  min: 0.01, max: 0.5,  default: 0.10 }
+SliderDef { name: "Edge Darkness",  min: 0.0,  max: 1.0,  default: 1.0 }
+```
+
+`PassDef` list (5 passes):
+
+```
+smooth_h: inputs=[Source],                                          output=Scratch("sh")
+smooth_v: inputs=[Scratch("sh")],                                   output=Scratch("smooth")
+quantize: inputs=[Scratch("smooth")],                               output=Scratch("quant")
+edges:    inputs=[Source],                                          output=Scratch("edges")
+combine:  inputs=[Source, Scratch("quant"), Scratch("edges")],      output=Final
+```
+
+All five WGSL files declare the full `CartoonParams` struct verbatim (see § "Bind-group
+contract (multi-pass passes)" for the exact WGSL).
+
+Locked pass math — see § "Cartoon" § "Locked pass math" for the formulas. Key points
+for the implementer:
+
+- `SIGMA_FRACTION_SMOOTH = 0.015`, `RADIUS_CAP = 256`.
+- Quantize in **linear-light** space: `floor(smoothed.rgb * L) / (L - 1.0)` where
+  `L = floor(clamp(params.levels, 2.0, 16.0))`. Include this exact comment in
+  `quantize.wgsl`:
+
+```wgsl
+// Quantization runs in linear-light space (consistent with the rest of the pipeline).
+// Bands fall at energy-uniform intervals, which differs visibly from sRGB-gamma
+// quantization (e.g., Photoshop Posterize). An sRGB-space Cartoon variant is tracked
+// in specs/tech_debt.md "Cartoon (sRGB-quantization variant)".
+```
+
+- Edges: Sobel on Rec.709 luma of **Source** (not `smoothed`). Write single-channel
+  mask as `vec4<f32>(edge, 0.0, 0.0, 1.0)`.
+- Edge shaping: `smoothstep(params.edge_threshold,
+  clamp(params.edge_threshold + params.edge_softness, 0.0, 2.83), mag)`.
+- Combine: `mix(src.rgb, quant.rgb, strength) * (1.0 - edge_darkness * edges.r)`,
+  clamped to `[0, 1]`, alpha from `src.a`.
+
+Bindings for `combine.wgsl` (the 3-input pass):
+
+```wgsl
+@group(0) @binding(0) var input_source:   texture_2d<f32>;   // Source
+@group(0) @binding(1) var input_quant:    texture_2d<f32>;   // Scratch("quant")
+@group(0) @binding(2) var input_edges:    texture_2d<f32>;   // Scratch("edges")
+@group(0) @binding(3) var output_texture: texture_storage_2d<rgba16float, write>;
+@group(1) @binding(0) var<uniform> params: CartoonParams;
+```
+
+The binding indices above must match the `inputs` order in `PassDef` exactly — this is
+the production validation of the position-indexed discipline.
+
+**Tests shipped (exact names from § "Shader-level tests (PRs 2 & 3)"):**
+
+- `test_cartoon_registry_entry_exists`
+- `test_cartoon_registry_metadata` — 5 sliders in declared order, `passes.len() == 5`.
+- `test_cartoon_make_uniform_known_value` — `reg.make_uniform(&[0.5, 8.0, 0.2, 0.1,
+  0.8])` returns bytes equal to
+  `bytemuck::bytes_of(&CartoonParams { strength: 0.5, levels: 8.0, edge_threshold: 0.2,
+  edge_softness: 0.1, edge_darkness: 0.8, _padding: [0.0; 3] })`.
+- `test_cartoon_zero_strength_and_zero_edge_darkness_is_identity` — solid gradient,
+  `strength=0.0`, `edge_darkness=0.0`; output **pixel-identical** to input (no
+  tolerance — the formula is exact identity at these parameters).
+- `test_cartoon_full_strength_reduces_unique_colors` — smooth gradient,
+  `strength=1.0`, `levels=4`, `edge_darkness=0.0`; unique output values < unique input
+  values.
+- `test_cartoon_edges_darken_high_gradient_pixels` — sharp black/white edge,
+  `edge_darkness=1.0`, `strength=0.0`, `edge_threshold=0.1`, `edge_softness=0.1`;
+  edge-pixel luma in output < edge-pixel luma in input.
+- `test_cartoon_higher_edge_softness_widens_edge_band` — sharp edge,
+  `edge_threshold=0.5`; pixel-count where darken applied is strictly greater at
+  `edge_softness=0.3` than at `edge_softness=0.05`.
+- `test_cartoon_no_edges_below_threshold` — smooth gradient, `edge_threshold=1.0`;
+  output equals pure-posterized version (no edge darkening anywhere).
+- `test_cartoon_alpha_preserved` — 4×4 solid mid-gray; every output alpha == 65535.
+- `test_cartoon_deterministic` — same params run twice → pixel-identical.
+- `test_cartoon_three_input_combine_pass_binds_correctly` — test helper drives a
+  synthetic 3-input scenario (different channel per input) and asserts the combine
+  output contains contributions from all three (regression guard on binding positions).
+
+**Acceptance commands:**
+
+```
+cargo fmt --all
+cargo clippy --all-targets -- -D warnings
+cargo test -p bdip_core
+cargo test test_shader_registry_no_duplicate_ids
+```
+
+**Review focus (capture in PR description with a 24 MP before/after screenshot):**
+
+- The 3-input combine's `@binding(0..3)` in WGSL matches the `PassDef` `inputs` order.
+- Sobel kernel operates on `Source` (not smoothed).
+- Linear-quantization comment present in `quantize.wgsl`.
+- Slider-extrema tests pass with the *exact* locked formula — if any of them require
+  tolerance tuning, pause and reconcile with § "Cartoon" § "Slider-extrema behavior"
+  rather than loosening the assertion.
+
+**Out of scope:**
+
+- sRGB-quantization variant (tech-debt entry).
+- Edge-detection on smoothed image.
+- Cross-shader tests and perf assertions (PR 4).
+
+---
 
 ### PR 4 — Cross-shader integration + performance guardrails
 
-**Scope:** Stitch multi-pass into the broader test story. Small, safe.
+**Prerequisites:** PRs 2 and 3 merged. Clarity and Cartoon exist.
 
-**Files to modify:**
+**Required reading:**
 
-- `bdip_core/src/gpu/shaders/cross_shader_tests.rs` — add the three cross-shader chain
-  tests listed above.
-- `bdip_core/src/gpu/pipeline.rs` — extend `test_perf_gpu_roundtrip_24mp` (or add
-  siblings) with Clarity + Cartoon perf assertions.
+- This plan, § "Cross-shader integration tests (PR 4)" and § "Performance budget test".
+- `bdip_core/src/gpu/shaders/cross_shader_tests.rs` — the current file to extend.
+- `bdip_core/src/gpu/pipeline.rs` § `test_perf_gpu_roundtrip_24mp` — the perf test to
+  extend or clone.
 
-**Tests shipped:** cross-shader chain tests + perf guardrails.
+**Files:**
 
-**Rollback characteristics:** tests-only PR; reverting loses coverage but not behavior.
+Modify:
+
+- `bdip_core/src/gpu/shaders/cross_shader_tests.rs` — add the three chain tests below.
+- `bdip_core/src/gpu/pipeline.rs` — extend the perf test (or add siblings) with the
+  Clarity and Cartoon assertions below.
+
+**Implementation details — exact tests to add:**
+
+Cross-shader chain tests (extend `cross_shader_tests.rs`):
+
+- `test_brightness_then_clarity` — apply Brightness(+0.2) then Clarity(+0.5) on a
+  synthetic image; assertion: mean pixel brightness > mean pixel brightness after
+  Brightness(+0.2) alone (Clarity does not cancel Brightness's lift).
+- `test_clarity_then_vignette` — apply Clarity(+0.5) then Vignette (default) on a 16×16
+  solid mid-gray image; assertion: no panic, `apply` returns an image of the expected
+  dims, every output pixel has alpha == 65535.
+- `test_cartoon_then_saturation` — apply Cartoon (defaults) then Saturation(1.0) on a
+  smooth gradient; assertion: `unique_output_colors` is within ±5% of
+  `unique_output_colors_cartoon_alone` (Saturation at 1.0 does not restore colors that
+  Cartoon quantized away).
+
+Performance assertions (extend / add siblings to `test_perf_gpu_roundtrip_24mp`):
+
+- `test_perf_gpu_roundtrip_24mp_clarity` — 24 MP synthetic image, Clarity at
+  `amount=0.5`, warm-path critical path mean over 20 iterations; assert `mean < 22.0
+  ms` (20 ms readback baseline + ~1 ms Clarity + ~1 ms slack).
+- `test_perf_gpu_roundtrip_24mp_cartoon` — same shape; assert `mean < 24.0 ms` (20 ms
+  + ~2 ms Cartoon + ~2 ms slack).
+
+Both new perf tests are `#[ignore]`-gated, same convention as the existing
+`test_perf_gpu_roundtrip_24mp`. Their purpose is drift detection — they are soft
+ceilings that fire before regressions reach production.
+
+**Acceptance commands:**
+
+```
+cargo fmt --all
+cargo clippy --all-targets -- -D warnings
+cargo test -p bdip_core
+cargo test --release -p bdip_core -- --ignored test_perf_gpu_roundtrip_24mp
+cargo test --release -p bdip_core -- --ignored test_perf_gpu_roundtrip_24mp_clarity
+cargo test --release -p bdip_core -- --ignored test_perf_gpu_roundtrip_24mp_cartoon
+```
+
+**Review focus:**
+
+- Chain tests assert *relative* quantities (comparisons against "shader-alone"
+  baselines), not absolute pixel values — this keeps them resilient to minor formula
+  tweaks.
+- Perf ceilings are labeled as soft guardrails in their test comments.
+- No assertion is stronger than what the shader actually guarantees (e.g., the cartoon
+  → saturation test allows ±5% drift).
+
+**Rollback characteristics:** tests-only PR; reverting loses coverage but does not
+change runtime behavior.
+
+**Out of scope:**
+
+- New shaders.
+- Additional perf test matrices (e.g., 100 MP). A V1-checklist entry for NVIDIA
+  portability spot-check already lives in § "Risks and open questions"; this PR does
+  not implement it.
 
 ---
 
@@ -903,17 +1670,18 @@ production validation of the position-indexed discipline.
   shader compilers may unroll differently. Validated on M4 Pro in PR 2's perf test; must
   also be spot-checked on a discrete NVIDIA GPU before V1 ship (not blocking for PR
   merges but must be on the V1 checklist).
-- **Scratch pool growth if users stack multiple multi-pass shaders.** Each multi-pass
-  shader contributes 1–4 scratch textures per image size. 24 MP `Rgba16Float` = ~185 MB
-  per texture. A stack of 5 multi-pass shaders = ~1 GB scratch VRAM. Acceptable on
-  typical discrete GPUs; tight on integrated GPUs. Mitigation (shared pool keyed by dims
-  with per-pass liveness analysis) is described in "Renderer changes" §
-  "Design choice: per-shader pool vs. shared scratch textures" — defer until profiling or
-  a user OOM shows it matters.
+- **Scratch pool growth if users stack multiple multi-pass shaders.** The shared pool
+  (see "Renderer changes" § "Scratch pool") caps peak footprint at
+  `max(scratches_per_shader) × texture_size`, so stacking more multi-pass Transforms at
+  the same image size does not grow the pool beyond Cartoon's 4-scratch high-water mark
+  (~740 MB at 24 MP). The remaining risk is a future shader that alone needs many more
+  scratches than Cartoon; that is a per-shader design review, not a pool-level issue.
 - **Parameter coupling for Clarity.** V1 hardcodes blur sigma; a later PR may expose it as
   a slider. Decision is not blocking.
-- **Cartoon parameter ranges.** The ranges above are informed estimates; will need tuning
-  on real photos during PR 3 review. Not an architecture question.
+- **Cartoon parameter defaults.** The defaults locked above (Strength 0.0, Levels 8.0,
+  Edge Threshold 0.15, Edge Softness 0.10, Edge Darkness 1.0) are informed estimates
+  and may be tuned on real photos during PR 3 review. Locked formula and slider set
+  are not up for re-negotiation at that point; only numeric defaults.
 - **`rustfmt` interaction with `register_single_pass_shader!` calls containing
   `include_str!(...)`.** Long `include_str!` calls sometimes cause awkward line breaks
   inside macro invocations. Non-blocking; can use `#[rustfmt::skip]` if needed on the
