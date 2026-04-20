@@ -1116,13 +1116,13 @@ mod tests {
     ///   cargo perf-test
     ///
     /// Measurements on Apple M4 Pro (2026-04) after PR 4 (GPU Upload Conversion):
-    ///   gpu upload:              ~13.17 ms  (Raw u16 upload; no CPU conversion)
-    ///   run 1 execute:           ~1.52 ms
-    ///   run 1 readback:          ~62.45 ms
-    ///   run 1 critical path:     ~63.97 ms
-    ///   run 2 execute:           ~0.35 ms
-    ///   run 2 readback:          ~15.58 ms (reused staging buffer + pixel_vec)
-    ///   run 2 critical path:     ~15.93 ms
+    ///   gpu upload:              ~14.81 ms  (Raw u16 upload; no CPU conversion)
+    ///   run 1 execute:           ~1.61 ms
+    ///   run 1 readback:          ~70.85 ms
+    ///   run 1 critical path:     ~72.46 ms
+    ///   run 2 execute:           ~0.42 ms
+    ///   run 2 readback:          ~16.77 ms (reused staging buffer + pixel_vec)
+    ///   run 2 critical path:     ~17.19 ms
     ///
     /// Target once all known bottlenecks are resolved (warm, interactive): <20 ms.
     /// When the target is reliably met, add an assertion and remove #[ignore].
