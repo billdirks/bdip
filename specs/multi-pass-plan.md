@@ -354,7 +354,7 @@ bind-group layouts, N `make_uniform` functions, new per-pass uniform field on
 **Alignment rule: every `.wgsl` file in the shader declares the full, identical params
 struct.** Not just the fields its pass reads. WebGPU validates the uniform binding's
 size against the pipeline layout at creation time; a pass whose WGSL declares a
-truncated struct fails pipeline creation with a cryptic byte-mismatch error rather
+truncated struct fails pipeline creation with a byte-mismatch error rather
 than silently reading the wrong offsets.
 
 Concretely for Cartoon: all five WGSL files (`smooth_h.wgsl`, `smooth_v.wgsl`,
@@ -408,29 +408,39 @@ Compilation is still lazy per shader_id. When compiling a multi-pass shader, eac
 
 ### Scratch pool
 
-New field on `Renderer`:
+New struct and field on `Renderer`:
 
 ```rust
-// Pool of reusable Rgba16Float scratch textures keyed only by (width, height).
-// Textures are borrowed by an `apply_passes` invocation on entry and returned on exit,
-// so the peak footprint equals `max(scratches_needed_by_any_one_shader) × texture_size`
-// regardless of how many multi-pass Transforms stack in one Clean Slate Replay.
-scratch_pool: HashMap<(u32, u32), Vec<wgpu::Texture>>,
+// A single-resolution free list. On image-size change, the whole pool is dropped and rebuilt.
+struct ScratchPool {
+    width: u32,
+    height: u32,
+    // Pool of reusable Rgba16Float scratch textures.
+    // Textures are borrowed by an `apply_passes` invocation on entry and returned on exit,
+    // so the peak footprint equals `max(scratches_needed_by_any_one_shader) × texture_size`
+    // regardless of how many multi-pass Transforms stack in one Clean Slate Replay.
+    textures: Vec<wgpu::Texture>,
+}
+
+scratch_pool: ScratchPool,
 ```
 
 Semantics:
 
-- The pool is a free list per `(width, height)`. Textures are never freed mid-session;
-  they are re-used across both passes-within-a-shader and shaders-within-a-stack.
+- The pool is a single-resolution free list. Textures are never freed mid-session as long
+  as the resolution remains constant; they are re-used across both passes-within-a-shader
+  and shaders-within-a-stack.
 - `apply_passes` **borrows** one texture per distinct `PassOutput::Scratch(name)`
-  declared in its pass list, pulling from the free list or allocating on miss. Borrows
+  declared in its pass list, pulling from `pool.textures` or allocating on miss. Borrows
   stay checked out for the duration of that `apply_passes` call.
 - When `apply_passes` returns, every borrowed texture is **returned** to the free list.
   The next Transform's `apply_passes` (Clarity → Cartoon, for example) finds those same
   textures waiting and reuses them.
-- On image-size change, the whole pool is dropped and rebuilt. For V1, **any `apply`
-  call at dims different from the majority of pool entries triggers a full pool reset**
-  — simpler than per-key tracking, and image resize is rare.
+- On image-size change, the whole pool is dropped and rebuilt. **Any `apply` call where**
+  **`width != pool.width || height != pool.height` triggers a `pool.textures.clear()`**
+  **and an update of `pool.width` and `pool.height`**. This simplifies memory management
+  while avoiding hashing overhead on the hot path, relying on the fact that image resize
+  is rare.
 
 This design relies on two invariants already present in the engine:
 
@@ -452,9 +462,9 @@ This design relies on two invariants already present in the engine:
   ~1.1 GB for Clarity + Cartoon today, worse as the multi-pass roadmap grows.
 - **No reliance on Clean Slate Replay as a load-bearing correctness invariant.** The
   borrow/return discipline makes the pool correct under any call pattern that respects
-  `&mut self` — we are not encoding "Transforms never overlap" into the pool's key shape.
-- **Simpler code.** One free list, no `shader_id` threading into the key, no per-shader
-  bookkeeping.
+  `&mut self` — we are not encoding "Transforms never overlap" into the pool.
+- **Simpler code.** One flat struct, no `shader_id` or `(width, height)` hashing on
+  every access, no per-shader bookkeeping.
 
 #### Mitigating the debugging-label cost
 
@@ -492,6 +502,7 @@ to observe recycling without relying on GPU-capture labels or pointer-bit reinte
 #[cfg(test)]
 impl Renderer {
     /// Number of textures currently in the free list for the given dims.
+    /// Returns 0 if `dims` do not match the current pool dims.
     /// Does NOT count textures currently checked out by an in-flight `apply_passes`
     /// — since `Renderer::apply` is `&mut self`, tests only observe the pool at
     /// rest (between calls).
@@ -509,9 +520,8 @@ prove the *same physical texture* came back on the second run, not merely "a tex
 of the same shape."
 
 Both accessors are `#[cfg(test)]`-gated so they do not appear in release builds and
-cannot be called from outside the crate. This replaces the earlier hand-wavy "read
-back pool state or observe via labels" language in the test plan with a concrete,
-testable API.
+cannot be called from outside the crate. This provides a concrete api that can be used
+in tests to read back the pool state and observe the state via labels.
 
 ### `Renderer::apply` dispatch
 
@@ -532,8 +542,8 @@ pub fn apply(&mut self, engine: &GpuEngine, src_texture: &wgpu::Texture, transfo
 2. Allocate the `Final` destination texture at Transform dims — this matches today's
    single-pass destination allocation exactly.
 3. For every **distinct** `PassOutput::Scratch(name)` referenced by the pass list,
-   **borrow** one texture at Transform dims from the pool's `(width, height)` free
-   list (allocating on miss). Each borrow is associated with its `name` for the
+   **borrow** one texture at Transform dims from `pool.textures` (allocating on miss).
+   Each borrow is associated with its `name` for the
    duration of this `apply_passes` call, and — under `#[cfg(debug_assertions)]` plus on
    allocation — its wgpu label is set to `"{shader_id}::{scratch_name}"` (see
    "Mitigating the debugging-label cost"). Single-pass shaders never hit this step —
@@ -693,7 +703,7 @@ where `textureDimensions(input_texture)` is already available:
 
 ```wgsl
 const SIGMA_FRACTION: f32 = 0.02;
-const RADIUS_CAP: i32 = 256;
+const RADIUS_CAP: i32 = 360;
 
 @compute @workgroup_size(16, 16)
 fn main(...) {
@@ -713,7 +723,10 @@ where it is consumed. Cartoon's smooth passes follow the same pattern with a lar
 the kernel loop is not statically bounded. WGSL permits this, but the `RADIUS_CAP`
 min gives the compiler a compile-time upper bound for unrolling / register-allocation
 decisions and prevents a pathological 100+ MP image from silently ballooning the
-kernel. The cap is only reached for images beyond the 24 MP target envelope anyway.
+kernel. The cap of 360 is chosen to safely accommodate images up to 24 MP without clipping
+the intended blur radius. For much larger images (e.g., 50 MP, which would naturally
+request a radius of ~520), the 360 cap intentionally clamps the blur to prevent VRAM cache
+thrashing and excessive memory bandwidth costs.
 
 **Exposing sigma later.** If a "Radius" slider is ever added, it becomes a second
 `ClarityParams` field that scales `SIGMA_FRACTION` — purely additive, no shape change
@@ -777,7 +790,7 @@ Five sliders: Strength, Levels, Edge Threshold, Edge Softness, Edge Darkness. De
 
 ```
 SIGMA_FRACTION_SMOOTH = 0.015     // larger than Clarity's 0.02? No — see note below
-RADIUS_CAP = 256
+RADIUS_CAP = 360
 
 // smooth_h / smooth_v — separable Gaussian, Rec.709 luma independent per-channel
 sigma  = SIGMA_FRACTION_SMOOTH * f32(max(dims.x, dims.y))
@@ -945,7 +958,7 @@ Add to `bdip_core/src/gpu/shaders/cross_shader_tests.rs`:
 
 ### Performance budget test
 
-Extend `test_perf_gpu_roundtrip_24mp` (or add `test_perf_gpu_roundtrip_24mp_clarity`) to
+Add a new test, `test_perf_gpu_roundtrip_24mp_multi_pass`, in `bdip_core/src/gpu/pipeline.rs` to
 measure Clarity and Cartoon cold + warm critical paths on the 24 MP synthetic image, with
 assertions:
 
@@ -955,8 +968,8 @@ assertions:
   slack).
 
 These assertions are *soft* ceilings — if the measurement drifts, the assertion fires
-before regressions reach production. The benchmark is `#[ignore]`-gated, same as today's
-perf test.
+before regressions reach production. The new benchmark is `#[ignore]`-gated. Note that the existing
+`test_perf_gpu_roundtrip_24mp` test is no longer ignore-gated.
 
 ---
 
@@ -1309,7 +1322,7 @@ only in tap direction):
 
 ```wgsl
 const SIGMA_FRACTION: f32 = 0.02;
-const RADIUS_CAP: i32 = 256;
+const RADIUS_CAP: i32 = 360;
 
 @compute @workgroup_size(16, 16)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
@@ -1500,7 +1513,7 @@ contract (multi-pass passes)" for the exact WGSL).
 Locked pass math — see § "Cartoon" § "Locked pass math" for the formulas. Key points
 for the implementer:
 
-- `SIGMA_FRACTION_SMOOTH = 0.015`, `RADIUS_CAP = 256`.
+- `SIGMA_FRACTION_SMOOTH = 0.015`, `RADIUS_CAP = 360`.
 - Quantize in **linear-light** space: `floor(smoothed.rgb * L) / (L - 1.0)` where
   `L = floor(clamp(params.levels, 2.0, 16.0))`. Include this exact comment in
   `quantize.wgsl`:
