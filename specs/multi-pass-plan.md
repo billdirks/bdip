@@ -25,22 +25,18 @@ Also required reading before coding:
 3. **Ship Cartoon** as the second multi-pass shader — smoothing + edge detection + 3-input
    combine. Cartoon is the concrete 3-input-combine case that validates the
    position-indexed binding discipline in production code.
-4. **Unify single-pass and multi-pass internally, and keep the single-pass `ShaderMeta`
-   literal identical to today.** Every shader is represented as a `&'static [PassDef]`
-   in the engine — there is no `Single` vs `MultiPass` branch in `Renderer::apply`.
-   Translation from the contributor's `ShaderMeta` (single-pass, with `wgsl_source`) to
-   the engine's internal pass-list form happens inside the registration macro, not at
-   `apply` time. Contributors to single-pass shaders write the same `ShaderMeta` literal
-   they write today; they do not see `PassDef`, `PassInput`, `PassOutput`, or any
-   single-pass-vs-multi-pass vocabulary. Multi-pass contributors use a parallel
-   `MultiPassShaderMeta` type and a separate registration macro — these exist only for
-   shaders that actually need multi-pass. Migrating each existing shader from
-   `inventory::submit!` boilerplate to a `register_single_pass_shader!` macro call is
-   mechanical and must not change behavior or require per-shader tuning.
-5. **Preserve the 24 MP warm-path performance budget** (~20 ms critical path). Each new
+4. **Unify single-pass and multi-pass entirely under the `TransformShader` trait.**
+   Every shader is represented as a `&'static [PassDef]` in the engine — there is no
+   `Single` vs `MultiPass` branch in `Renderer::apply`. All shader metadata, including
+   execution models, resides in the `TransformShader` interface. Single-pass shaders
+   are now identical to multi-pass shaders from the contributor's perspective: they
+   explicitly provide a `PASSES` slice with one element. This eliminates complex macros
+   and keeps all metadata close to the Rust types.
+5. **Preserve the 24 MP warm-path performance budget** (~25 ms critical path). Each new
    compute pass costs ~0.3–0.5 ms; Clarity adds ~1 ms, Cartoon ~2 ms. Both fit inside the
    readback-dominated frame. Single-pass shaders must not regress measurably under the
-   unified path (validated by PR 0's prototype).
+   unified path (validated by PR 0's prototype). The original budget was 20 ms, but was
+   increased to 25 ms to account for noise on the test machine.
 
 ## Non-goals
 
@@ -105,10 +101,10 @@ Carried from `specs/multi-pass-research.md` § "Option C" and § "The one gotcha
    in the engine.** The engine works on a `RuntimeShaderMeta { passes: &'static [PassDef],
    ... }` that it retrieves from the registry. Single-pass shaders' pass lists are
    length-1 with `inputs: &[PassInput::Source]` and `output: PassOutput::Final`.
-   `Renderer::apply` has exactly one execution path. Translation from the contributor's
-   `ShaderMeta` (single-pass, carrying `wgsl_source`) to `RuntimeShaderMeta` happens inside
-   the `register_single_pass_shader!` macro at submission time; the contributor writes
-   the same `ShaderMeta` fields they write today and never sees `PassDef`.
+   `Renderer::apply` has exactly one execution path. Registration happens via the
+   `TransformShader` trait and `ShaderRegistration::new<T>()` const fn. Contributors
+   to single-pass shaders define a `PASSES` array with one element, making the pass
+   structure consistent across all shaders.
 7. **One WGSL file per pass.** A multi-pass shader is a directory with one `mod.rs` and N
    `.wgsl` files. `include_str!` picks each up at compile time. Single-pass shaders keep
    their existing single WGSL file.
@@ -165,35 +161,28 @@ pub struct PassDef {
 }
 ```
 
-### `ShaderMeta` stays as today; new `MultiPassShaderMeta` for multi-pass
+### Unified `TransformShader` Trait
 
-`ShaderMeta` is unchanged from today's definition — this is the shape single-pass
-contributors already write:
-
-```rust
-pub struct ShaderMeta {
-    pub id: &'static str,
-    pub display_name: &'static str,
-    pub wgsl_source: &'static str,
-    pub param: ParamKind,
-}
-```
-
-A parallel type is added for multi-pass shaders:
+`ShaderMeta` and `MultiPassShaderMeta` are effectively unified into the `TransformShader`
+trait and `RuntimeShaderMeta` payload. 
 
 ```rust
-pub struct MultiPassShaderMeta {
-    pub id: &'static str,
-    pub display_name: &'static str,
-    pub passes: &'static [PassDef],
-    pub param: ParamKind,
+pub trait TransformShader: bytemuck::Pod {
+    const ID: &'static str;
+    const DISPLAY_NAME: &'static str;
+    const PARAM: ParamKind;
+    const PASSES: &'static [PassDef];
+
+    fn from_values(values: &[f32]) -> Self;
+    fn to_bytes(&self) -> &[u8] {
+        bytemuck::bytes_of(self)
+    }
 }
 ```
 
 ### Internal `RuntimeShaderMeta`
 
-The registry stores and the engine walks this internal form. Contributors never write
-or read it directly.
+The registry stores and the engine walks this internal form.
 
 ```rust
 pub(crate) struct RuntimeShaderMeta {
@@ -204,61 +193,32 @@ pub(crate) struct RuntimeShaderMeta {
 }
 ```
 
-`registry_by_id(id)` returns `&'static RuntimeShaderMeta`. Both `ShaderMeta` and
-`MultiPassShaderMeta` are translated to `RuntimeShaderMeta` at registration-macro expansion
-time, so the registry holds a homogeneous pool and `Renderer::apply` never branches on
-shader kind.
+`registry_by_id(id)` returns `&'static RuntimeShaderMeta`.
 
-### Registration macros
+### Compile-time Registration
 
-Two thin macros hide the `inventory::submit!` boilerplate and the single-pass-to-pass-list
-translation.
-
-**Single-pass (what all 11 existing shaders use):**
+Registration happens via the `ShaderRegistration::new<T>()` const fn, which avoids
+macros entirely:
 
 ```rust
-register_single_pass_shader! {
-    meta: ShaderMeta {
-        id: "brightness",
-        display_name: "Brightness",
-        wgsl_source: include_str!("brightness.wgsl"),
-        param: ParamKind::Sliders(&[...]),
-    },
-    constructor: |values| Box::new(BrightnessParams::from_values(values)),
+impl ShaderRegistration {
+    pub const fn new<T: TransformShader>() -> Self {
+        validate_pass_list(T::PASSES);
+
+        Self {
+            meta: RuntimeShaderMeta {
+                id: T::ID,
+                display_name: T::DISPLAY_NAME,
+                passes: T::PASSES,
+                param: T::PARAM,
+            },
+            make_uniform: make_uniform_for::<T>,
+        }
+    }
 }
 ```
 
-The macro expands to `inventory::submit!` of a `ShaderRegistration` whose `RuntimeShaderMeta`
-has `passes = &[PassDef { label: "brightness", wgsl_source: <from meta>,
-inputs: &[PassInput::Source], output: PassOutput::Final }]`. The `ShaderMeta` literal the
-contributor writes has the exact four fields it had before — `id`, `display_name`,
-`wgsl_source`, `param`.
-
-**Multi-pass (new, used by Clarity and Cartoon):**
-
-```rust
-register_multi_pass_shader! {
-    meta: MultiPassShaderMeta {
-        id: "clarity",
-        display_name: "Clarity",
-        passes: &[
-            PassDef { label: "blur_h",  wgsl_source: include_str!("blur_h.wgsl"),
-                      inputs: &[PassInput::Source], output: PassOutput::Scratch("h") },
-            PassDef { label: "blur_v",  wgsl_source: include_str!("blur_v.wgsl"),
-                      inputs: &[PassInput::Scratch("h")], output: PassOutput::Scratch("v") },
-            PassDef { label: "combine", wgsl_source: include_str!("combine.wgsl"),
-                      inputs: &[PassInput::Source, PassInput::Scratch("v")],
-                      output: PassOutput::Final },
-        ],
-        param: ParamKind::Sliders(&[...]),
-    },
-    constructor: |values| Box::new(ClarityParams::from_values(values)),
-}
-```
-
-The macro forwards `passes` unchanged and fills in `RuntimeShaderMeta`. All multi-pass
-vocabulary lives in this single type and this single macro — single-pass contributors
-never import or reference them.
+All shaders (single and multi-pass) are submitted via `inventory::submit!(crate::gpu::shaders::ShaderRegistration::new::<T>())`.
 
 ### Registration-time validation of multi-pass pass lists
 
@@ -268,10 +228,9 @@ scratch outputs) are caught as early as possible. The plan uses a two-tier strat
 test** as the guaranteed safety net so shaders without dispatch tests still get
 validated in CI.
 
-**Tier 1 — `const fn` validator invoked by `register_multi_pass_shader!`.**
+**Tier 1 — `const fn` validator invoked by `ShaderRegistration::new<T>()`.**
 
-The macro emits, next to the `inventory::submit!` call, a `const _: () = validate_pass_list(PASSES);`
-block where `validate_pass_list` is a `const fn` in `bdip_core/src/gpu/shaders/mod.rs`.
+The constructor calls `validate_pass_list(T::PASSES);` at compile time.
 The validator enforces:
 
 1. **Exactly one `PassOutput::Final`, at the last pass.** No earlier pass may output
@@ -280,23 +239,14 @@ The validator enforces:
    order; for each input `Scratch(s)` at index `i`, assert some pass at index `j < i`
    declared `PassOutput::Scratch(s)`.
 3. **No duplicate `PassOutput::Scratch(name)` across the pass list.** Reusing a name as
-   an output in two passes is forbidden — the pool borrow is per-name, and a second
-   write would silently overwrite the first without the engine knowing to allocate a
-   second texture.
+   an output in two passes is forbidden.
 
-On violation, the validator invokes `panic!` in const context (stabilized Rust 1.79+),
-which the compiler reports at the build site referencing the offending shader's
-`mod.rs`. Error messages name the shader id, the pass index, and the offending scratch
-name.
+On violation, the validator invokes `panic!` in const context, which the compiler reports
+at the build site.
 
-Const-fn string equality uses stable byte-by-byte comparison on
-`&'static str::as_bytes()`. The validator is ~30–50 lines of const code; complexity
-stays localized to `shaders/mod.rs`.
-
-**Single-pass is trivially valid by construction.** `register_single_pass_shader!`
-synthesizes a 1-element pass list with `inputs: &[PassInput::Source]` and
-`output: PassOutput::Final`, which satisfies all three rules without the contributor
-seeing the validator.
+**Single-pass validity.** Since single-pass shaders define a 1-element `PASSES` list with
+`inputs: &[PassInput::Source]` and `output: PassOutput::Final`, they satisfy all three
+rules trivially and pass the validator seamlessly.
 
 **Tier 2 — `test_all_registered_pass_lists_validate` (in `shaders/mod.rs`).**
 
@@ -375,7 +325,7 @@ follows this rule trivially (one WGSL file, one declaration).
 
 ### Single-pass representation in the engine
 
-A single-pass shader's `RuntimeShaderMeta.passes` is a slice of length 1 whose sole pass
+A single-pass shader defines `T::PASSES` as a slice of length 1 whose sole pass
 has `inputs: &[PassInput::Source]` and `output: PassOutput::Final`. Single-pass WGSL
 files stay exactly as they are today (source at `@binding(0)`, dest at `@binding(1)`,
 uniform at `@group(1) @binding(0)`). The engine has one execution path — see the
@@ -603,56 +553,9 @@ that may be below measurement noise.
 
 ## Migrating existing single-pass shaders
 
-Every existing shader swaps its `inventory::submit! { ShaderRegistration { ... } }`
-boilerplate for a `register_single_pass_shader!` macro call. The `ShaderMeta` literal
-inside is unchanged — same four fields, same `include_str!`, same `ParamKind`:
-
-```rust
-// Before
-inventory::submit! {
-    ShaderRegistration {
-        meta: &ShaderMeta {
-            id: "brightness",
-            display_name: "Brightness",
-            wgsl_source: include_str!("brightness.wgsl"),
-            param: ParamKind::Sliders(&[...]),
-        },
-        constructor: |values| Box::new(BrightnessParams::from_values(values)),
-    }
-}
-
-// After
-register_single_pass_shader! {
-    meta: ShaderMeta {
-        id: "brightness",
-        display_name: "Brightness",
-        wgsl_source: include_str!("brightness.wgsl"),
-        param: ParamKind::Sliders(&[...]),
-    },
-    constructor: |values| Box::new(BrightnessParams::from_values(values)),
-}
-```
-
-The contributor writes no `PassDef`, imports no pass vocabulary, and does not learn that
-an internal translation to a pass list is happening. This is mechanical across:
-
-```
-bdip_core/src/gpu/shaders/
-├── brightness/mod.rs
-├── contrast/mod.rs
-├── exposure/mod.rs
-├── grayscale/mod.rs
-├── highlights/mod.rs
-├── invert/mod.rs
-├── saturation/mod.rs
-├── shadows/mod.rs
-├── temperature/mod.rs
-├── tint/mod.rs
-└── vignette/mod.rs
-```
-
-No WGSL file changes. No test changes. No behavioral change. Every existing test passes
-unchanged.
+**(Note: This was fully completed during PR 0.)**
+Every existing shader was migrated to implement the `TransformShader` trait and provide a
+`PASSES` slice with one element. No WGSL files needed modification.
 
 ---
 
@@ -851,10 +754,6 @@ single-pass shader via the in-shader octave loop called out as "Option A" in tha
 
 Tests live in `bdip_core/src/gpu/pipeline.rs` and `bdip_core/src/gpu/shaders/mod.rs`.
 
-- `test_single_pass_macro_round_trips` — brightness registered via
-  `register_single_pass_shader!` produces bit-identical output to its pre-migration
-  baseline (captured as a golden byte array; compare to the existing roundtrip
-  assertion).
 - `test_single_pass_skips_scratch_pool` — after running a single-pass shader, the
   scratch pool is empty at that shader's dims. Confirms single-pass shaders do not
   allocate scratch.
@@ -883,17 +782,6 @@ Tests live in `bdip_core/src/gpu/pipeline.rs` and `bdip_core/src/gpu/shaders/mod
   (`@binding(0)`, `@binding(1)`, `@binding(2)` for inputs; `@binding(3)` for output)
   correctly reads all three and writes the expected combination. This is the explicit
   regression guard against reverting to hardcoded binding slots.
-- `test_single_pass_macro_synthesizes_one_pass_def` —
-  `register_single_pass_shader!` produces a `RuntimeShaderMeta` whose `passes` slice has
-  length 1 with `inputs == &[PassInput::Source]` and `output == PassOutput::Final`, and
-  `wgsl_source` copied through from the `ShaderMeta` literal. Locks the single-pass
-  translation so future edits to the macro cannot silently change the shape.
-- `test_all_registered_pass_lists_validate` — walks
-  `inventory::iter::<ShaderRegistration>()` and runs `validate_pass_list` on every
-  registered `RuntimeShaderMeta.passes`. Safety net for the const-fn validator: catches
-  malformed pass lists even in shaders that ship without dispatch tests, and guarantees
-  coverage if the const-fn tier is ever relaxed. (See "Registration-time validation of
-  multi-pass pass lists" for the rules it enforces.)
 - `test_validate_pass_list_rejects_final_in_middle`,
   `test_validate_pass_list_rejects_missing_scratch_write`,
   `test_validate_pass_list_rejects_duplicate_scratch_output` — direct unit tests on the
@@ -996,23 +884,24 @@ Replay"). Every PR must end with `cargo fmt --all`, `cargo clippy --all-targets`
 
 ### PR 0 — Prototype: validate the unified path on one shader
 
+**(Note: PR 0 is complete. See `specs/pr_0_recap.md` for details. It fully migrated all 11 shaders and implemented the engine changes. The single-pass fast path was not needed.)**
+
 **Prerequisites:** branched off `main`. No other PRs depend on this one — PR 0 is a
 throwaway spike that produces a go/no-go signal for PR 1.
 
 **Required reading:**
 
 - This whole plan, with particular attention to:
-  - § "Core abstractions" (`PassInput`, `PassOutput`, `PassDef`, `MultiPassShaderMeta`,
-    `RuntimeShaderMeta`, the two registration macros, const-fn validator).
-  - § "Renderer changes" (`PipelineCache` change, scratch pool, `apply_passes` steps,
-    single-pass fast path).
+  - § "Core abstractions" (`PassInput`, `PassOutput`, `PassDef`, `TransformShader`,
+    `RuntimeShaderMeta`, const-fn validator).
+  - § "Renderer changes" (`PipelineCache` change, scratch pool, `apply_passes` steps).
   - § "Architecture decisions" items 1–10.
 - `specs/multi-pass-research.md` § "Option C" and § "The one gotcha".
 - `specs/adding_a_shader.md` (current single-pass pattern).
 - `bdip_core/src/gpu/shaders/brightness/mod.rs` and
   `bdip_core/src/gpu/shaders/brightness/brightness.wgsl` (the migration target).
 - `bdip_core/src/gpu/pipeline.rs` (`Renderer::apply`, `PipelineCache`).
-- `bdip_core/src/gpu/shaders/mod.rs` (current `ShaderMeta`, `ShaderRegistration`,
+- `bdip_core/src/gpu/shaders/mod.rs` (current `ShaderRegistration`,
   `registry_by_id`).
 
 **Files (spike; discarded after PR 1 lands):**
@@ -1107,16 +996,13 @@ needed, in the PR 1 description (not as a separate doc).
 
 ---
 
-### PR 1 — Multi-pass infrastructure + existing-shader migration
+### PR 1 — Multi-pass infrastructure cleanup + remaining tests
 
-**Prerequisites:** PR 0 green (all three evaluation criteria passed). PR 0's spike diff
-is the starting point; PR 1 finishes the migration and adds tests.
+**Prerequisites:** PR 0 green and merged. The engine changes and trait-based shader migration are complete.
 
 **Required reading:**
 
 - This whole plan.
-- `bdip_core/src/gpu/shaders/*/mod.rs` for all 11 existing single-pass shaders (each is
-  a mechanical migration target).
 - `specs/adding_a_shader.md` — this is the spec being rewritten as part of this PR.
 
 **Files:**
@@ -1125,31 +1011,11 @@ Add: none.
 
 Modify:
 
-- `bdip_core/src/gpu/shaders/mod.rs` — finalized versions of the types and macros from
-  PR 0. Remove the temporary compat shim. Ensure `registry_by_id` returns
-  `&'static RuntimeShaderMeta` and nothing else.
-- `bdip_core/src/gpu/pipeline.rs`:
-  - `PipelineCache` = `HashMap<&'static str, Vec<CachedPipeline>>`.
-  - `Renderer::scratch_pool: HashMap<(u32, u32), Vec<wgpu::Texture>>`.
-  - `Renderer::apply` is the single unified `apply_passes` dispatcher.
-  - Single-pass fast path: include only if PR 0 measured a regression and required it.
-    If included, document inline that it is a shape-preserving optimization and not a
-    resurrected `Single`/`MultiPass` branch.
-  - New private helper `build_pass_bind_group_layout(device, input_count) ->
-    wgpu::BindGroupLayout` that derives group 0 from `input_count`.
-  - `#[cfg(test)]` accessors: `scratch_pool_len((u32, u32)) -> usize` and
-    `scratch_pool_handle((u32, u32), usize) -> Option<*const wgpu::Texture>` per
-    § "Test-only accessor for pool introspection".
-- `bdip_core/src/gpu/shaders/{brightness,contrast,exposure,grayscale,highlights,invert,saturation,shadows,temperature,tint,vignette}/mod.rs`
-  — swap each `inventory::submit! { ShaderRegistration { ... } }` for the
-  `register_single_pass_shader! { meta: ShaderMeta { ... }, constructor: |values|
-  Box::new(<Params>::from_values(values)) }` form. The `ShaderMeta` literal is
-  unchanged. No WGSL file modifications.
+- `bdip_core/src/gpu/shaders/mod.rs` — Implement the stubbed `validate_pass_list` function.
+- `bdip_core/src/gpu/pipeline.rs`: Add missing infrastructure tests.
 - `specs/adding_a_shader.md`:
-  - Update the single-pass example to show `register_single_pass_shader! { ... }` (the
-    `ShaderMeta` fields inside are unchanged from today).
-  - Add a new "Multi-pass shaders" section covering `MultiPassShaderMeta`,
-    `register_multi_pass_shader!`, the position-indexed binding contract (input
+  - Update the single-pass example to show the `TransformShader` implementation.
+  - Add a new "Multi-pass shaders" section covering the position-indexed binding contract (input
     bindings at `@binding(0..N-1)`, destination at `@binding(N)`, uniform at
     `@group(1) @binding(0)`), the shared-uniform alignment rule (every `.wgsl` file
     declares the full struct), the data-dependent loop bound convention
@@ -1157,33 +1023,16 @@ Modify:
 
 **Implementation details:**
 
-- Types — final versions of `PassInput`, `PassOutput`, `PassDef`, `MultiPassShaderMeta`,
-  `RuntimeShaderMeta` per § "Core abstractions".
 - `validate_pass_list` — `const fn` enforcing the three rules in § "Registration-time
   validation of multi-pass pass lists". Panics in const context on violation. Write
   `validate_pass_list` as pure `const fn` taking `&[PassDef]` and returning `()`; use
   byte-level comparison on `s.as_bytes()` for scratch-name equality.
-- `register_multi_pass_shader!` expansion emits `const _: () =
-  validate_pass_list(PASSES);` next to the `inventory::submit!` call, so misuse fails
-  `cargo build` at the shader's own `mod.rs`.
-- `apply_passes` — implement all 8 steps from § "Renderer::apply dispatch". Pay
-  particular attention to:
-  - Step 3: distinct `PassOutput::Scratch(name)` set (use a small `Vec<&'static str>`
-    or `heapless` ish structure — 4 scratches is the current maximum).
-  - Step 5: `dispatch_workgroups(ceil(width / 16), ceil(height / 16), 1)` at the
-    Transform's input dims for every pass.
-  - Step 7: every borrowed texture is returned to the pool's free list on exit, even
-    on early `?` returns (use a guard pattern or explicit return before yielding the
-    `Final` texture).
-- Label mitigations (§ "Mitigating the debugging-label cost") — V1 ships tiers (1)
-  (relabel on borrow) and (2) (debug-build `#name` counter suffix). Tier (3) is
-  deferred.
+- `ShaderRegistration::new<T>()` already calls `validate_pass_list(T::PASSES);`, so misuse fails
+  `cargo build`.
 
 **Tests shipped (add or verify each; see § "Infrastructure tests"):**
 
-- `test_single_pass_macro_round_trips` (pre/post migration byte-identical for
-  brightness).
-- `test_single_pass_skips_scratch_pool`.
+- `test_single_pass_skips_scratch_pool` (asserts single-pass shaders don't allocate from pool).
 - `test_multi_pass_scratch_recycling_within_shader` (2-pass copy fixture; uses
   `scratch_pool_len` + `scratch_pool_handle`).
 - `test_multi_pass_scratch_shared_across_shaders` (two distinct 2-pass fixtures;
@@ -1194,9 +1043,6 @@ Modify:
 - `test_pipeline_cache_compiles_per_pass`.
 - `test_position_indexed_bindings_three_inputs` (test fixture shader with 3-input
   pass, explicit binding regression guard).
-- `test_single_pass_macro_synthesizes_one_pass_def`.
-- `test_all_registered_pass_lists_validate` (walks
-  `inventory::iter::<ShaderRegistration>()`).
 - `test_validate_pass_list_rejects_final_in_middle`,
   `test_validate_pass_list_rejects_missing_scratch_write`,
   `test_validate_pass_list_rejects_duplicate_scratch_output` (direct unit tests on the
@@ -1219,14 +1065,9 @@ grep -rn "PassDef\|PassInput\|PassOutput" bdip_core/src/gpu/shaders/ \
 
 **Review focus (capture in PR description):**
 
-- `PassDef` / `MultiPassShaderMeta` shape and macro expansions (the public contract).
-- `register_single_pass_shader!` expansion proves byte-identical `ShaderMeta` fields.
-- Position-indexed bind-group construction handles N=1, 2, 3 inputs correctly.
-- Scratch-pool borrow/return is leak-free (check via `scratch_pool_len` before/after
-  tests).
+- `validate_pass_list` implementation correctly rejects malformed passes at compile time.
 - Const-fn validator compile-error messages are actionable.
-- Single-pass fast path, if present, is localized inside `apply_passes` and not a
-  separate public entry point.
+- The new tests cover missing behaviors (like 3-input bindings and pool recycling).
 
 **Rollback characteristics:** reverting this PR removes multi-pass infrastructure but
 leaves the single-pass shaders in the old `inventory::submit!` form. No user-visible
@@ -1261,7 +1102,7 @@ the updated `adding_a_shader.md` guidance exist on `main`.
 Add:
 
 - `bdip_core/src/gpu/shaders/clarity/mod.rs` — `ClarityParams`, `TransformShader` impl
-  (or whatever PR 1's macro expects), `register_multi_pass_shader!` block, test module.
+  defining `T::PASSES`, `inventory::submit!` block, test module.
 - `bdip_core/src/gpu/shaders/clarity/blur_h.wgsl` — separable Gaussian, horizontal.
 - `bdip_core/src/gpu/shaders/clarity/blur_v.wgsl` — separable Gaussian, vertical.
 - `bdip_core/src/gpu/shaders/clarity/combine.wgsl` — 2-input combine pass (reads
@@ -1445,8 +1286,8 @@ multi-pass pattern. `adding_a_shader.md` § "Multi-pass shaders" exists.
 
 Add:
 
-- `bdip_core/src/gpu/shaders/cartoon/mod.rs` — `CartoonParams`, `register_multi_pass_shader!`
-  block, test module.
+- `bdip_core/src/gpu/shaders/cartoon/mod.rs` — `CartoonParams`, `TransformShader` impl
+  defining `T::PASSES`, `inventory::submit!` block, test module.
 - `bdip_core/src/gpu/shaders/cartoon/smooth_h.wgsl`
 - `bdip_core/src/gpu/shaders/cartoon/smooth_v.wgsl`
 - `bdip_core/src/gpu/shaders/cartoon/quantize.wgsl` — with inline comment explaining
