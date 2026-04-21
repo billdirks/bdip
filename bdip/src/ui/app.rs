@@ -1,7 +1,9 @@
 use bdip_core::HistoryManager;
 use bdip_core::gpu::engine::GpuEngine;
 use bdip_core::gpu::pipeline::Renderer;
-use bdip_core::gpu::shaders::{ShaderOption, Transform, registry_by_id, sorted_registrations};
+use bdip_core::gpu::shaders::{
+    ParamKind, ShaderOption, Transform, registry_by_id, sorted_registrations,
+};
 use bdip_core::gpu::texture::upload_texture;
 use iced::widget::{Space, column, container, mouse_area, row, rule, stack};
 use iced::{Element, Length, Subscription, Task};
@@ -605,9 +607,9 @@ impl BdipApp {
 pub(crate) fn current_values_for(
     shader_id: &'static str,
     history: &HistoryManager,
-    param: &bdip_core::gpu::shaders::ParamKind,
+    param: &ParamKind,
 ) -> Vec<f32> {
-    let bdip_core::gpu::shaders::ParamKind::Sliders(defs) = param else {
+    let ParamKind::Sliders(defs) = param else {
         return vec![];
     };
     let defaults = || defs.iter().map(|d| d.default).collect::<Vec<_>>();

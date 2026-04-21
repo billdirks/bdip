@@ -1,6 +1,6 @@
 use crate::gpu::engine::GpuEngine;
-use crate::gpu::shaders::{Transform, registry_by_id};
-use std::collections::HashMap;
+use crate::gpu::shaders::{PassInput, PassOutput, Transform, registry_by_id};
+use std::collections::{HashMap, hash_map::Entry};
 use wgpu::{
     BindGroupDescriptor, BindGroupEntry, BindGroupLayoutDescriptor, BindGroupLayoutEntry,
     BindingResource, BindingType, ComputePipeline, ComputePipelineDescriptor,
@@ -121,40 +121,6 @@ impl PipelineCache {
 
 // ========== Helpers ==========
 
-/// Shared bind group layout for the core image data (one source texture, one
-/// destination storage texture). Used by the Ingest pass and as Bind Group 0
-/// for all transform passes.
-fn make_texture_only_bind_group_layout(
-    device: &wgpu::Device,
-    label: &str,
-) -> wgpu::BindGroupLayout {
-    device.create_bind_group_layout(&BindGroupLayoutDescriptor {
-        label: Some(label),
-        entries: &[
-            BindGroupLayoutEntry {
-                binding: 0,
-                visibility: ShaderStages::COMPUTE,
-                ty: BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                    view_dimension: TextureViewDimension::D2,
-                    multisampled: false,
-                },
-                count: None,
-            },
-            BindGroupLayoutEntry {
-                binding: 1,
-                visibility: ShaderStages::COMPUTE,
-                ty: BindingType::StorageTexture {
-                    access: StorageTextureAccess::WriteOnly,
-                    format: TextureFormat::Rgba16Float,
-                    view_dimension: TextureViewDimension::D2,
-                },
-                count: None,
-            },
-        ],
-    })
-}
-
 fn build_pass_bind_group_layout(
     device: &wgpu::Device,
     input_count: u32,
@@ -254,7 +220,7 @@ impl Renderer {
             });
 
         let ingest_bind_group_layout =
-            make_texture_only_bind_group_layout(&engine.device, "Ingest Texture BGL");
+            build_pass_bind_group_layout(&engine.device, 1, "Ingest Texture BGL");
 
         let ingest_pipeline_layout =
             engine
@@ -742,20 +708,22 @@ impl Renderer {
         reg: &'static crate::gpu::shaders::ShaderRegistration,
         passes: &[crate::gpu::shaders::PassDef],
     ) -> wgpu::Texture {
-        use crate::gpu::shaders::{PassInput, PassOutput};
-        use std::collections::HashMap;
-
         let (width, height, depth) = (
             src_texture.width(),
             src_texture.height(),
             src_texture.depth_or_array_layers(),
         );
 
-        if self.scratch_pool.width != width || self.scratch_pool.height != height {
-            self.scratch_pool.textures.clear();
-            self.scratch_pool.width = width;
-            self.scratch_pool.height = height;
-        }
+        self.sync_scratch_pool_dims(width, height);
+
+        let borrowed_scratches = self.allocate_scratch_textures(
+            engine,
+            width,
+            height,
+            depth,
+            transform.shader_id,
+            passes,
+        );
 
         let final_texture = engine.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("apply_dst_texture"),
@@ -774,70 +742,127 @@ impl Renderer {
             view_formats: &[],
         });
 
-        let mut borrowed = HashMap::new();
-        for pass in passes {
-            if let PassOutput::Scratch(name) = pass.output {
-                use std::collections::hash_map::Entry;
-                if let Entry::Vacant(e) = borrowed.entry(name) {
-                    let tex = self.scratch_pool.textures.pop().unwrap_or_else(|| {
-                        let label = format!("{}::{}", transform.shader_id, name);
-                        engine.device.create_texture(&wgpu::TextureDescriptor {
-                            label: Some(&label), // Tier 1: relabel on borrow (here at allocation)
-                            size: wgpu::Extent3d {
-                                width,
-                                height,
-                                depth_or_array_layers: depth,
-                            },
-                            mip_level_count: 1,
-                            sample_count: 1,
-                            dimension: wgpu::TextureDimension::D2,
-                            format: wgpu::TextureFormat::Rgba16Float,
-                            usage: wgpu::TextureUsages::TEXTURE_BINDING
-                                | wgpu::TextureUsages::STORAGE_BINDING,
-                            view_formats: &[],
-                        })
-                    });
-
-                    e.insert(tex);
-                }
-            }
-        }
-
-        let uniform_bytes = (reg.make_uniform)(&transform.values);
-        let params_buffer = engine
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Apply Params Buffer"),
-                contents: &uniform_bytes,
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            });
-
-        let mut encoder = engine
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        let params_buffer = Self::create_params_buffer(engine, reg, &transform.values);
 
         let cached_pipelines = self
             .pipeline_cache
             .get_or_create(&engine.device, transform.shader_id);
 
+        Self::encode_transform_passes(
+            engine,
+            cached_pipelines,
+            passes,
+            src_texture,
+            &final_texture,
+            &borrowed_scratches,
+            &params_buffer,
+        );
+
+        self.return_scratch_textures(borrowed_scratches);
+
+        final_texture
+    }
+
+    fn sync_scratch_pool_dims(&mut self, width: u32, height: u32) {
+        if self.scratch_pool.width != width || self.scratch_pool.height != height {
+            self.scratch_pool.textures.clear();
+            self.scratch_pool.width = width;
+            self.scratch_pool.height = height;
+        }
+    }
+
+    fn allocate_scratch_textures(
+        &mut self,
+        engine: &GpuEngine,
+        width: u32,
+        height: u32,
+        depth: u32,
+        shader_id: &str,
+        passes: &[crate::gpu::shaders::PassDef],
+    ) -> HashMap<&'static str, wgpu::Texture> {
+        let mut borrowed = HashMap::new();
+        for pass in passes {
+            if let PassOutput::Scratch(name) = pass.output
+                && let Entry::Vacant(e) = borrowed.entry(name)
+            {
+                let tex = self.scratch_pool.textures.pop().unwrap_or_else(|| {
+                    let label = format!("{}::{}", shader_id, name);
+                    engine.device.create_texture(&wgpu::TextureDescriptor {
+                        label: Some(&label), // Tier 1: relabel on borrow (here at allocation)
+                        size: wgpu::Extent3d {
+                            width,
+                            height,
+                            depth_or_array_layers: depth,
+                        },
+                        mip_level_count: 1,
+                        sample_count: 1,
+                        dimension: wgpu::TextureDimension::D2,
+                        format: wgpu::TextureFormat::Rgba16Float,
+                        usage: wgpu::TextureUsages::TEXTURE_BINDING
+                            | wgpu::TextureUsages::STORAGE_BINDING,
+                        view_formats: &[],
+                    })
+                });
+                e.insert(tex);
+            }
+        }
+        borrowed
+    }
+
+    fn return_scratch_textures(&mut self, textures: HashMap<&'static str, wgpu::Texture>) {
+        for (_, tex) in textures {
+            self.scratch_pool.textures.push(tex);
+        }
+    }
+
+    fn create_params_buffer(
+        engine: &GpuEngine,
+        reg: &crate::gpu::shaders::ShaderRegistration,
+        values: &[f32],
+    ) -> wgpu::Buffer {
+        let uniform_bytes = (reg.make_uniform)(values);
+        engine
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Apply Params Buffer"),
+                contents: &uniform_bytes,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            })
+    }
+
+    fn encode_transform_passes(
+        engine: &GpuEngine,
+        pipelines: &[CachedPipeline],
+        passes: &[crate::gpu::shaders::PassDef],
+        src_texture: &wgpu::Texture,
+        final_texture: &wgpu::Texture,
+        scratch_textures: &HashMap<&'static str, wgpu::Texture>,
+        params_buffer: &wgpu::Buffer,
+    ) {
+        let mut encoder = engine
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+
         let src_view = src_texture.create_view(&TextureViewDescriptor::default());
         let final_view = final_texture.create_view(&TextureViewDescriptor::default());
 
         let mut borrowed_views = HashMap::new();
-        for (name, tex) in &borrowed {
+        for (name, tex) in scratch_textures {
             borrowed_views.insert(*name, tex.create_view(&TextureViewDescriptor::default()));
         }
 
-        for (pass_idx, pass) in passes.iter().enumerate() {
-            let pipeline = &cached_pipelines[pass_idx];
+        let (width, height) = (src_texture.width(), src_texture.height());
 
-            let mut bind_group_entries = Vec::new();
+        for (pass_idx, pass) in passes.iter().enumerate() {
+            let pipeline = &pipelines[pass_idx];
+
+            let mut texture_bind_group_entries = Vec::new();
             for (i, input) in pass.inputs.iter().enumerate() {
                 let view = match input {
                     PassInput::Source => &src_view,
                     PassInput::Scratch(name) => borrowed_views.get(name).unwrap(),
                 };
-                bind_group_entries.push(BindGroupEntry {
+                texture_bind_group_entries.push(BindGroupEntry {
                     binding: i as u32,
                     resource: BindingResource::TextureView(view),
                 });
@@ -848,7 +873,7 @@ impl Renderer {
                 PassOutput::Scratch(name) => borrowed_views.get(name).unwrap(),
             };
 
-            bind_group_entries.push(BindGroupEntry {
+            texture_bind_group_entries.push(BindGroupEntry {
                 binding: pass.inputs.len() as u32,
                 resource: BindingResource::TextureView(out_view),
             });
@@ -856,7 +881,7 @@ impl Renderer {
             let texture_bind_group = engine.device.create_bind_group(&BindGroupDescriptor {
                 label: Some("Apply Texture Bind Group"),
                 layout: &pipeline.texture_bind_group_layout,
-                entries: &bind_group_entries,
+                entries: &texture_bind_group_entries,
             });
 
             let params_bind_group = engine.device.create_bind_group(&BindGroupDescriptor {
@@ -881,12 +906,6 @@ impl Renderer {
         }
 
         engine.queue.submit(Some(encoder.finish()));
-
-        for (_, tex) in borrowed {
-            self.scratch_pool.textures.push(tex);
-        }
-
-        final_texture
     }
 
     #[cfg(test)]
