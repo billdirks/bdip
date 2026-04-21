@@ -42,6 +42,49 @@ This document tracks known architectural shortcuts, generic naming, and structur
   but should be addressed before `bdip_core` is used by additional consumers or exposed
   as a library API.
 
+## Shader Architecture
+
+### Boilerplate-Free Shader Registration (Macro Sugar)
+- **Location:** `bdip_core/src/gpu/shaders/`
+- **Current Pattern:** Simple single-pass shaders must manually define a `PASSES` constant
+  repeating standard boilerplate (label matching ID, `Source` input, `Final` output), 
+  implement the `TransformShader` trait, and call `inventory::submit!`.
+- **Risk:** High boilerplate-to-logic ratio for simple shaders (e.g. `brightness`, `contrast`).
+  This increases the friction of adding new shaders and creates opportunities for copy-paste
+  errors in registration metadata.
+- **Suggested Remediation:** Provide a declarative macro (e.g., `register_simple_shader!`) 
+  that generates the `impl TransformShader` block and `inventory::submit!` call for 
+  single-pass compute shaders.
+- **Example (Brightness):**
+  Current manual implementation:
+  ```rust
+  impl TransformShader for BrightnessParams {
+      const ID: &'static str = "brightness";
+      const DISPLAY_NAME: &'static str = "Brightness";
+      const PARAM: ParamKind = ParamKind::Sliders(&[SliderDef { ... }]);
+      const PASSES: &'static [PassDef] = &[PassDef {
+          label: "brightness",
+          wgsl_source: include_str!("brightness.wgsl"),
+          inputs: &[PassInput::Source],
+          output: PassOutput::Final,
+      }];
+      fn from_values(values: &[f32]) -> Self { ... }
+  }
+  inventory::submit!(ShaderRegistration::new::<BrightnessParams>());
+  ```
+  Proposed macro-based implementation:
+  ```rust
+  register_simple_shader!(
+      BrightnessParams,
+      "brightness",
+      "Brightness",
+      ParamKind::Sliders(&[...]),
+      "brightness.wgsl"
+  );
+  // Manual impl BrightnessParams { fn from_values(...) } still required inside mod.rs
+  ```
+- **Priority:** Low. Primarily a DX (Developer Experience) improvement for adding new effects.
+
 ## Future Considerations
 *(Add new items here as they are discovered during development)*
 
