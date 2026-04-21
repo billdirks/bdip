@@ -1,5 +1,5 @@
 pub mod engine;
-pub mod pipeline;
+pub mod image_pipeline;
 pub mod shaders;
 pub mod texture;
 

@@ -30,7 +30,7 @@ inventory::submit!(crate::gpu::shaders::ShaderRegistration::new::<
 mod tests {
     use super::*;
     use crate::gpu::engine::GpuEngine;
-    use crate::gpu::pipeline::Renderer;
+    use crate::gpu::image_pipeline::Renderer;
     use crate::gpu::shaders::{Transform, registry_by_id};
     use crate::gpu::test_util::{make_solid_image, roundtrip};
 

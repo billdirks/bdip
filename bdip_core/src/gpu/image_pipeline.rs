@@ -19,22 +19,22 @@ struct PresentParams {
     _padding: u32, // WebGPU uniforms require 16-byte alignment
 }
 
-// ========== CachedPipeline ==========
+// ========== CompiledPass ==========
 
-struct CachedPipeline {
+struct CompiledPass {
     pipeline: ComputePipeline,
     texture_bind_group_layout: wgpu::BindGroupLayout,
     params_bind_group_layout: wgpu::BindGroupLayout,
 }
 
-// ========== PipelineCache ==========
+// ========== ShaderPassesCache ==========
 
 /// Lazily compiles and caches transform pipelines on first use.
-struct PipelineCache {
-    cache: HashMap<&'static str, Vec<CachedPipeline>>,
+struct ShaderPassesCache {
+    cache: HashMap<&'static str, Vec<CompiledPass>>,
 }
 
-impl PipelineCache {
+impl ShaderPassesCache {
     fn new() -> Self {
         Self {
             cache: HashMap::new(),
@@ -43,17 +43,13 @@ impl PipelineCache {
 
     /// Returns a reference to the compiled pipeline for `shader_id`, compiling
     /// it on first access and caching the result for all subsequent calls.
-    fn get_or_create(
-        &mut self,
-        device: &wgpu::Device,
-        shader_id: &'static str,
-    ) -> &[CachedPipeline] {
+    fn get_or_create(&mut self, device: &wgpu::Device, shader_id: &'static str) -> &[CompiledPass] {
         self.cache
             .entry(shader_id)
             .or_insert_with(|| Self::compile(device, shader_id))
     }
 
-    fn compile(device: &wgpu::Device, shader_id: &'static str) -> Vec<CachedPipeline> {
+    fn compile(device: &wgpu::Device, shader_id: &'static str) -> Vec<CompiledPass> {
         let reg =
             registry_by_id(shader_id).unwrap_or_else(|| panic!("Unknown shader ID: '{shader_id}'"));
         let meta = &reg.meta;
@@ -108,7 +104,7 @@ impl PipelineCache {
                 cache: None,
             });
 
-            pipelines.push(CachedPipeline {
+            pipelines.push(CompiledPass {
                 pipeline,
                 texture_bind_group_layout,
                 params_bind_group_layout,
@@ -174,7 +170,7 @@ pub struct Renderer {
     present_params_bind_group_layout: wgpu::BindGroupLayout,
 
     // Transform pipelines are compiled on first use.
-    pipeline_cache: PipelineCache,
+    passes_cache: ShaderPassesCache,
 
     scratch_pool: ScratchPool,
 
@@ -327,7 +323,7 @@ impl Renderer {
             present_pipeline,
             present_texture_bind_group_layout,
             present_params_bind_group_layout,
-            pipeline_cache: PipelineCache::new(),
+            passes_cache: ShaderPassesCache::new(),
             scratch_pool: ScratchPool {
                 width: 0,
                 height: 0,
@@ -745,7 +741,7 @@ impl Renderer {
         let params_buffer = Self::create_params_buffer(engine, reg, &transform.values);
 
         let cached_pipelines = self
-            .pipeline_cache
+            .passes_cache
             .get_or_create(&engine.device, transform.shader_id);
 
         Self::encode_transform_passes(
@@ -832,7 +828,7 @@ impl Renderer {
 
     fn encode_transform_passes(
         engine: &GpuEngine,
-        pipelines: &[CachedPipeline],
+        pipelines: &[CompiledPass],
         passes: &[crate::gpu::shaders::PassDef],
         src_texture: &wgpu::Texture,
         final_texture: &wgpu::Texture,
@@ -1237,12 +1233,12 @@ mod tests {
         }
     }
 
-    // ========== PipelineCache behavior tests ==========
+    // ========== ShaderPassesCache behavior tests ==========
 
     #[test]
-    fn test_pipeline_cache_returns_same_pipeline() {
+    fn test_passes_cache_returns_same_pipeline() {
         let engine = GpuEngine::new().unwrap();
-        let mut cache = PipelineCache::new();
+        let mut cache = ShaderPassesCache::new();
 
         // Calling get_or_create twice for the same shader_id must return the same
         // cached entry — no recompilation on the second call.
@@ -1255,9 +1251,9 @@ mod tests {
     }
 
     #[test]
-    fn test_pipeline_cache_different_kinds() {
+    fn test_passes_cache_different_kinds() {
         let engine = GpuEngine::new().unwrap();
-        let mut cache = PipelineCache::new();
+        let mut cache = ShaderPassesCache::new();
 
         // Brightness and Saturation must occupy separate cache entries.
         let pb = cache.get_or_create(&engine.device, "brightness").as_ptr();

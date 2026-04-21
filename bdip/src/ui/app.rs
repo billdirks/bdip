@@ -1,6 +1,6 @@
 use bdip_core::HistoryManager;
 use bdip_core::gpu::engine::GpuEngine;
-use bdip_core::gpu::pipeline::Renderer;
+use bdip_core::gpu::image_pipeline::Renderer;
 use bdip_core::gpu::shaders::{
     ParamKind, ShaderOption, Transform, registry_by_id, sorted_registrations,
 };

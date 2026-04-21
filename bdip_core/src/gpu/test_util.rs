@@ -1,5 +1,5 @@
 use crate::gpu::engine::GpuEngine;
-use crate::gpu::pipeline::Renderer;
+use crate::gpu::image_pipeline::Renderer;
 use crate::gpu::shaders::Transform;
 use crate::gpu::texture::{download_presentation_buffer, upload_texture};
 

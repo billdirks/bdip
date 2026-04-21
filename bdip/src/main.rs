@@ -1,6 +1,6 @@
 use bdip_core::gpu::shaders::{ParamKind, Transform, all_registrations, registry_by_id};
 use bdip_core::gpu::texture::{download_presentation_buffer, upload_texture};
-use bdip_core::gpu::{engine::GpuEngine, pipeline::Renderer};
+use bdip_core::gpu::{engine::GpuEngine, image_pipeline::Renderer};
 use clap::Parser;
 
 mod cli;

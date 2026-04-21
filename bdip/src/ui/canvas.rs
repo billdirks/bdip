@@ -1,5 +1,5 @@
 use bdip_core::gpu::engine::GpuEngine;
-use bdip_core::gpu::pipeline::Renderer;
+use bdip_core::gpu::image_pipeline::Renderer;
 use iced::widget::{button, container, image, row, stack, text};
 use iced::{Alignment, ContentFit, Element, Length};
 

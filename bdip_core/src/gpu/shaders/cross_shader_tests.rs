@@ -1,5 +1,5 @@
 use crate::gpu::engine::GpuEngine;
-use crate::gpu::pipeline::Renderer;
+use crate::gpu::image_pipeline::Renderer;
 use crate::gpu::shaders::Transform;
 use crate::gpu::test_util::{make_solid_image, roundtrip};
 
