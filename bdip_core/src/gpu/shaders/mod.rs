@@ -1,4 +1,5 @@
 pub mod brightness;
+pub mod clarity;
 pub mod contrast;
 pub mod exposure;
 pub mod grayscale;
