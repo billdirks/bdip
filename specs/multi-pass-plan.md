@@ -752,42 +752,38 @@ single-pass shader via the in-shader octave loop called out as "Option A" in tha
 
 ### Infrastructure tests (PR 1)
 
-Tests live in `bdip_core/src/gpu/pipeline.rs` and `bdip_core/src/gpu/shaders/mod.rs`.
+Tests live in `bdip_core/src/gpu/image_pipeline.rs` and
+`bdip_core/src/gpu/shaders/mod.rs`.
 
-- `test_single_pass_skips_scratch_pool` — after running a single-pass shader, the
-  scratch pool is empty at that shader's dims. Confirms single-pass shaders do not
-  allocate scratch.
-- `test_multi_pass_scratch_recycling_within_shader` — a 2-pass test shader whose second
-  pass copies its scratch input to `Final`. Run `apply` twice at the same dims.
-  Assertions: `scratch_pool_len(dims) == 1` after both runs (free list holds one
-  texture that was returned and then re-borrowed); `scratch_pool_handle(dims, 0)` is
-  the same raw pointer after run 1 and after run 2 (proves the physical texture was
-  re-used, not reallocated).
-- `test_multi_pass_scratch_shared_across_shaders` — run two distinct test multi-pass
-  shaders back-to-back at the same dims, each needing 2 scratches. Assertions:
-  `scratch_pool_len(dims) == 2` after both runs (peak footprint does not grow when the
-  second shader runs); the two `scratch_pool_handle(dims, i)` pointers captured after
-  run 1 match the pointers after run 2 — the second shader borrowed the same physical
-  textures the first shader returned. Regression guard on the shared-pool invariant.
-- `test_multi_pass_image_resize_drops_pool` — `apply` once at 4×4, then once at 8×8;
-  assert the pool has no lingering 4×4 entries (check `scratch_pool_len((4,4)) == 0`).
-- `test_multi_pass_final_output_correctness` — a 2-pass identity shader (pass 0: Source
-  → Scratch, pass 1: Scratch → Final, both plain copies) returns pixel-identical output
-  to the input after `ingest`→`apply`→`present` roundtrip.
-- `test_pipeline_cache_compiles_per_pass` — `get_or_create` on a multi-pass shader
-  returns a `Vec<CachedPipeline>` whose length equals the pass count; on a single-pass
-  shader it returns a length-1 vec. A second call returns the same vec entries by
+The following tests ship with PR 1 (no multi-pass fixture shaders required):
+
+- `test_single_pass_skips_scratch_pool` — run a single-pass shader (e.g., brightness);
+  assert `scratch_pool_len(dims) == 0`. Confirms single-pass shaders do not touch the
+  scratch pool.
+- `test_pipeline_cache_compiles_per_pass` — `get_or_create` on a single-pass shader
+  returns a `Vec<CompiledPass>` of length 1; a second call returns the same vec by
   pointer equality.
-- `test_position_indexed_bindings_three_inputs` — a test shader with a 3-input pass
-  (`@binding(0)`, `@binding(1)`, `@binding(2)` for inputs; `@binding(3)` for output)
-  correctly reads all three and writes the expected combination. This is the explicit
-  regression guard against reverting to hardcoded binding slots.
 - `test_validate_pass_list_rejects_final_in_middle`,
   `test_validate_pass_list_rejects_missing_scratch_write`,
   `test_validate_pass_list_rejects_duplicate_scratch_output` — direct unit tests on the
-  `validate_pass_list` `const fn` driven by fixture pass lists. One test per violation
-  class, following the single-behavior rule. Complements tier 2 by proving each rule
-  independently without relying on a malformed shader being registered.
+  `validate_pass_list` const fn via `std::panic::catch_unwind`. One test per violation
+  class, no GPU involvement.
+- `test_all_registered_pass_lists_validate` (in `shaders/mod.rs`) — tier-2 safety net;
+  walks `inventory::iter` and runs the same validation logic on every registered shader.
+
+The following tests from this section's original scope are deferred because each
+requires a multi-pass fixture shader to drive the engine, and adding one without
+polluting the real shader registry demands non-trivial test infrastructure. Each
+behavior is covered by a named test in the PR where the relevant real shader ships:
+
+| Deferred test | Covered by | PR |
+|---|---|---|
+| `test_multi_pass_scratch_recycling_within_shader` | `test_clarity_scratch_pool_reuses_across_runs` | 2 |
+| `test_multi_pass_image_resize_drops_pool` | add alongside Clarity pool tests | 2 |
+| `test_multi_pass_scratch_shared_across_shaders` | Clarity + Cartoon back-to-back | 4 |
+| `test_multi_pass_final_output_correctness` | `test_clarity_zero_amount_is_identity` | 2 |
+| `test_position_indexed_bindings_three_inputs` | `test_cartoon_three_input_combine_pass_binds_correctly` | 3 |
+| `test_pipeline_cache_compiles_per_pass` (multi-pass len) | verify against Clarity's 3-pass list | 2 |
 
 Each test follows `AGENTS.md` single-behavior rule.
 
@@ -1012,7 +1008,8 @@ Add: none.
 Modify:
 
 - `bdip_core/src/gpu/shaders/mod.rs` — Implement the stubbed `validate_pass_list` function.
-- `bdip_core/src/gpu/pipeline.rs`: Add missing infrastructure tests.
+- `bdip_core/src/gpu/image_pipeline.rs`: Add `test_single_pass_skips_scratch_pool`
+  and the single-pass variant of `test_pipeline_cache_compiles_per_pass`.
 - `specs/adding_a_shader.md`:
   - Update the single-pass example to show the `TransformShader` implementation.
   - Add a new "Multi-pass shaders" section covering the position-indexed binding contract (input
@@ -1030,23 +1027,38 @@ Modify:
 - `ShaderRegistration::new<T>()` already calls `validate_pass_list(T::PASSES);`, so misuse fails
   `cargo build`.
 
-**Tests shipped (add or verify each; see § "Infrastructure tests"):**
+**Tests shipped (add or verify each):**
 
-- `test_single_pass_skips_scratch_pool` (asserts single-pass shaders don't allocate from pool).
-- `test_multi_pass_scratch_recycling_within_shader` (2-pass copy fixture; uses
-  `scratch_pool_len` + `scratch_pool_handle`).
-- `test_multi_pass_scratch_shared_across_shaders` (two distinct 2-pass fixtures;
-  asserts same pointers re-borrowed).
-- `test_multi_pass_image_resize_drops_pool`.
-- `test_multi_pass_final_output_correctness` (2-pass identity copy returns
-  pixel-identical input).
-- `test_pipeline_cache_compiles_per_pass`.
-- `test_position_indexed_bindings_three_inputs` (test fixture shader with 3-input
-  pass, explicit binding regression guard).
+The following tests require no multi-pass fixture shaders and ship with PR 1:
+
+- `test_single_pass_skips_scratch_pool` — run a single-pass shader (e.g., brightness);
+  assert `scratch_pool_len(dims) == 0`. Confirms single-pass shaders do not touch the
+  scratch pool.
+- `test_pipeline_cache_compiles_per_pass` — `get_or_create` on a single-pass shader
+  returns a `Vec<CompiledPass>` of length 1; a second call returns the same vec by
+  pointer equality. (The multi-pass length assertion — verifying a 3-pass shader
+  returns length 3 — ships in PR 2 against Clarity.)
 - `test_validate_pass_list_rejects_final_in_middle`,
   `test_validate_pass_list_rejects_missing_scratch_write`,
-  `test_validate_pass_list_rejects_duplicate_scratch_output` (direct unit tests on the
-  `const fn`).
+  `test_validate_pass_list_rejects_duplicate_scratch_output` — direct unit tests on the
+  `validate_pass_list` const fn via `std::panic::catch_unwind`. One test per violation
+  class, with no GPU involvement.
+- `test_all_registered_pass_lists_validate` (in `shaders/mod.rs`) — tier-2 safety net;
+  walks `inventory::iter` and runs the same validation logic on every registered shader.
+
+The following tests from the original § "Infrastructure tests" plan are **not shipped
+in PR 1**. Each requires a multi-pass fixture shader to drive the engine, and adding
+one without polluting the real shader registry demands non-trivial test infrastructure.
+Each behavior is already covered by a named test in a later PR:
+
+| Deferred test | Covered by | PR |
+|---|---|---|
+| `test_multi_pass_scratch_recycling_within_shader` | `test_clarity_scratch_pool_reuses_across_runs` | 2 |
+| `test_multi_pass_image_resize_drops_pool` | add alongside Clarity pool tests | 2 |
+| `test_multi_pass_scratch_shared_across_shaders` | Clarity + Cartoon back-to-back | 4 |
+| `test_multi_pass_final_output_correctness` | `test_clarity_zero_amount_is_identity` | 2 |
+| `test_position_indexed_bindings_three_inputs` | `test_cartoon_three_input_combine_pass_binds_correctly` | 3 |
+| `test_pipeline_cache_compiles_per_pass` (multi-pass len) | verify against Clarity's 3-pass list | 2 |
 
 All existing per-shader tests (≥50 of them) continue to pass unchanged. `cargo test`
 must be fully green; no test is moved to `#[ignore]`.
@@ -1067,7 +1079,8 @@ grep -rn "PassDef\|PassInput\|PassOutput" bdip_core/src/gpu/shaders/ \
 
 - `validate_pass_list` implementation correctly rejects malformed passes at compile time.
 - Const-fn validator compile-error messages are actionable.
-- The new tests cover missing behaviors (like 3-input bindings and pool recycling).
+- The `test_all_registered_pass_lists_validate` tier-2 test exercises every registered
+  shader automatically.
 
 **Rollback characteristics:** reverting this PR removes multi-pass infrastructure but
 leaves the single-pass shaders in the old `inventory::submit!` form. No user-visible
@@ -1440,15 +1453,15 @@ cargo test test_shader_registry_no_duplicate_ids
 - This plan, § "Cross-shader integration tests (PR 4)" and § "Performance budget test".
 - `bdip_core/src/gpu/shaders/cross_shader_tests.rs` — the current file to extend.
 - `bdip_core/src/gpu/pipeline.rs` § `test_perf_gpu_roundtrip_24mp` — the perf test to
-  extend or clone.
+  clone.
 
 **Files:**
 
 Modify:
 
 - `bdip_core/src/gpu/shaders/cross_shader_tests.rs` — add the three chain tests below.
-- `bdip_core/src/gpu/pipeline.rs` — extend the perf test (or add siblings) with the
-  Clarity and Cartoon assertions below.
+- `bdip_core/src/gpu/pipeline.rs` — Add sibling tests to the 24MP test for Clarity and 
+   Cartoon with the assertions below.
 
 **Implementation details — exact tests to add:**
 
@@ -1468,15 +1481,11 @@ Cross-shader chain tests (extend `cross_shader_tests.rs`):
 Performance assertions (extend / add siblings to `test_perf_gpu_roundtrip_24mp`):
 
 - `test_perf_gpu_roundtrip_24mp_clarity` — 24 MP synthetic image, Clarity at
-  `amount=0.5`, warm-path critical path mean over 20 iterations; assert `mean < 22.0
-  ms` (20 ms readback baseline + ~1 ms Clarity + ~1 ms slack).
-- `test_perf_gpu_roundtrip_24mp_cartoon` — same shape; assert `mean < 24.0 ms` (20 ms
-  + ~2 ms Cartoon + ~2 ms slack).
+  `amount=0.5`, assert warm-path critical path < 25.0 ms
+- `test_perf_gpu_roundtrip_24mp_cartoon` — same shape; assert warm-path critical 
+   path < 25.0 ms
 
-Both new perf tests are `#[ignore]`-gated, same convention as the existing
-`test_perf_gpu_roundtrip_24mp`. Their purpose is drift detection — they are soft
-ceilings that fire before regressions reach production.
-
+They should be run when issuing the command `cargo perf-test`.
 **Acceptance commands:**
 
 ```

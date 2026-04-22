@@ -67,8 +67,92 @@ pub struct ShaderRegistration {
     pub make_uniform: fn(&[f32]) -> Vec<u8>,
 }
 
-pub const fn validate_pass_list(_passes: &[PassDef]) {
-    // Implemented in PR 1
+/// Byte-level equality for `&'static str` values, usable in const context.
+const fn bytes_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+/// Validates the structural integrity of a pass list.
+///
+/// Invoked by `ShaderRegistration::new::<T>()` in a const context, so violations
+/// are reported as build errors. The same function is also called at test time by
+/// `test_all_registered_pass_lists_validate` as a tier-2 safety net.
+///
+/// Rules enforced:
+/// 1. `PassOutput::Final` must appear exactly once, on the last pass.
+/// 2. Every `PassInput::Scratch(s)` must resolve to a prior `PassOutput::Scratch(s)`.
+/// 3. No two passes may declare the same `PassOutput::Scratch(name)`.
+pub const fn validate_pass_list(passes: &[PassDef]) {
+    let n = passes.len();
+    if n == 0 {
+        return;
+    }
+
+    let mut i = 0;
+    while i < n {
+        // Final must not appear before the last pass.
+        if let PassOutput::Final = passes[i].output
+            && i != n - 1
+        {
+            panic!("validate_pass_list: PassOutput::Final must only appear on the last pass");
+        }
+
+        // No two passes may write to the same scratch name.
+        if let PassOutput::Scratch(out_name) = passes[i].output {
+            let mut j = 0;
+            while j < i {
+                if let PassOutput::Scratch(prev_name) = passes[j].output
+                    && bytes_eq(out_name.as_bytes(), prev_name.as_bytes())
+                {
+                    panic!(
+                        "validate_pass_list: duplicate PassOutput::Scratch name — each scratch name may only be written by one pass"
+                    );
+                }
+                j += 1;
+            }
+        }
+
+        // Every scratch input must reference a scratch name written by an earlier pass.
+        let mut k = 0;
+        while k < passes[i].inputs.len() {
+            if let PassInput::Scratch(req) = passes[i].inputs[k] {
+                let mut found = false;
+                let mut j = 0;
+                while j < i {
+                    if let PassOutput::Scratch(name) = passes[j].output
+                        && bytes_eq(req.as_bytes(), name.as_bytes())
+                    {
+                        found = true;
+                        break;
+                    }
+                    j += 1;
+                }
+                if !found {
+                    panic!(
+                        "validate_pass_list: PassInput::Scratch references a name not written by any earlier pass"
+                    );
+                }
+            }
+            k += 1;
+        }
+
+        i += 1;
+    }
+
+    // The last pass must output Final.
+    if !matches!(passes[n - 1].output, PassOutput::Final) {
+        panic!("validate_pass_list: the last pass must have PassOutput::Final");
+    }
 }
 
 inventory::collect!(ShaderRegistration);
@@ -225,5 +309,102 @@ mod tests {
                 reg.meta.display_name
             );
         }
+    }
+
+    /// Tier-2 safety net: validates every registered shader's pass list at test time.
+    ///
+    /// Tier 1 (`validate_pass_list` called inside `ShaderRegistration::new::<T>()`) runs
+    /// at compile time and covers all shaders registered via the `new` constructor. Tier 2
+    /// catches cases tier 1 cannot reach:
+    ///
+    /// - A `ShaderRegistration` constructed directly (bypassing `new::<T>()`) by writing
+    ///   to the public `meta` and `make_uniform` fields. Currently no shader does this, but
+    ///   the struct fields are `pub` so it is possible.
+    /// - Any future registration path that does not call `validate_pass_list` at compile
+    ///   time (e.g., a dynamic registration mechanism added later).
+    ///
+    /// In the current codebase all shaders go through `new::<T>()`, so tier 1 already
+    /// catches every violation. Tier 2 is retained as a low-cost guard against future
+    /// registration patterns that might bypass the compile-time check.
+    #[test]
+    fn test_all_registered_pass_lists_validate() {
+        for reg in inventory::iter::<ShaderRegistration> {
+            let result = std::panic::catch_unwind(|| validate_pass_list(reg.meta.passes));
+            assert!(
+                result.is_ok(),
+                "validate_pass_list failed for shader '{}': {:?}",
+                reg.meta.id,
+                result.err()
+            );
+        }
+    }
+
+    /// A pass list where `Final` appears before the last position must be rejected.
+    #[test]
+    fn test_validate_pass_list_rejects_final_in_middle() {
+        const PASSES: &[PassDef] = &[
+            PassDef {
+                label: "a",
+                wgsl_source: "",
+                inputs: &[PassInput::Source],
+                output: PassOutput::Final, // Final not at last position
+            },
+            PassDef {
+                label: "b",
+                wgsl_source: "",
+                inputs: &[PassInput::Source],
+                output: PassOutput::Final,
+            },
+        ];
+        let result = std::panic::catch_unwind(|| validate_pass_list(PASSES));
+        assert!(
+            result.is_err(),
+            "expected panic: Final must be the last pass"
+        );
+    }
+
+    /// A pass list whose first (and only) pass reads a scratch name that was never
+    /// written must be rejected.
+    #[test]
+    fn test_validate_pass_list_rejects_missing_scratch_write() {
+        const PASSES: &[PassDef] = &[PassDef {
+            label: "a",
+            wgsl_source: "",
+            inputs: &[PassInput::Scratch("h")], // "h" never written
+            output: PassOutput::Final,
+        }];
+        let result = std::panic::catch_unwind(|| validate_pass_list(PASSES));
+        assert!(result.is_err(), "expected panic: unresolved scratch input");
+    }
+
+    /// A pass list where two passes both declare `PassOutput::Scratch` with the same
+    /// name must be rejected.
+    #[test]
+    fn test_validate_pass_list_rejects_duplicate_scratch_output() {
+        const PASSES: &[PassDef] = &[
+            PassDef {
+                label: "a",
+                wgsl_source: "",
+                inputs: &[PassInput::Source],
+                output: PassOutput::Scratch("h"),
+            },
+            PassDef {
+                label: "b",
+                wgsl_source: "",
+                inputs: &[PassInput::Source],
+                output: PassOutput::Scratch("h"), // duplicate write
+            },
+            PassDef {
+                label: "c",
+                wgsl_source: "",
+                inputs: &[PassInput::Scratch("h")],
+                output: PassOutput::Final,
+            },
+        ];
+        let result = std::panic::catch_unwind(|| validate_pass_list(PASSES));
+        assert!(
+            result.is_err(),
+            "expected panic: duplicate scratch output name"
+        );
     }
 }

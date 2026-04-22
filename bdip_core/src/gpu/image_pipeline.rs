@@ -905,30 +905,11 @@ impl Renderer {
     }
 
     #[cfg(test)]
-    #[allow(dead_code)]
-    pub(crate) fn scratch_pool_len(&self, dims: (u32, u32)) -> usize {
-        if self.scratch_pool.width == dims.0 && self.scratch_pool.height == dims.1 {
-            self.scratch_pool.textures.len()
-        } else {
-            0
-        }
-    }
-
-    #[cfg(test)]
-    #[allow(dead_code)]
-    pub(crate) fn scratch_pool_handle(
-        &self,
-        dims: (u32, u32),
-        index: usize,
-    ) -> Option<*const wgpu::Texture> {
-        if self.scratch_pool.width == dims.0 && self.scratch_pool.height == dims.1 {
-            self.scratch_pool
-                .textures
-                .get(index)
-                .map(|t| t as *const wgpu::Texture)
-        } else {
-            None
-        }
+    pub(crate) fn scratch_pool_info(&self) -> ((u32, u32), usize) {
+        (
+            (self.scratch_pool.width, self.scratch_pool.height),
+            self.scratch_pool.textures.len(),
+        )
     }
 }
 
@@ -1233,6 +1214,34 @@ mod tests {
         }
     }
 
+    // ========== Scratch pool behavior tests ==========
+
+    /// A single-pass shader must never allocate from the scratch pool; after `apply`
+    /// the free list must still be empty.
+    #[test]
+    fn test_single_pass_skips_scratch_pool() {
+        let engine = GpuEngine::new().unwrap();
+        let mut renderer = Renderer::new(&engine);
+
+        let img = make_solid_image(4, 4, 32767, 32767, 32767);
+        let _ = roundtrip(
+            &mut renderer,
+            &engine,
+            &img,
+            &[Transform {
+                shader_id: "brightness",
+                values: vec![0.0],
+            }],
+        );
+
+        let (pool_dims, pool_len) = renderer.scratch_pool_info();
+        assert_eq!(pool_dims, (4, 4), "pool dims should match the image dims");
+        assert_eq!(
+            pool_len, 0,
+            "single-pass shader must not allocate scratch textures"
+        );
+    }
+
     // ========== ShaderPassesCache behavior tests ==========
 
     #[test]
@@ -1261,6 +1270,31 @@ mod tests {
         assert!(
             !std::ptr::eq(pb, ps),
             "different shader IDs should return different pipeline pointers"
+        );
+    }
+
+    /// A single-pass shader must compile to a `Vec<CompiledPass>` of length 1.
+    /// A second `get_or_create` call must return the same cached vec (pointer-stable).
+    /// The multi-pass length assertion (verifying len == N for an N-pass shader) ships
+    /// in PR 2 once Clarity's 3-pass list is available.
+    #[test]
+    fn test_pipeline_cache_compiles_per_pass() {
+        let engine = GpuEngine::new().unwrap();
+        let mut cache = ShaderPassesCache::new();
+
+        let passes_first = cache.get_or_create(&engine.device, "brightness");
+        assert_eq!(
+            passes_first.len(),
+            1,
+            "single-pass shader must compile to 1 CompiledPass"
+        );
+
+        // Second call must return the same cached slice — no recompilation.
+        let ptr_first = passes_first.as_ptr();
+        let passes_second = cache.get_or_create(&engine.device, "brightness");
+        assert!(
+            std::ptr::eq(ptr_first, passes_second.as_ptr()),
+            "second get_or_create must return the same cached vec"
         );
     }
 
