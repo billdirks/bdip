@@ -335,7 +335,7 @@ uniform at `@group(1) @binding(0)`). The engine has one execution path — see t
 
 ## Renderer changes
 
-All changes are in `bdip_core/src/gpu/pipeline.rs`. Nothing else in `bdip_core` needs to
+All changes are in `bdip_core/src/gpu/image_pipeline.rs`. Nothing else in `bdip_core` needs to
 change.
 
 ### `PipelineCache`
@@ -434,36 +434,36 @@ course of a session. The mitigations, in order of effort:
 V1 ships (1) and (2). (3) is a follow-up if we actually encounter a debugging scenario
 that (1) + (2) cannot resolve.
 
-#### Test-only accessor for pool introspection
+#### Test-only accessors for pool introspection
 
-The pool is private to `Renderer`, but the infrastructure and shader tests need a way
-to observe recycling without relying on GPU-capture labels or pointer-bit reinterpret.
-`Renderer` exposes:
+The pool is private to `Renderer`, but the infrastructure tests need a way to observe
+recycling without relying on GPU-capture labels or pointer-bit reinterpret. `Renderer`
+exposes:
 
 ```rust
 #[cfg(test)]
 impl Renderer {
-    /// Number of textures currently in the free list for the given dims.
-    /// Returns 0 if `dims` do not match the current pool dims.
-    /// Does NOT count textures currently checked out by an in-flight `apply_passes`
-    /// — since `Renderer::apply` is `&mut self`, tests only observe the pool at
-    /// rest (between calls).
-    pub(crate) fn scratch_pool_len(&self, dims: (u32, u32)) -> usize { ... }
+    /// Returns the pool's current `(width, height)` and the number of textures in
+    /// the free list. Does NOT count textures currently checked out by an in-flight
+    /// `apply_passes` — since `Renderer::apply` is `&mut self`, tests only observe
+    /// the pool at rest (between calls).
+    pub(crate) fn scratch_pool_info(&self) -> ((u32, u32), usize) { ... }
 
-    /// Pointer-equality handle on a specific pool slot for same-texture assertions
-    /// across runs. Returns `None` if `index >= scratch_pool_len(dims)`.
-    pub(crate) fn scratch_pool_handle(&self, dims: (u32, u32), index: usize) -> Option<*const wgpu::Texture> { ... }
+    /// Returns the pool's current dimensions and the texture at `index` in the
+    /// free list. Used by tests to assert both the active pool dims and that the
+    /// same physical GPU allocation is reused across runs (pointer identity is a
+    /// stronger claim than "a texture of the same shape exists").
+    pub(crate) fn scratch_pool_handle(&self, index: usize) -> ((u32, u32), Option<&wgpu::Texture>) { ... }
 }
 ```
 
-`scratch_pool_len` is the assertion surface for "how many scratch textures exist for
-these dims"; `scratch_pool_handle` lets `test_clarity_scratch_pool_reuses_across_runs`
+`scratch_pool_info` is the assertion surface for pool dims and count;
+`scratch_pool_handle` lets `test_multi_pass_scratch_pool_reuses_across_runs`
 prove the *same physical texture* came back on the second run, not merely "a texture
 of the same shape."
 
 Both accessors are `#[cfg(test)]`-gated so they do not appear in release builds and
-cannot be called from outside the crate. This provides a concrete api that can be used
-in tests to read back the pool state and observe the state via labels.
+cannot be called from outside the crate.
 
 ### `Renderer::apply` dispatch
 
@@ -758,8 +758,8 @@ Tests live in `bdip_core/src/gpu/image_pipeline.rs` and
 The following tests ship with PR 1 (no multi-pass fixture shaders required):
 
 - `test_single_pass_skips_scratch_pool` — run a single-pass shader (e.g., brightness);
-  assert `scratch_pool_len(dims) == 0`. Confirms single-pass shaders do not touch the
-  scratch pool.
+  destructure `scratch_pool_info()` and assert `pool_len == 0`. Confirms single-pass
+  shaders do not touch the scratch pool.
 - `test_pipeline_cache_compiles_per_pass` — `get_or_create` on a single-pass shader
   returns a `Vec<CompiledPass>` of length 1; a second call returns the same vec by
   pointer equality.
@@ -778,7 +778,7 @@ behavior is covered by a named test in the PR where the relevant real shader shi
 
 | Deferred test | Covered by | PR |
 |---|---|---|
-| `test_multi_pass_scratch_recycling_within_shader` | `test_clarity_scratch_pool_reuses_across_runs` | 2 |
+| `test_multi_pass_scratch_recycling_within_shader` | `test_multi_pass_scratch_pool_reuses_across_runs` | 2 |
 | `test_multi_pass_image_resize_drops_pool` | add alongside Clarity pool tests | 2 |
 | `test_multi_pass_scratch_shared_across_shaders` | Clarity + Cartoon back-to-back | 4 |
 | `test_multi_pass_final_output_correctness` | `test_clarity_zero_amount_is_identity` | 2 |
@@ -801,7 +801,7 @@ Each test follows `AGENTS.md` single-behavior rule.
 | `test_clarity_negative_amount_softens_edge`    | same step image; `amount=-0.5`                     | edge transition is softer than at `amount=0.0`                   |
 | `test_clarity_alpha_preserved`                 | 4×4 solid mid-gray, `amount=0.5`                   | every output pixel's alpha == 65535                              |
 | `test_clarity_deterministic`                   | 16×16 solid mid-gray; run twice at `amount=0.5`    | outputs pixel-identical                                          |
-| `test_clarity_scratch_pool_reuses_across_runs` | run Clarity twice at same dims                     | `scratch_pool_len(dims) == 2` both times; same two `wgpu::Texture` pointers re-borrowed on the second run |
+| `test_multi_pass_scratch_pool_reuses_across_runs` | run Clarity twice at same dims | `scratch_pool_info()` returns `(dims, 2)` both times; same two `wgpu::Texture` pointers re-borrowed on the second run |
 
 **Cartoon** (mirrors the same structure):
 
@@ -834,7 +834,7 @@ Add to `bdip_core/src/gpu/shaders/cross_shader_tests.rs`:
 
 ### Performance budget test
 
-Add a new test, `test_perf_gpu_roundtrip_24mp_multi_pass`, in `bdip_core/src/gpu/pipeline.rs` to
+Add a new test, `test_perf_gpu_roundtrip_24mp_multi_pass`, in `bdip_core/src/gpu/image_pipeline.rs` to
 measure Clarity and Cartoon cold + warm critical paths on the 24 MP synthetic image, with
 assertions:
 
@@ -896,7 +896,7 @@ throwaway spike that produces a go/no-go signal for PR 1.
 - `specs/adding_a_shader.md` (current single-pass pattern).
 - `bdip_core/src/gpu/shaders/brightness/mod.rs` and
   `bdip_core/src/gpu/shaders/brightness/brightness.wgsl` (the migration target).
-- `bdip_core/src/gpu/pipeline.rs` (`Renderer::apply`, `PipelineCache`).
+- `bdip_core/src/gpu/image_pipeline.rs` (`Renderer::apply`, `PipelineCache`).
 - `bdip_core/src/gpu/shaders/mod.rs` (current `ShaderRegistration`,
   `registry_by_id`).
 
@@ -918,7 +918,7 @@ Modify:
   with `register_single_pass_shader! { meta: ShaderMeta { ... }, constructor: |values|
   Box::new(BrightnessParams::from_values(values)) }`. The `ShaderMeta` literal is
   unchanged — same four fields (`id`, `display_name`, `wgsl_source`, `param`).
-- `bdip_core/src/gpu/pipeline.rs`: rewrite `Renderer::apply` as the unified
+- `bdip_core/src/gpu/image_pipeline.rs`: rewrite `Renderer::apply` as the unified
   `apply_passes` pass-list loop per § "Renderer changes" § "Renderer::apply dispatch".
   Add the `scratch_pool` field (typed as in § "Scratch pool"), the free-list
   borrow/return discipline, and the relabel-on-borrow mitigation. Do not implement the
@@ -1053,7 +1053,7 @@ Each behavior is already covered by a named test in a later PR:
 
 | Deferred test | Covered by | PR |
 |---|---|---|
-| `test_multi_pass_scratch_recycling_within_shader` | `test_clarity_scratch_pool_reuses_across_runs` | 2 |
+| `test_multi_pass_scratch_recycling_within_shader` | `test_multi_pass_scratch_pool_reuses_across_runs` | 2 |
 | `test_multi_pass_image_resize_drops_pool` | add alongside Clarity pool tests | 2 |
 | `test_multi_pass_scratch_shared_across_shaders` | Clarity + Cartoon back-to-back | 4 |
 | `test_multi_pass_final_output_correctness` | `test_clarity_zero_amount_is_identity` | 2 |
@@ -1249,9 +1249,10 @@ until the readback clamp, but clamping here matches the reference formula's inte
 - `test_clarity_alpha_preserved` — 4×4 solid mid-gray, `amount=0.5`; every output
   alpha == 65535.
 - `test_clarity_deterministic` — same inputs run twice produce pixel-identical output.
-- `test_clarity_scratch_pool_reuses_across_runs` — run Clarity twice at same dims;
-  `scratch_pool_len(dims) == 2` both times; `scratch_pool_handle(dims, 0)` and
-  `(dims, 1)` produce the same raw pointers on the second run.
+- `test_multi_pass_scratch_pool_reuses_across_runs` (in `image_pipeline.rs`) — run
+  Clarity twice at same dims; `scratch_pool_info()` returns `(dims, 2)` both times;
+  `scratch_pool_handle(0)` and `scratch_pool_handle(1)` produce the same texture
+  references on the second run.
 
 **Acceptance commands:**
 
@@ -1452,7 +1453,7 @@ cargo test test_shader_registry_no_duplicate_ids
 
 - This plan, § "Cross-shader integration tests (PR 4)" and § "Performance budget test".
 - `bdip_core/src/gpu/shaders/cross_shader_tests.rs` — the current file to extend.
-- `bdip_core/src/gpu/pipeline.rs` § `test_perf_gpu_roundtrip_24mp` — the perf test to
+- `bdip_core/src/gpu/image_pipeline.rs` § `test_perf_gpu_roundtrip_24mp` — the perf test to
   clone.
 
 **Files:**
@@ -1460,7 +1461,7 @@ cargo test test_shader_registry_no_duplicate_ids
 Modify:
 
 - `bdip_core/src/gpu/shaders/cross_shader_tests.rs` — add the three chain tests below.
-- `bdip_core/src/gpu/pipeline.rs` — Add sibling tests to the 24MP test for Clarity and 
+- `bdip_core/src/gpu/image_pipeline.rs` — Add sibling tests to the 24MP test for Clarity and 
    Cartoon with the assertions below.
 
 **Implementation details — exact tests to add:**
@@ -1531,11 +1532,11 @@ change runtime behavior.
   (~740 MB at 24 MP). The remaining risk is a future shader that alone needs many more
   scratches than Cartoon; that is a per-shader design review, not a pool-level issue.
 - **Parameter coupling for Clarity.** V1 hardcodes blur sigma; a later PR may expose it as
-  a slider. Decision is not blocking.
+  a slider. Decision is not blocking.  **BDIRKS I should do this.**
 - **Cartoon parameter defaults.** The defaults locked above (Strength 0.0, Levels 8.0,
   Edge Threshold 0.15, Edge Softness 0.10, Edge Darkness 1.0) are informed estimates
   and may be tuned on real photos during PR 3 review. Locked formula and slider set
-  are not up for re-negotiation at that point; only numeric defaults.
+  are not up for re-negotiation at that point; only numeric defaults. **BDIRKS investigate this**
 - **`rustfmt` interaction with `register_single_pass_shader!` calls containing
   `include_str!(...)`.** Long `include_str!` calls sometimes cause awkward line breaks
   inside macro invocations. Non-blocking; can use `#[rustfmt::skip]` if needed on the
