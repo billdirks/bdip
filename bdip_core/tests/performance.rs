@@ -15,7 +15,7 @@
 use bdip_core::Rgba16Image;
 use bdip_core::Transform;
 use bdip_core::gpu::engine::GpuEngine;
-use bdip_core::gpu::image_pipeline::Renderer;
+use bdip_core::gpu::image_pipeline::{PassTiming, Renderer};
 use bdip_core::gpu::shaders::registry_by_id;
 use bdip_core::gpu::texture::upload_texture;
 use bdip_core::wgpu;
@@ -49,10 +49,24 @@ impl PhaseTiming {
     }
 }
 
+/// Result of a cold+warm benchmark run. Includes wall-clock phase timings
+/// and, when the adapter supports `TIMESTAMP_QUERY`, per-pass GPU durations.
+struct BenchResult {
+    cold: PhaseTiming,
+    warm: PhaseTiming,
+    cold_pass_timings: Vec<PassTiming>,
+    warm_pass_timings: Vec<PassTiming>,
+}
+
 /// Runs the cold+warm benchmark pipeline for a given shader and returns
-/// per-phase timings as `(cold, warm)`. Cold runs ingest+apply+present+download.
-/// Warm reuses the ingested texture and downloads via `download_slice` to match
-/// the interactive-editing path.
+/// per-phase timings plus per-pass GPU timestamps. Cold runs
+/// ingest+apply+present+download. Warm reuses the ingested texture and
+/// downloads via `download_slice` to match the interactive-editing path.
+///
+/// GPU timestamp collection adds ~3-5 ms of overhead per call (query set
+/// allocation, resolve, synchronous poll + map for readback). This inflates
+/// the wall-clock `execute_ms` relative to the untimed `apply` path. The
+/// per-pass durations themselves are measured by the GPU and are unaffected.
 fn bench_shader_roundtrip(
     engine: &GpuEngine,
     renderer: &mut Renderer,
@@ -60,8 +74,10 @@ fn bench_shader_roundtrip(
     width: u32,
     height: u32,
     transform: &Transform,
-) -> (PhaseTiming, PhaseTiming) {
+) -> BenchResult {
     use std::time::Instant;
+
+    let use_timestamps = engine.supports_timestamps();
 
     let wait_for_gpu = || {
         let t = Instant::now();
@@ -75,7 +91,11 @@ fn bench_shader_roundtrip(
     // --- Run 1: cold (shader compilation + initial buffer allocation) ---
     let t_execute = Instant::now();
     let ingested = renderer.ingest(engine, uploaded);
-    let transformed = renderer.apply(engine, &ingested, transform);
+    let (transformed, cold_pass_timings) = if use_timestamps {
+        renderer.apply_with_timestamps(engine, &ingested, transform)
+    } else {
+        (renderer.apply(engine, &ingested, transform), Vec::new())
+    };
     let present_buf = renderer.present(engine, &transformed);
     let cold = {
         let execute_ms = t_execute.elapsed().as_secs_f64() * 1000.0;
@@ -95,10 +115,12 @@ fn bench_shader_roundtrip(
     };
 
     // --- Run 2: warm (pipelines compiled, staging buffer + pixel_vec cached) ---
-    // Reuses `ingested` directly — matches interactive editing where the base
-    // texture is cached in VRAM across slider changes.
     let t_execute = Instant::now();
-    let transformed = renderer.apply(engine, &ingested, transform);
+    let (transformed, warm_pass_timings) = if use_timestamps {
+        renderer.apply_with_timestamps(engine, &ingested, transform)
+    } else {
+        (renderer.apply(engine, &ingested, transform), Vec::new())
+    };
     let present_buf = renderer.present(engine, &transformed);
     let warm = {
         let execute_ms = t_execute.elapsed().as_secs_f64() * 1000.0;
@@ -117,19 +139,20 @@ fn bench_shader_roundtrip(
         }
     };
 
-    (cold, warm)
+    BenchResult {
+        cold,
+        warm,
+        cold_pass_timings,
+        warm_pass_timings,
+    }
 }
 
 /// Prints a uniform perf report for a shader's cold+warm run. `label` and
 /// `pass_count` are pulled from the shader registration so the header shows,
 /// e.g., "Clarity (3 passes)".
-fn print_perf_report(
-    label: &str,
-    pass_count: usize,
-    cold: &PhaseTiming,
-    warm: &PhaseTiming,
-    warm_target_ms: f64,
-) {
+fn print_perf_report(label: &str, pass_count: usize, result: &BenchResult, warm_target_ms: f64) {
+    let cold = &result.cold;
+    let warm = &result.warm;
     let header = format!("--- 24 MP GPU roundtrip — {label} ({pass_count} passes) ---");
     eprintln!("{header}");
     eprintln!(
@@ -148,6 +171,7 @@ fn print_perf_report(
         "  run 1 critical path:                    {:>8.2} ms",
         cold.critical_path_ms()
     );
+    print_pass_timings("  run 1", &result.cold_pass_timings);
     eprintln!(
         "  run 2 execute  (cpu encode+submit):     {:>8.2} ms",
         warm.execute_ms
@@ -165,7 +189,23 @@ fn print_perf_report(
         warm.critical_path_ms(),
         warm_target_ms
     );
+    print_pass_timings("  run 2", &result.warm_pass_timings);
     eprintln!("{}", "-".repeat(header.len()));
+}
+
+fn print_pass_timings(prefix: &str, timings: &[PassTiming]) {
+    if timings.is_empty() {
+        return;
+    }
+    for t in timings {
+        let ms = t.duration_ns / 1_000_000.0;
+        eprintln!("{prefix} gpu pass {:<20} {:>8.2} ms", t.label, ms);
+    }
+    let total_ms: f64 = timings.iter().map(|t| t.duration_ns).sum::<f64>() / 1_000_000.0;
+    eprintln!(
+        "{prefix} gpu passes total:              {:>8.2} ms",
+        total_ms
+    );
 }
 
 /// Returns the display name and pass count registered for `shader_id`. Used
@@ -208,7 +248,7 @@ fn perf_gpu_roundtrip_24mp() {
         shader_id: "brightness",
         values: vec![0.1],
     };
-    let (cold, warm) = bench_shader_roundtrip(
+    let result = bench_shader_roundtrip(
         &engine,
         &mut renderer,
         &uploaded,
@@ -219,21 +259,21 @@ fn perf_gpu_roundtrip_24mp() {
 
     let (label, pass_count) = shader_display_info(transform.shader_id);
     eprintln!("  gpu upload:                             {upload_ms:>8.2} ms");
-    print_perf_report(label, pass_count, &cold, &warm, PERF_WARM_TARGET_MS);
+    print_perf_report(label, pass_count, &result, PERF_WARM_TARGET_MS);
 
     assert!(
         upload_ms < PERF_WARM_TARGET_MS,
         "Upload time exceeded {PERF_WARM_TARGET_MS:.0}ms target: {upload_ms:.2}ms"
     );
     assert!(
-        cold.critical_path_ms() < PERF_COLD_TARGET_MS,
+        result.cold.critical_path_ms() < PERF_COLD_TARGET_MS,
         "Run 1 (cold) critical path exceeded {PERF_COLD_TARGET_MS:.0}ms target: {:.2}ms",
-        cold.critical_path_ms()
+        result.cold.critical_path_ms()
     );
     assert!(
-        warm.critical_path_ms() < PERF_WARM_TARGET_MS,
+        result.warm.critical_path_ms() < PERF_WARM_TARGET_MS,
         "Run 2 (warm) critical path exceeded {PERF_WARM_TARGET_MS:.0}ms target: {:.2}ms",
-        warm.critical_path_ms()
+        result.warm.critical_path_ms()
     );
 }
 
@@ -252,7 +292,7 @@ fn perf_gpu_roundtrip_24mp_clarity() {
         shader_id: "clarity",
         values: vec![0.5],
     };
-    let (cold, warm) = bench_shader_roundtrip(
+    let result = bench_shader_roundtrip(
         &engine,
         &mut renderer,
         &uploaded,
@@ -262,12 +302,12 @@ fn perf_gpu_roundtrip_24mp_clarity() {
     );
 
     let (label, pass_count) = shader_display_info(transform.shader_id);
-    print_perf_report(label, pass_count, &cold, &warm, PERF_WARM_TARGET_MS);
+    print_perf_report(label, pass_count, &result, PERF_WARM_TARGET_MS);
 
     assert!(
-        warm.critical_path_ms() < PERF_WARM_TARGET_MS,
+        result.warm.critical_path_ms() < PERF_WARM_TARGET_MS,
         "{label} warm critical path exceeded {PERF_WARM_TARGET_MS:.0} ms target: {:.2} ms",
-        warm.critical_path_ms()
+        result.warm.critical_path_ms()
     );
 }
 
@@ -289,7 +329,7 @@ fn perf_gpu_roundtrip_24mp_cartoon() {
         shader_id: "cartoon",
         values: vec![0.0f32, 8.0, 0.15, 0.10, 1.0],
     };
-    let (cold, warm) = bench_shader_roundtrip(
+    let result = bench_shader_roundtrip(
         &engine,
         &mut renderer,
         &uploaded,
@@ -299,11 +339,11 @@ fn perf_gpu_roundtrip_24mp_cartoon() {
     );
 
     let (label, pass_count) = shader_display_info(transform.shader_id);
-    print_perf_report(label, pass_count, &cold, &warm, PERF_WARM_TARGET_MS);
+    print_perf_report(label, pass_count, &result, PERF_WARM_TARGET_MS);
 
     assert!(
-        warm.critical_path_ms() < PERF_WARM_TARGET_MS,
+        result.warm.critical_path_ms() < PERF_WARM_TARGET_MS,
         "{label} warm critical path exceeded {PERF_WARM_TARGET_MS:.0} ms target: {:.2} ms",
-        warm.critical_path_ms()
+        result.warm.critical_path_ms()
     );
 }

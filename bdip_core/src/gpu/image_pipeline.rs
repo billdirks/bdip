@@ -19,6 +19,14 @@ struct PresentParams {
     _padding: u32, // WebGPU uniforms require 16-byte alignment
 }
 
+// ========== PassTiming ==========
+
+#[derive(Debug, Clone)]
+pub struct PassTiming {
+    pub label: &'static str,
+    pub duration_ns: f64,
+}
+
 // ========== CompiledPass ==========
 
 struct CompiledPass {
@@ -703,7 +711,26 @@ impl Renderer {
     ) -> wgpu::Texture {
         let reg = registry_by_id(transform.shader_id)
             .unwrap_or_else(|| panic!("Unknown shader ID: '{}'", transform.shader_id));
-        self.apply_passes(engine, src_texture, transform, reg, reg.meta.passes)
+        self.apply_passes(engine, src_texture, transform, reg, reg.meta.passes, false)
+            .0
+    }
+
+    /// Like `apply`, but instruments each compute pass with GPU timestamp
+    /// queries and returns per-pass durations alongside the output texture.
+    /// Requires `TIMESTAMP_QUERY` support (see `GpuEngine::supports_timestamps`).
+    pub fn apply_with_timestamps(
+        &mut self,
+        engine: &GpuEngine,
+        src_texture: &wgpu::Texture,
+        transform: &Transform,
+    ) -> (wgpu::Texture, Vec<PassTiming>) {
+        assert!(
+            engine.supports_timestamps(),
+            "apply_with_timestamps requires TIMESTAMP_QUERY device feature"
+        );
+        let reg = registry_by_id(transform.shader_id)
+            .unwrap_or_else(|| panic!("Unknown shader ID: '{}'", transform.shader_id));
+        self.apply_passes(engine, src_texture, transform, reg, reg.meta.passes, true)
     }
 
     fn apply_passes(
@@ -713,7 +740,8 @@ impl Renderer {
         transform: &Transform,
         reg: &'static crate::gpu::shaders::ShaderRegistration,
         passes: &[crate::gpu::shaders::PassDef],
-    ) -> wgpu::Texture {
+        timed: bool,
+    ) -> (wgpu::Texture, Vec<PassTiming>) {
         let (width, height, depth) = (
             src_texture.width(),
             src_texture.height(),
@@ -754,19 +782,32 @@ impl Renderer {
             .passes_cache
             .get_or_create(&engine.device, transform.shader_id);
 
-        Self::encode_transform_passes(
-            engine,
-            cached_pipelines,
-            passes,
-            src_texture,
-            &final_texture,
-            &borrowed_scratches,
-            &params_buffer,
-        );
+        let timings = if timed {
+            Self::encode_transform_passes_timed(
+                engine,
+                cached_pipelines,
+                passes,
+                src_texture,
+                &final_texture,
+                &borrowed_scratches,
+                &params_buffer,
+            )
+        } else {
+            Self::encode_transform_passes(
+                engine,
+                cached_pipelines,
+                passes,
+                src_texture,
+                &final_texture,
+                &borrowed_scratches,
+                &params_buffer,
+            );
+            Vec::new()
+        };
 
         self.return_scratch_textures(borrowed_scratches);
 
-        final_texture
+        (final_texture, timings)
     }
 
     fn sync_scratch_pool_dims(&mut self, width: u32, height: u32) {
@@ -849,6 +890,124 @@ impl Renderer {
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
 
+        Self::encode_passes_into(
+            &mut encoder,
+            engine,
+            pipelines,
+            passes,
+            src_texture,
+            final_texture,
+            scratch_textures,
+            params_buffer,
+            None,
+        );
+
+        engine.queue.submit(Some(encoder.finish()));
+    }
+
+    fn encode_transform_passes_timed(
+        engine: &GpuEngine,
+        pipelines: &[CompiledPass],
+        passes: &[crate::gpu::shaders::PassDef],
+        src_texture: &wgpu::Texture,
+        final_texture: &wgpu::Texture,
+        scratch_textures: &HashMap<&'static str, wgpu::Texture>,
+        params_buffer: &wgpu::Buffer,
+    ) -> Vec<PassTiming> {
+        let num_passes = passes.len() as u32;
+        let query_count = 2 * num_passes;
+
+        let query_set = engine.device.create_query_set(&wgpu::QuerySetDescriptor {
+            label: Some("timestamp_queries"),
+            ty: wgpu::QueryType::Timestamp,
+            count: query_count,
+        });
+
+        let resolve_size = query_count as u64 * wgpu::QUERY_SIZE as u64;
+        let resolve_buffer = engine.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("timestamp_resolve"),
+            size: resolve_size,
+            usage: wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+
+        let staging_buffer = engine.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("timestamp_staging"),
+            size: resolve_size,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let mut encoder = engine
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+
+        Self::encode_passes_into(
+            &mut encoder,
+            engine,
+            pipelines,
+            passes,
+            src_texture,
+            final_texture,
+            scratch_textures,
+            params_buffer,
+            Some(&query_set),
+        );
+
+        encoder.resolve_query_set(&query_set, 0..query_count, &resolve_buffer, 0);
+        encoder.copy_buffer_to_buffer(&resolve_buffer, 0, &staging_buffer, 0, resolve_size);
+
+        let submission = engine.queue.submit(Some(encoder.finish()));
+
+        let buffer_slice = staging_buffer.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
+            tx.send(result).unwrap();
+        });
+        engine
+            .device
+            .poll(wgpu::PollType::Wait {
+                submission_index: Some(submission),
+                timeout: None,
+            })
+            .unwrap();
+        rx.recv().unwrap().unwrap();
+
+        let data = buffer_slice.get_mapped_range();
+        let timestamps: &[u64] = bytemuck::cast_slice(&data);
+        let period_ns = engine.timestamp_period_ns() as f64;
+
+        let timings = passes
+            .iter()
+            .enumerate()
+            .map(|(i, pass)| {
+                let begin = timestamps[i * 2];
+                let end = timestamps[i * 2 + 1];
+                PassTiming {
+                    label: pass.label,
+                    duration_ns: end.wrapping_sub(begin) as f64 * period_ns,
+                }
+            })
+            .collect();
+
+        drop(data);
+        staging_buffer.unmap();
+
+        timings
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn encode_passes_into(
+        encoder: &mut wgpu::CommandEncoder,
+        engine: &GpuEngine,
+        pipelines: &[CompiledPass],
+        passes: &[crate::gpu::shaders::PassDef],
+        src_texture: &wgpu::Texture,
+        final_texture: &wgpu::Texture,
+        scratch_textures: &HashMap<&'static str, wgpu::Texture>,
+        params_buffer: &wgpu::Buffer,
+        query_set: Option<&wgpu::QuerySet>,
+    ) {
         let src_view = src_texture.create_view(&TextureViewDescriptor::default());
         let final_view = final_texture.create_view(&TextureViewDescriptor::default());
 
@@ -899,10 +1058,19 @@ impl Renderer {
                 }],
             });
 
+            let timestamp_writes = query_set.map(|qs| {
+                let qi = pass_idx as u32 * 2;
+                wgpu::ComputePassTimestampWrites {
+                    query_set: qs,
+                    beginning_of_pass_write_index: Some(qi),
+                    end_of_pass_write_index: Some(qi + 1),
+                }
+            });
+
             {
                 let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                    label: None,
-                    timestamp_writes: None,
+                    label: Some(pass.label),
+                    timestamp_writes,
                 });
                 cpass.set_pipeline(&pipeline.pipeline);
                 cpass.set_bind_group(0, &texture_bind_group, &[]);
@@ -910,8 +1078,6 @@ impl Renderer {
                 cpass.dispatch_workgroups(width.div_ceil(16), height.div_ceil(16), 1);
             }
         }
-
-        engine.queue.submit(Some(encoder.finish()));
     }
 
     #[cfg(test)]

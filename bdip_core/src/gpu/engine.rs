@@ -18,9 +18,14 @@ impl GpuEngine {
         }))
         .map_err(|e| BdipError::Gpu(format!("No suitable GPU adapter found: {}", e)))?;
 
+        let mut features = wgpu::Features::TEXTURE_FORMAT_16BIT_NORM;
+        if adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
+            features |= wgpu::Features::TIMESTAMP_QUERY;
+        }
+
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("Bdip Headless Device"),
-            required_features: wgpu::Features::TEXTURE_FORMAT_16BIT_NORM,
+            required_features: features,
             memory_hints: wgpu::MemoryHints::Performance,
             ..Default::default()
         }))
@@ -32,6 +37,16 @@ impl GpuEngine {
             device,
             queue,
         })
+    }
+
+    pub fn supports_timestamps(&self) -> bool {
+        self.device
+            .features()
+            .contains(wgpu::Features::TIMESTAMP_QUERY)
+    }
+
+    pub fn timestamp_period_ns(&self) -> f32 {
+        self.queue.get_timestamp_period()
     }
 }
 
