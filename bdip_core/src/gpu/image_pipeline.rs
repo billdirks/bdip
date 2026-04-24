@@ -554,7 +554,7 @@ impl Renderer {
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
         encoder.copy_buffer_to_buffer(src_buffer, 0, staging_buf, 0, buffer_size);
-        engine.queue.submit(Some(encoder.finish()));
+        let copy_submission = engine.queue.submit(Some(encoder.finish()));
 
         let buffer_slice = staging_buf.slice(..buffer_size);
         let (tx, rx) = std::sync::mpsc::channel();
@@ -562,9 +562,19 @@ impl Renderer {
             tx.send(result).unwrap();
         });
 
+        // Wait specifically on the copy submission rather than "the most recent
+        // submission". GPU submissions execute in order, so functionally this is
+        // equivalent to `wait_indefinitely` in single-threaded code — but it
+        // makes the contract explicit and is race-free if a future caller submits
+        // additional work from another thread between our submit and our poll.
+        // The map_async callback fires once the device has been polled past the
+        // submission that frees the buffer, which is exactly `copy_submission`.
         engine
             .device
-            .poll(wgpu::PollType::wait_indefinitely())
+            .poll(wgpu::PollType::Wait {
+                submission_index: Some(copy_submission),
+                timeout: None,
+            })
             .unwrap();
 
         if rx.recv().unwrap().is_err() {
@@ -1443,38 +1453,174 @@ mod tests {
 
     // ========== Performance benchmark ==========
 
+    /// Timing for a single cold-or-warm run of the benchmark pipeline. Splitting
+    /// into three buckets attributes cost accurately — without this, GPU shader
+    /// time hides inside the readback timer because `download_slice` contains a
+    /// `device.poll(wait_indefinitely)` that drains any previously-submitted work.
+    ///
+    /// - `execute_ms`: CPU-side command encoding + `queue.submit`. submit() does
+    ///   not block on GPU completion, so this captures only CPU work.
+    /// - `gpu_wait_ms`: wall-clock time blocked inside `device.poll(wait_indefinitely)`
+    ///   after all compute passes are submitted. This IS the GPU shader execution
+    ///   time for the pipeline (ingest+apply+present on cold runs, apply+present on
+    ///   warm).
+    /// - `readback_ms`: the download path only — encode copy_buffer_to_buffer,
+    ///   submit, map_async, poll, memcpy. Excludes the preceding compute work.
+    #[derive(Copy, Clone)]
+    struct PhaseTiming {
+        execute_ms: f64,
+        gpu_wait_ms: f64,
+        readback_ms: f64,
+    }
+
+    impl PhaseTiming {
+        fn critical_path_ms(&self) -> f64 {
+            self.execute_ms + self.gpu_wait_ms + self.readback_ms
+        }
+    }
+
+    /// Runs the cold+warm benchmark pipeline for a given shader and returns
+    /// per-phase timings as `(cold, warm)`. Cold runs ingest+apply+present+download.
+    /// Warm reuses the ingested texture and downloads via `download_slice` to match
+    /// the interactive-editing path.
+    fn bench_shader_roundtrip(
+        engine: &GpuEngine,
+        renderer: &mut Renderer,
+        uploaded: &wgpu::Texture,
+        width: u32,
+        height: u32,
+        transform: &Transform,
+    ) -> (PhaseTiming, PhaseTiming) {
+        use std::time::Instant;
+
+        let wait_for_gpu = || {
+            let t = Instant::now();
+            engine
+                .device
+                .poll(wgpu::PollType::wait_indefinitely())
+                .unwrap();
+            t.elapsed().as_secs_f64() * 1000.0
+        };
+
+        // --- Run 1: cold (shader compilation + initial buffer allocation) ---
+        let t_execute = Instant::now();
+        let ingested = renderer.ingest(engine, uploaded);
+        let transformed = renderer.apply(engine, &ingested, transform);
+        let present_buf = renderer.present(engine, &transformed);
+        let cold = {
+            let execute_ms = t_execute.elapsed().as_secs_f64() * 1000.0;
+            let gpu_wait_ms = wait_for_gpu();
+
+            let t_readback = Instant::now();
+            renderer
+                .download(engine, &present_buf, width, height)
+                .unwrap();
+            let readback_ms = t_readback.elapsed().as_secs_f64() * 1000.0;
+
+            PhaseTiming {
+                execute_ms,
+                gpu_wait_ms,
+                readback_ms,
+            }
+        };
+
+        // --- Run 2: warm (pipelines compiled, staging buffer + pixel_vec cached) ---
+        // Reuses `ingested` directly — matches interactive editing where the base
+        // texture is cached in VRAM across slider changes.
+        let t_execute = Instant::now();
+        let transformed = renderer.apply(engine, &ingested, transform);
+        let present_buf = renderer.present(engine, &transformed);
+        let warm = {
+            let execute_ms = t_execute.elapsed().as_secs_f64() * 1000.0;
+            let gpu_wait_ms = wait_for_gpu();
+
+            let t_readback = Instant::now();
+            renderer
+                .download_slice(engine, &present_buf, width, height)
+                .unwrap();
+            let readback_ms = t_readback.elapsed().as_secs_f64() * 1000.0;
+
+            PhaseTiming {
+                execute_ms,
+                gpu_wait_ms,
+                readback_ms,
+            }
+        };
+
+        (cold, warm)
+    }
+
+    /// Prints a uniform perf report for a shader's cold+warm run. `label` and
+    /// `pass_count` are pulled from the shader registration so the header shows,
+    /// e.g., "Clarity (3 passes)".
+    fn print_perf_report(
+        label: &str,
+        pass_count: usize,
+        cold: &PhaseTiming,
+        warm: &PhaseTiming,
+        warm_target_ms: f64,
+    ) {
+        let header = format!("--- 24 MP GPU roundtrip — {label} ({pass_count} passes) ---");
+        eprintln!("{header}");
+        eprintln!(
+            "  run 1 execute  (cpu encode+submit):     {:>8.2} ms",
+            cold.execute_ms
+        );
+        eprintln!(
+            "  run 1 gpu wait (ingest+apply+present):  {:>8.2} ms",
+            cold.gpu_wait_ms
+        );
+        eprintln!(
+            "  run 1 readback (copy+map+memcpy):       {:>8.2} ms",
+            cold.readback_ms
+        );
+        eprintln!(
+            "  run 1 critical path:                    {:>8.2} ms",
+            cold.critical_path_ms()
+        );
+        eprintln!(
+            "  run 2 execute  (cpu encode+submit):     {:>8.2} ms",
+            warm.execute_ms
+        );
+        eprintln!(
+            "  run 2 gpu wait (apply+present):         {:>8.2} ms",
+            warm.gpu_wait_ms
+        );
+        eprintln!(
+            "  run 2 readback (copy+map+memcpy):       {:>8.2} ms",
+            warm.readback_ms
+        );
+        eprintln!(
+            "  run 2 critical path:                    {:>8.2} ms  (target: <{:.0} ms warm)",
+            warm.critical_path_ms(),
+            warm_target_ms
+        );
+        eprintln!("{}", "-".repeat(header.len()));
+    }
+
+    /// Returns the display name and pass count registered for `shader_id`. Used
+    /// by the perf tests to keep report headers in sync with the registry.
+    fn shader_display_info(shader_id: &'static str) -> (&'static str, usize) {
+        let reg = crate::gpu::shaders::registry_by_id(shader_id)
+            .unwrap_or_else(|| panic!("Unknown shader ID: '{shader_id}'"));
+        (reg.meta.display_name, reg.meta.passes.len())
+    }
+
+    const PERF_WIDTH: u32 = 5000;
+    const PERF_HEIGHT: u32 = 4800;
+    const PERF_WARM_TARGET_MS: f64 = 25.0;
+    const PERF_COLD_TARGET_MS: f64 = 80.0;
+
     /// Times the GPU-critical path on a 24 MP synthetic image — the primary target
-    /// size from perf_goal_1.md.
+    /// size from perf_goal_1.md. Uses the single-pass `brightness` shader to
+    /// exercise the ingest → apply → present → download path with minimal shader
+    /// cost, and asserts both the upload budget and cold/warm critical paths.
     ///
-    /// Two runs are measured to isolate warm-pipeline performance from one-time
-    /// startup costs:
+    /// Two runs isolate warm-pipeline performance from one-time startup costs.
+    /// See `PhaseTiming` for what each timing bucket measures.
     ///
-    /// - **Run 1 (cold)**: upload → ingest → apply → present → download.
-    ///   Includes shader compilation and initial staging buffer allocation.
-    ///   Uses `download` (returns owned `Rgba16Image`) since this is the
-    ///   first call and primes both the staging buffer and pixel_vec caches.
-    /// - **Run 2 (warm)**: apply → present → download_slice, reusing the
-    ///   ingested base texture, cached staging buffer, and pixel_vec from
-    ///   run 1. This matches the interactive editing path
-    ///   (`presentation_to_handle` → `download_slice`), where upload+ingest
-    ///   happen once and are cached across slider changes.
-    ///
-    /// Run 2 is the number to compare against the 8–20 ms target.
-    ///
-    /// This test is ignored by default so it does not run in CI. Run it manually:
+    /// Ignored by default; run manually via:
     ///   cargo perf-test
-    ///
-    /// Measurements on Apple M4 Pro (2026-04) after PR 4 (GPU Upload Conversion):
-    ///   gpu upload:              ~14.81 ms  (Raw u16 upload; no CPU conversion)
-    ///   run 1 execute:           ~1.61 ms
-    ///   run 1 readback:          ~70.85 ms
-    ///   run 1 critical path:     ~72.46 ms
-    ///   run 2 execute:           ~0.42 ms
-    ///   run 2 readback:          ~16.77 ms (reused staging buffer + pixel_vec)
-    ///   run 2 critical path:     ~17.19 ms
-    ///
-    /// Target once all known bottlenecks are resolved (warm, interactive): <20 ms.
-    /// When the target is reliably met, add an assertion and remove #[ignore].
     #[test]
     #[ignore]
     fn test_perf_gpu_roundtrip_24mp() {
@@ -1485,103 +1631,48 @@ mod tests {
 
         // 5000×4800 = 24,000,000 pixels (~24 MP), matching the primary benchmark
         // target in perf_goal_1.md. Generated synthetically — no test asset needed.
-        let img = make_solid_image(5000, 4800, 32767, 32767, 32767);
+        let img = make_solid_image(PERF_WIDTH, PERF_HEIGHT, 32767, 32767, 32767);
 
         let t_upload = Instant::now();
         let uploaded = upload_texture(&engine.device, &engine.queue, &img);
         let upload_ms = t_upload.elapsed().as_secs_f64() * 1000.0;
 
-        // --- Run 1: cold (shader compilation + initial staging buffer allocation) ---
-        let t_execute_1 = Instant::now();
-        let ingested = renderer.ingest(&engine, &uploaded);
-        let transformed_1 = renderer.apply(
+        let transform = Transform {
+            shader_id: "brightness",
+            values: vec![0.1],
+        };
+        let (cold, warm) = bench_shader_roundtrip(
             &engine,
-            &ingested,
-            &Transform {
-                shader_id: "brightness",
-                values: vec![0.1],
-            },
+            &mut renderer,
+            &uploaded,
+            img.width(),
+            img.height(),
+            &transform,
         );
-        let present_buf_1 = renderer.present(&engine, &transformed_1);
-        let execute_ms_1 = t_execute_1.elapsed().as_secs_f64() * 1000.0;
 
-        let t_readback_1 = Instant::now();
-        let _result_1 = renderer
-            .download(&engine, &present_buf_1, img.width(), img.height())
-            .unwrap();
-        let readback_ms_1 = t_readback_1.elapsed().as_secs_f64() * 1000.0;
-        let critical_path_1 = execute_ms_1 + readback_ms_1;
-
-        // --- Run 2: warm (shaders compiled, staging buffer reused) ---
-        // Reuses `ingested` directly — matching interactive editing where the base
-        // texture is cached in VRAM across slider changes.
-        let t_execute_2 = Instant::now();
-        let transformed_2 = renderer.apply(
-            &engine,
-            &ingested,
-            &Transform {
-                shader_id: "brightness",
-                values: vec![0.1],
-            },
-        );
-        let present_buf_2 = renderer.present(&engine, &transformed_2);
-        let execute_ms_2 = t_execute_2.elapsed().as_secs_f64() * 1000.0;
-
-        let t_readback_2 = Instant::now();
-        let _result_2 = renderer
-            .download_slice(&engine, &present_buf_2, img.width(), img.height())
-            .unwrap();
-        let readback_ms_2 = t_readback_2.elapsed().as_secs_f64() * 1000.0;
-        let critical_path_2 = execute_ms_2 + readback_ms_2;
-
-        eprintln!("--- 24 MP GPU roundtrip ---");
-        eprintln!("  gpu upload:                      {:>8.2} ms", upload_ms);
-        eprintln!(
-            "  run 1 execute (ingest+apply+present): {:>8.2} ms",
-            execute_ms_1
-        );
-        eprintln!(
-            "  run 1 readback (download):       {:>8.2} ms",
-            readback_ms_1
-        );
-        eprintln!(
-            "  run 1 critical path:             {:>8.2} ms",
-            critical_path_1
-        );
-        eprintln!(
-            "  run 2 execute (apply+present):   {:>8.2} ms",
-            execute_ms_2
-        );
-        eprintln!(
-            "  run 2 readback (download_slice): {:>8.2} ms",
-            readback_ms_2
-        );
-        eprintln!(
-            "  run 2 critical path:             {:>8.2} ms  (target: <25 ms warm)",
-            critical_path_2
-        );
-        eprintln!("----------------------------------");
+        let (label, pass_count) = shader_display_info(transform.shader_id);
+        eprintln!("  gpu upload:                             {upload_ms:>8.2} ms");
+        print_perf_report(label, pass_count, &cold, &warm, PERF_WARM_TARGET_MS);
 
         assert!(
-            upload_ms < 25.0,
-            "Upload time exceeded 25ms target: {:.2}ms",
-            upload_ms
+            upload_ms < PERF_WARM_TARGET_MS,
+            "Upload time exceeded {PERF_WARM_TARGET_MS:.0}ms target: {upload_ms:.2}ms"
         );
         assert!(
-            critical_path_1 < 80.0,
-            "Run 1 (cold) critical path exceeded 80ms target: {:.2}ms",
-            critical_path_1
+            cold.critical_path_ms() < PERF_COLD_TARGET_MS,
+            "Run 1 (cold) critical path exceeded {PERF_COLD_TARGET_MS:.0}ms target: {:.2}ms",
+            cold.critical_path_ms()
         );
         assert!(
-            critical_path_2 < 25.0,
-            "Run 2 (warm) critical path exceeded 25ms target: {:.2}ms",
-            critical_path_2
+            warm.critical_path_ms() < PERF_WARM_TARGET_MS,
+            "Run 2 (warm) critical path exceeded {PERF_WARM_TARGET_MS:.0}ms target: {:.2}ms",
+            warm.critical_path_ms()
         );
     }
 
     /// Times the GPU critical path on a 24 MP image with the Clarity multi-pass
-    /// shader (3 passes: blur_h, blur_v, combine). Run 2 (warm) is the interactive
-    /// editing latency target — the number to compare against the 25 ms budget.
+    /// shader (blur_h, blur_v, combine). See `test_perf_gpu_roundtrip_24mp` and
+    /// `PhaseTiming` for the measurement model.
     ///
     /// Run manually via:
     ///   cargo perf-test
@@ -1589,93 +1680,38 @@ mod tests {
     #[test]
     #[ignore]
     fn test_perf_gpu_roundtrip_24mp_clarity() {
-        use std::time::Instant;
-
         let engine = GpuEngine::new().unwrap();
         let mut renderer = Renderer::new(&engine);
 
-        let img = make_solid_image(5000, 4800, 32767, 32767, 32767);
-
+        let img = make_solid_image(PERF_WIDTH, PERF_HEIGHT, 32767, 32767, 32767);
         let uploaded = upload_texture(&engine.device, &engine.queue, &img);
 
-        // --- Run 1: cold (shader compilation + initial buffer allocation) ---
-        let t_execute_1 = Instant::now();
-        let ingested = renderer.ingest(&engine, &uploaded);
-        let transformed_1 = renderer.apply(
+        let transform = Transform {
+            shader_id: "clarity",
+            values: vec![0.5],
+        };
+        let (cold, warm) = bench_shader_roundtrip(
             &engine,
-            &ingested,
-            &Transform {
-                shader_id: "clarity",
-                values: vec![0.5],
-            },
+            &mut renderer,
+            &uploaded,
+            img.width(),
+            img.height(),
+            &transform,
         );
-        let present_buf_1 = renderer.present(&engine, &transformed_1);
-        let execute_ms_1 = t_execute_1.elapsed().as_secs_f64() * 1000.0;
 
-        let t_readback_1 = Instant::now();
-        let _result_1 = renderer
-            .download(&engine, &present_buf_1, img.width(), img.height())
-            .unwrap();
-        let readback_ms_1 = t_readback_1.elapsed().as_secs_f64() * 1000.0;
-        let critical_path_1 = execute_ms_1 + readback_ms_1;
-
-        // --- Run 2: warm (pipelines compiled, staging buffer reused) ---
-        let t_execute_2 = Instant::now();
-        let transformed_2 = renderer.apply(
-            &engine,
-            &ingested,
-            &Transform {
-                shader_id: "clarity",
-                values: vec![0.5],
-            },
-        );
-        let present_buf_2 = renderer.present(&engine, &transformed_2);
-        let execute_ms_2 = t_execute_2.elapsed().as_secs_f64() * 1000.0;
-
-        let t_readback_2 = Instant::now();
-        let _result_2 = renderer
-            .download_slice(&engine, &present_buf_2, img.width(), img.height())
-            .unwrap();
-        let readback_ms_2 = t_readback_2.elapsed().as_secs_f64() * 1000.0;
-        let critical_path_2 = execute_ms_2 + readback_ms_2;
-
-        eprintln!("--- 24 MP GPU roundtrip — Clarity ---");
-        eprintln!(
-            "  run 1 execute (ingest+apply+present): {:>8.2} ms",
-            execute_ms_1
-        );
-        eprintln!(
-            "  run 1 readback:                  {:>8.2} ms",
-            readback_ms_1
-        );
-        eprintln!(
-            "  run 1 critical path:             {:>8.2} ms",
-            critical_path_1
-        );
-        eprintln!(
-            "  run 2 execute (apply+present):   {:>8.2} ms",
-            execute_ms_2
-        );
-        eprintln!(
-            "  run 2 readback:                  {:>8.2} ms",
-            readback_ms_2
-        );
-        eprintln!(
-            "  run 2 critical path:             {:>8.2} ms  (target: <25 ms warm)",
-            critical_path_2
-        );
-        eprintln!("--------------------------------------");
+        let (label, pass_count) = shader_display_info(transform.shader_id);
+        print_perf_report(label, pass_count, &cold, &warm, PERF_WARM_TARGET_MS);
 
         assert!(
-            critical_path_2 < 25.0,
-            "Clarity warm critical path exceeded 25 ms target: {:.2} ms",
-            critical_path_2
+            warm.critical_path_ms() < PERF_WARM_TARGET_MS,
+            "{label} warm critical path exceeded {PERF_WARM_TARGET_MS:.0} ms target: {:.2} ms",
+            warm.critical_path_ms()
         );
     }
 
     /// Times the GPU critical path on a 24 MP image with the Cartoon multi-pass
-    /// shader (5 passes: smooth_h, smooth_v, quantize, edges, combine). Run 2 (warm)
-    /// is the interactive editing latency target — compare against the 25 ms budget.
+    /// shader (smooth_h, smooth_v, quantize, edges, combine). See
+    /// `test_perf_gpu_roundtrip_24mp` and `PhaseTiming` for the measurement model.
     ///
     /// Run manually via:
     ///   cargo perf-test
@@ -1683,92 +1719,35 @@ mod tests {
     #[test]
     #[ignore]
     fn test_perf_gpu_roundtrip_24mp_cartoon() {
-        use std::time::Instant;
-
         let engine = GpuEngine::new().unwrap();
         let mut renderer = Renderer::new(&engine);
 
-        let img = make_solid_image(5000, 4800, 32767, 32767, 32767);
-
+        let img = make_solid_image(PERF_WIDTH, PERF_HEIGHT, 32767, 32767, 32767);
         let uploaded = upload_texture(&engine.device, &engine.queue, &img);
 
         // Cartoon default params: strength=0.0, levels=8.0, edge_threshold=0.15,
-        // edge_softness=0.10, edge_darkness=1.0. Using defaults exercises the full
-        // 5-pass pipeline under realistic conditions without assuming specific output.
-        let cartoon_values = vec![0.0f32, 8.0, 0.15, 0.10, 1.0];
-
-        // --- Run 1: cold (shader compilation + initial buffer allocation) ---
-        let t_execute_1 = Instant::now();
-        let ingested = renderer.ingest(&engine, &uploaded);
-        let transformed_1 = renderer.apply(
+        // edge_softness=0.10, edge_darkness=1.0. Defaults exercise the full 5-pass
+        // pipeline under realistic conditions without assuming specific output.
+        let transform = Transform {
+            shader_id: "cartoon",
+            values: vec![0.0f32, 8.0, 0.15, 0.10, 1.0],
+        };
+        let (cold, warm) = bench_shader_roundtrip(
             &engine,
-            &ingested,
-            &Transform {
-                shader_id: "cartoon",
-                values: cartoon_values.clone(),
-            },
+            &mut renderer,
+            &uploaded,
+            img.width(),
+            img.height(),
+            &transform,
         );
-        let present_buf_1 = renderer.present(&engine, &transformed_1);
-        let execute_ms_1 = t_execute_1.elapsed().as_secs_f64() * 1000.0;
 
-        let t_readback_1 = Instant::now();
-        let _result_1 = renderer
-            .download(&engine, &present_buf_1, img.width(), img.height())
-            .unwrap();
-        let readback_ms_1 = t_readback_1.elapsed().as_secs_f64() * 1000.0;
-        let critical_path_1 = execute_ms_1 + readback_ms_1;
-
-        // --- Run 2: warm (pipelines compiled, staging buffer reused) ---
-        let t_execute_2 = Instant::now();
-        let transformed_2 = renderer.apply(
-            &engine,
-            &ingested,
-            &Transform {
-                shader_id: "cartoon",
-                values: cartoon_values,
-            },
-        );
-        let present_buf_2 = renderer.present(&engine, &transformed_2);
-        let execute_ms_2 = t_execute_2.elapsed().as_secs_f64() * 1000.0;
-
-        let t_readback_2 = Instant::now();
-        let _result_2 = renderer
-            .download_slice(&engine, &present_buf_2, img.width(), img.height())
-            .unwrap();
-        let readback_ms_2 = t_readback_2.elapsed().as_secs_f64() * 1000.0;
-        let critical_path_2 = execute_ms_2 + readback_ms_2;
-
-        eprintln!("--- 24 MP GPU roundtrip — Cartoon ---");
-        eprintln!(
-            "  run 1 execute (ingest+apply+present): {:>8.2} ms",
-            execute_ms_1
-        );
-        eprintln!(
-            "  run 1 readback:                  {:>8.2} ms",
-            readback_ms_1
-        );
-        eprintln!(
-            "  run 1 critical path:             {:>8.2} ms",
-            critical_path_1
-        );
-        eprintln!(
-            "  run 2 execute (apply+present):   {:>8.2} ms",
-            execute_ms_2
-        );
-        eprintln!(
-            "  run 2 readback:                  {:>8.2} ms",
-            readback_ms_2
-        );
-        eprintln!(
-            "  run 2 critical path:             {:>8.2} ms  (target: <25 ms warm)",
-            critical_path_2
-        );
-        eprintln!("--------------------------------------");
+        let (label, pass_count) = shader_display_info(transform.shader_id);
+        print_perf_report(label, pass_count, &cold, &warm, PERF_WARM_TARGET_MS);
 
         assert!(
-            critical_path_2 < 25.0,
-            "Cartoon warm critical path exceeded 25 ms target: {:.2} ms",
-            critical_path_2
+            warm.critical_path_ms() < PERF_WARM_TARGET_MS,
+            "{label} warm critical path exceeded {PERF_WARM_TARGET_MS:.0} ms target: {:.2} ms",
+            warm.critical_path_ms()
         );
     }
 }

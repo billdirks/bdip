@@ -126,6 +126,72 @@ This document tracks known architectural shortcuts, generic naming, and structur
 - **Suggested Remediation:** 
   During active slider interaction (the `is_previewing` state), the pipeline should be dispatched against a downscaled proxy texture (e.g., a display-resolution proxy of ~2–5MP) rather than the full-resolution source (e.g., 24MP+). On slider release, the full-resolution result is computed once to ensure the final preview and history entries are high-fidelity. The internal `Renderer::apply` and `Renderer::present` methods are already resolution-independent, so this primarily requires managing the lifecycle of the proxy texture in `BdipApp`.
 
+### Synchronous GPU Readback Blocks the Caller's Thread
+- **Location:** `bdip_core/src/gpu/image_pipeline.rs` (`Renderer::download_slice`),
+  `bdip_core/src/gpu/texture.rs` (`download_presentation_buffer`).
+- **Current Pattern:** Both download paths submit a `copy_buffer_to_buffer`, register a
+  `map_async` callback, then call `device.poll(PollType::Wait { ... })` synchronously.
+  The poll blocks the calling thread until the copy completes and the buffer is mapped
+  (typically ~6 ms warm at 24 MP today, more under heavier shaders). The interactive
+  preview path (`apply` → `present` → `download_slice`) calls this on the UI thread.
+- **Risk:** While the readback is in flight, the UI thread cannot process input,
+  redraw, or service window-system callbacks. At 6 ms this is mostly invisible, but it
+  scales with shader cost and image size, and any future work that lengthens the
+  critical path (larger images, slower GPUs, additional passes) makes it worse. It also
+  prevents overlapping the next frame's CPU work with the current frame's readback.
+- **Suggested Remediation:** Expose an async readback API that returns a future
+  resolving to `&[u16]` / `Rgba16Image`, driven by `wgpu::Device::poll(PollType::Poll)`
+  from a worker thread or a runtime tick. Consumers that tolerate blocking
+  (CLI, tests, file save) can wrap it with a synchronous helper. The interactive UI
+  awaits the future and yields control between submit and map-complete. Concretely:
+  1. Capture the `SubmissionIndex` from `queue.submit` (already in place).
+  2. Drive `device.poll(PollType::Poll)` on a background tick until the map callback
+     fires, instead of `PollType::Wait`.
+  3. Return a future from `download_slice_async`; keep the current sync `download_slice`
+     as a thin wrapper for non-UI callers.
+- **Priority:** Medium-Low. Not blocking today (warm readback is ~6 ms), but worth
+  scheduling before the warm critical path grows or before introducing larger images
+  / slower hardware. The change is contained to the renderer's download surface.
+- **Note:** Investigated as part of the `download_slice` poll-scope cleanup
+  (2026-04-23). The poll itself was tightened to wait on a specific
+  `SubmissionIndex` rather than "the most recent submission", which is a
+  correctness improvement under multi-threaded submission but does not address
+  the synchronous-blocking issue above.
+
+### Preview Occasionally Flashes Black During Rendering
+- **Location:** Unknown. Likely the boundary between `bdip_core`'s renderer output and
+  the `bdip` UI surface (iced/wgpu binding). Not yet narrowed down.
+- **Status:** Reported as an observation (2026-04-23). **No investigation has been done
+  yet** — the hypotheses below are informed guesses, not findings. Treat them as a
+  starting list to disprove, not as a diagnosis.
+- **Symptom:** During interactive preview rendering, the image occasionally flashes
+  black for a frame.
+- **Hypotheses (unverified):**
+  1. **Per-call `present` output buffer reallocation.** `Renderer::present_with_max_binding`
+     allocates a fresh `output_buffer` on every call (`image_pipeline.rs` ~line 388). If
+     the UI is holding a texture handle that gets rebound to the new buffer before the
+     GPU has finished writing it, samplers see uninitialized memory (commonly zeros →
+     black).
+  2. **UI samples the texture before `download_slice` / present writes complete.** If
+     the iced/wgpu surface binds the renderer's output and draws it on a frame where
+     the GPU writes haven't completed (insufficient sync between renderer submission
+     and surface composition), the surface reads undefined contents.
+  3. **Slider-drag race.** A new `apply` is enqueued while a previous `download_slice`
+     is still draining. If the in-flight present buffer or texture handle is recycled
+     mid-frame, the UI may render against a half-written or already-freed resource.
+  4. **Ruled out (sort of):** synchronous blocking in `download_slice` (smell #2 above)
+     does *not* produce black frames on its own — it freezes the UI thread, which
+     leaves the last-presented pixels on screen. Black means something *is* being
+     rendered with wrong contents.
+- **Suggested Next Steps:** Trace the preview path in `bdip/src/` — find where the
+  renderer's output texture/buffer is bound to the iced surface and how slider events
+  trigger re-render. Add temporary logging around present-buffer creation and surface
+  rebinds to correlate with observed black frames. Consider running with
+  `WGPU_BACKEND_VALIDATION=1` and a wgpu validation layer to surface any usage
+  violations.
+- **Priority:** Medium. User-visible glitch on the primary interactive flow, but rare
+  enough to defer until we have time to reproduce reliably.
+
 ### Pipeline Latency Investigation (Profiling)
 - **Location:** `bdip_core/src/gpu/pipeline.rs` (`test_perf_gpu_roundtrip_24mp`)
 - **Goal:** Profile the warm editing path to identify bottlenecks and understand if there are opportunities for further speed improvements on 24MP+ images.
@@ -148,4 +214,26 @@ This document tracks known architectural shortcuts, generic naming, and structur
   2.  Update all shader `META` definitions to include concise, helpful descriptions.
   3.  Implement hover tooltips in the `bdip` UI (via `iced` or similar) to show these descriptions
       when hovering over parameter names in the sidebar.
-- **Priority:** Low. Beneficial for UX and discoverability as the shader library grows.
+### Performance Test Gating & Isolation
+- **Location:** `bdip_core/src/gpu/image_pipeline.rs` (`test_perf_gpu_roundtrip_24mp*`)
+- **Current Pattern:** Performance benchmarks are co-located with unit tests in the main source
+  files and gated using `#[ignore]`. The `cargo perf-test` alias relies on a brittle name-prefix
+  filter to select them.
+- **Risk:** This violates the project's "Testing Pyramid" philosophy (keeping `src/` restricted to
+  fast, isolated unit tests). These heavy tests increase compilation time for standard
+  development runs and clutter the "ignored" count in unit test output.
+- **Suggested Remediation:** 
+  1. Move all 24 MP roundtrip benchmarks to a dedicated integration test target:
+     `bdip_core/tests/performance.rs`.
+  2. Update the `perf-test` alias in `.cargo/config.toml` to use `cargo test --test performance`
+     instead of name-prefix filtering. 
+  3. This eliminates the need for `#[ignore]` gating entirely, as integration tests are not run
+     by `cargo test` unless explicitly targeted or run via the workspace root.
+- **Alternatives Considered:** 
+  - **Feature Gating (`#[cfg(feature = "perf")]`):** This was rejected because running 
+    `cargo test --features perf` would still execute all regular unit tests alongside the 
+    benchmarks. To isolate just the performance tests, name-prefix filtering would still be 
+    required. Integration tests provide a cleaner "all-or-nothing" execution model that 
+    preserves the isolation of the unit test suite.
+- **Priority:** Low. Primarily an architectural cleanup to maintain test suite hygiene as the
+  number of shaders and benchmarks grows.

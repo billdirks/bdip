@@ -82,7 +82,7 @@ pub fn download_presentation_buffer(
     let mut encoder =
         device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
     encoder.copy_buffer_to_buffer(src_buffer, 0, &staging_buffer, 0, buffer_size);
-    queue.submit(Some(encoder.finish()));
+    let copy_submission = queue.submit(Some(encoder.finish()));
 
     let buffer_slice = staging_buffer.slice(..);
     let (tx, rx) = std::sync::mpsc::channel();
@@ -90,7 +90,15 @@ pub fn download_presentation_buffer(
         tx.send(result).unwrap();
     });
 
-    device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+    // See `Renderer::download_slice` for the rationale: poll specifically on
+    // our copy submission so the readback never accidentally waits on, or hides
+    // the cost of, unrelated work submitted from another thread.
+    device
+        .poll(wgpu::PollType::Wait {
+            submission_index: Some(copy_submission),
+            timeout: None,
+        })
+        .unwrap();
 
     if rx.recv().unwrap().is_err() {
         return Err(crate::error::BdipError::Gpu(
