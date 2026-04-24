@@ -1476,6 +1476,7 @@ mod tests {
     /// Target once all known bottlenecks are resolved (warm, interactive): <20 ms.
     /// When the target is reliably met, add an assertion and remove #[ignore].
     #[test]
+    #[ignore]
     fn test_perf_gpu_roundtrip_24mp() {
         use std::time::Instant;
 
@@ -1574,6 +1575,199 @@ mod tests {
         assert!(
             critical_path_2 < 25.0,
             "Run 2 (warm) critical path exceeded 25ms target: {:.2}ms",
+            critical_path_2
+        );
+    }
+
+    /// Times the GPU critical path on a 24 MP image with the Clarity multi-pass
+    /// shader (3 passes: blur_h, blur_v, combine). Run 2 (warm) is the interactive
+    /// editing latency target — the number to compare against the 25 ms budget.
+    ///
+    /// Run manually via:
+    ///   cargo perf-test
+    ///   cargo test --release -p bdip_core -- --ignored test_perf_gpu_roundtrip_24mp_clarity
+    #[test]
+    #[ignore]
+    fn test_perf_gpu_roundtrip_24mp_clarity() {
+        use std::time::Instant;
+
+        let engine = GpuEngine::new().unwrap();
+        let mut renderer = Renderer::new(&engine);
+
+        let img = make_solid_image(5000, 4800, 32767, 32767, 32767);
+
+        let uploaded = upload_texture(&engine.device, &engine.queue, &img);
+
+        // --- Run 1: cold (shader compilation + initial buffer allocation) ---
+        let t_execute_1 = Instant::now();
+        let ingested = renderer.ingest(&engine, &uploaded);
+        let transformed_1 = renderer.apply(
+            &engine,
+            &ingested,
+            &Transform {
+                shader_id: "clarity",
+                values: vec![0.5],
+            },
+        );
+        let present_buf_1 = renderer.present(&engine, &transformed_1);
+        let execute_ms_1 = t_execute_1.elapsed().as_secs_f64() * 1000.0;
+
+        let t_readback_1 = Instant::now();
+        let _result_1 = renderer
+            .download(&engine, &present_buf_1, img.width(), img.height())
+            .unwrap();
+        let readback_ms_1 = t_readback_1.elapsed().as_secs_f64() * 1000.0;
+        let critical_path_1 = execute_ms_1 + readback_ms_1;
+
+        // --- Run 2: warm (pipelines compiled, staging buffer reused) ---
+        let t_execute_2 = Instant::now();
+        let transformed_2 = renderer.apply(
+            &engine,
+            &ingested,
+            &Transform {
+                shader_id: "clarity",
+                values: vec![0.5],
+            },
+        );
+        let present_buf_2 = renderer.present(&engine, &transformed_2);
+        let execute_ms_2 = t_execute_2.elapsed().as_secs_f64() * 1000.0;
+
+        let t_readback_2 = Instant::now();
+        let _result_2 = renderer
+            .download_slice(&engine, &present_buf_2, img.width(), img.height())
+            .unwrap();
+        let readback_ms_2 = t_readback_2.elapsed().as_secs_f64() * 1000.0;
+        let critical_path_2 = execute_ms_2 + readback_ms_2;
+
+        eprintln!("--- 24 MP GPU roundtrip — Clarity ---");
+        eprintln!(
+            "  run 1 execute (ingest+apply+present): {:>8.2} ms",
+            execute_ms_1
+        );
+        eprintln!(
+            "  run 1 readback:                  {:>8.2} ms",
+            readback_ms_1
+        );
+        eprintln!(
+            "  run 1 critical path:             {:>8.2} ms",
+            critical_path_1
+        );
+        eprintln!(
+            "  run 2 execute (apply+present):   {:>8.2} ms",
+            execute_ms_2
+        );
+        eprintln!(
+            "  run 2 readback:                  {:>8.2} ms",
+            readback_ms_2
+        );
+        eprintln!(
+            "  run 2 critical path:             {:>8.2} ms  (target: <25 ms warm)",
+            critical_path_2
+        );
+        eprintln!("--------------------------------------");
+
+        assert!(
+            critical_path_2 < 25.0,
+            "Clarity warm critical path exceeded 25 ms target: {:.2} ms",
+            critical_path_2
+        );
+    }
+
+    /// Times the GPU critical path on a 24 MP image with the Cartoon multi-pass
+    /// shader (5 passes: smooth_h, smooth_v, quantize, edges, combine). Run 2 (warm)
+    /// is the interactive editing latency target — compare against the 25 ms budget.
+    ///
+    /// Run manually via:
+    ///   cargo perf-test
+    ///   cargo test --release -p bdip_core -- --ignored test_perf_gpu_roundtrip_24mp_cartoon
+    #[test]
+    #[ignore]
+    fn test_perf_gpu_roundtrip_24mp_cartoon() {
+        use std::time::Instant;
+
+        let engine = GpuEngine::new().unwrap();
+        let mut renderer = Renderer::new(&engine);
+
+        let img = make_solid_image(5000, 4800, 32767, 32767, 32767);
+
+        let uploaded = upload_texture(&engine.device, &engine.queue, &img);
+
+        // Cartoon default params: strength=0.0, levels=8.0, edge_threshold=0.15,
+        // edge_softness=0.10, edge_darkness=1.0. Using defaults exercises the full
+        // 5-pass pipeline under realistic conditions without assuming specific output.
+        let cartoon_values = vec![0.0f32, 8.0, 0.15, 0.10, 1.0];
+
+        // --- Run 1: cold (shader compilation + initial buffer allocation) ---
+        let t_execute_1 = Instant::now();
+        let ingested = renderer.ingest(&engine, &uploaded);
+        let transformed_1 = renderer.apply(
+            &engine,
+            &ingested,
+            &Transform {
+                shader_id: "cartoon",
+                values: cartoon_values.clone(),
+            },
+        );
+        let present_buf_1 = renderer.present(&engine, &transformed_1);
+        let execute_ms_1 = t_execute_1.elapsed().as_secs_f64() * 1000.0;
+
+        let t_readback_1 = Instant::now();
+        let _result_1 = renderer
+            .download(&engine, &present_buf_1, img.width(), img.height())
+            .unwrap();
+        let readback_ms_1 = t_readback_1.elapsed().as_secs_f64() * 1000.0;
+        let critical_path_1 = execute_ms_1 + readback_ms_1;
+
+        // --- Run 2: warm (pipelines compiled, staging buffer reused) ---
+        let t_execute_2 = Instant::now();
+        let transformed_2 = renderer.apply(
+            &engine,
+            &ingested,
+            &Transform {
+                shader_id: "cartoon",
+                values: cartoon_values,
+            },
+        );
+        let present_buf_2 = renderer.present(&engine, &transformed_2);
+        let execute_ms_2 = t_execute_2.elapsed().as_secs_f64() * 1000.0;
+
+        let t_readback_2 = Instant::now();
+        let _result_2 = renderer
+            .download_slice(&engine, &present_buf_2, img.width(), img.height())
+            .unwrap();
+        let readback_ms_2 = t_readback_2.elapsed().as_secs_f64() * 1000.0;
+        let critical_path_2 = execute_ms_2 + readback_ms_2;
+
+        eprintln!("--- 24 MP GPU roundtrip — Cartoon ---");
+        eprintln!(
+            "  run 1 execute (ingest+apply+present): {:>8.2} ms",
+            execute_ms_1
+        );
+        eprintln!(
+            "  run 1 readback:                  {:>8.2} ms",
+            readback_ms_1
+        );
+        eprintln!(
+            "  run 1 critical path:             {:>8.2} ms",
+            critical_path_1
+        );
+        eprintln!(
+            "  run 2 execute (apply+present):   {:>8.2} ms",
+            execute_ms_2
+        );
+        eprintln!(
+            "  run 2 readback:                  {:>8.2} ms",
+            readback_ms_2
+        );
+        eprintln!(
+            "  run 2 critical path:             {:>8.2} ms  (target: <25 ms warm)",
+            critical_path_2
+        );
+        eprintln!("--------------------------------------");
+
+        assert!(
+            critical_path_2 < 25.0,
+            "Cartoon warm critical path exceeded 25 ms target: {:.2} ms",
             critical_path_2
         );
     }

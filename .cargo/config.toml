@@ -12,8 +12,10 @@ headless = "run -p bdip -- --headless"
 # Run headless release CLI processing (e.g., cargo headless img.jpg --output out.png --apply brightness:0.5)
 headless-release = "run -p bdip --release -- --headless"
 
-# Run the 24 MP GPU roundtrip performance benchmark.
-perf-test = "test -p bdip_core -- --nocapture test_perf_gpu_roundtrip_24mp"
+# Run all 24 MP GPU roundtrip performance benchmarks (brightness, Clarity, Cartoon).
+# --ignored selects only the three #[ignore]-gated perf tests; --test-threads=1
+# runs them sequentially to avoid GPU contention during readback.
+perf-test = "test --release -p bdip_core -- --nocapture --ignored --test-threads=1 test_perf_gpu_roundtrip_24mp"
 
 # Run rigorous static analysis (as required by .cursorrules)
 lint = "clippy --workspace --all-targets --all-features"
