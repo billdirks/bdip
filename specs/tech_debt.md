@@ -214,26 +214,3 @@ This document tracks known architectural shortcuts, generic naming, and structur
   2.  Update all shader `META` definitions to include concise, helpful descriptions.
   3.  Implement hover tooltips in the `bdip` UI (via `iced` or similar) to show these descriptions
       when hovering over parameter names in the sidebar.
-### Performance Test Gating & Isolation
-- **Location:** `bdip_core/src/gpu/image_pipeline.rs` (`test_perf_gpu_roundtrip_24mp*`)
-- **Current Pattern:** Performance benchmarks are co-located with unit tests in the main source
-  files and gated using `#[ignore]`. The `cargo perf-test` alias relies on a brittle name-prefix
-  filter to select them.
-- **Risk:** This violates the project's "Testing Pyramid" philosophy (keeping `src/` restricted to
-  fast, isolated unit tests). These heavy tests increase compilation time for standard
-  development runs and clutter the "ignored" count in unit test output.
-- **Suggested Remediation:** 
-  1. Move all 24 MP roundtrip benchmarks to a dedicated integration test target:
-     `bdip_core/tests/performance.rs`.
-  2. Update the `perf-test` alias in `.cargo/config.toml` to use `cargo test --test performance`
-     instead of name-prefix filtering. 
-  3. This eliminates the need for `#[ignore]` gating entirely, as integration tests are not run
-     by `cargo test` unless explicitly targeted or run via the workspace root.
-- **Alternatives Considered:** 
-  - **Feature Gating (`#[cfg(feature = "perf")]`):** This was rejected because running 
-    `cargo test --features perf` would still execute all regular unit tests alongside the 
-    benchmarks. To isolate just the performance tests, name-prefix filtering would still be 
-    required. Integration tests provide a cleaner "all-or-nothing" execution model that 
-    preserves the isolation of the unit test suite.
-- **Priority:** Low. Primarily an architectural cleanup to maintain test suite hygiene as the
-  number of shaders and benchmarks grows.
