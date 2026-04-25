@@ -45,6 +45,15 @@ pub enum PassOutput {
     Final,
 }
 
+/// Output texture resolution relative to the source image.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PassScale {
+    /// Same dimensions as the source image.
+    Full,
+    /// Integer downscale: output is `(source_width / N, source_height / N)`.
+    Down(u32),
+}
+
 /// Declarative description of one compute pass.
 #[derive(Debug, Clone, Copy)]
 pub struct PassDef {
@@ -52,6 +61,7 @@ pub struct PassDef {
     pub wgsl_source: &'static str,
     pub inputs: &'static [PassInput],
     pub output: PassOutput,
+    pub output_scale: PassScale,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -350,12 +360,14 @@ mod tests {
                 wgsl_source: "",
                 inputs: &[PassInput::Source],
                 output: PassOutput::Final, // Final not at last position
+                output_scale: PassScale::Full,
             },
             PassDef {
                 label: "b",
                 wgsl_source: "",
                 inputs: &[PassInput::Source],
                 output: PassOutput::Final,
+                output_scale: PassScale::Full,
             },
         ];
         let result = std::panic::catch_unwind(|| validate_pass_list(PASSES));
@@ -374,6 +386,7 @@ mod tests {
             wgsl_source: "",
             inputs: &[PassInput::Scratch("h")], // "h" never written
             output: PassOutput::Final,
+            output_scale: PassScale::Full,
         }];
         let result = std::panic::catch_unwind(|| validate_pass_list(PASSES));
         assert!(result.is_err(), "expected panic: unresolved scratch input");
@@ -389,18 +402,21 @@ mod tests {
                 wgsl_source: "",
                 inputs: &[PassInput::Source],
                 output: PassOutput::Scratch("h"),
+                output_scale: PassScale::Full,
             },
             PassDef {
                 label: "b",
                 wgsl_source: "",
                 inputs: &[PassInput::Source],
                 output: PassOutput::Scratch("h"), // duplicate write
+                output_scale: PassScale::Full,
             },
             PassDef {
                 label: "c",
                 wgsl_source: "",
                 inputs: &[PassInput::Scratch("h")],
                 output: PassOutput::Final,
+                output_scale: PassScale::Full,
             },
         ];
         let result = std::panic::catch_unwind(|| validate_pass_list(PASSES));

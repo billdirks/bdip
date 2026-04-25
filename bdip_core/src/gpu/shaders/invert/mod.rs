@@ -1,4 +1,4 @@
-use crate::gpu::shaders::{ParamKind, PassDef, PassInput, PassOutput, TransformShader};
+use crate::gpu::shaders::{ParamKind, PassDef, PassInput, PassOutput, PassScale, TransformShader};
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -15,6 +15,7 @@ impl TransformShader for InvertParams {
         wgsl_source: include_str!("invert.wgsl"),
         inputs: &[PassInput::Source],
         output: PassOutput::Final,
+        output_scale: PassScale::Full,
     }];
 
     fn from_values(_: &[f32]) -> Self {

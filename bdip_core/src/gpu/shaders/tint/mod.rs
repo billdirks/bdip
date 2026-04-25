@@ -1,4 +1,6 @@
-use crate::gpu::shaders::{ParamKind, PassDef, PassInput, PassOutput, SliderDef, TransformShader};
+use crate::gpu::shaders::{
+    ParamKind, PassDef, PassInput, PassOutput, PassScale, SliderDef, TransformShader,
+};
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -21,6 +23,7 @@ impl TransformShader for TintParams {
         wgsl_source: include_str!("tint.wgsl"),
         inputs: &[PassInput::Source],
         output: PassOutput::Final,
+        output_scale: PassScale::Full,
     }];
 
     fn from_values(values: &[f32]) -> Self {

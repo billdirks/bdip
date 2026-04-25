@@ -1,4 +1,6 @@
-use crate::gpu::shaders::{ParamKind, PassDef, PassInput, PassOutput, SliderDef, TransformShader};
+use crate::gpu::shaders::{
+    ParamKind, PassDef, PassInput, PassOutput, PassScale, SliderDef, TransformShader,
+};
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -22,18 +24,21 @@ impl TransformShader for ClarityParams {
             wgsl_source: include_str!("blur_h.wgsl"),
             inputs: &[PassInput::Source],
             output: PassOutput::Scratch("h"),
+            output_scale: PassScale::Full,
         },
         PassDef {
             label: "blur_v",
             wgsl_source: include_str!("blur_v.wgsl"),
             inputs: &[PassInput::Scratch("h")],
             output: PassOutput::Scratch("v"),
+            output_scale: PassScale::Full,
         },
         PassDef {
             label: "combine",
             wgsl_source: include_str!("combine.wgsl"),
             inputs: &[PassInput::Source, PassInput::Scratch("v")],
             output: PassOutput::Final,
+            output_scale: PassScale::Full,
         },
     ];
 

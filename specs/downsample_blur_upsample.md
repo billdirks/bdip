@@ -302,20 +302,11 @@ All existing Clarity and Cartoon unit tests should continue to pass. Key conside
   on non-identity amounts. Monitor whether the tolerance needs widening. If so, document
   the cause.
 
-### New tests
+### New tests (assigned to PRs)
 
-1. **Downsample-upsample roundtrip accuracy**: Downsample a synthetic image by 4×, then
-   upsample. Compare against the original. For a smooth image (no frequencies above
-   Nyquist), the roundtrip should be near-lossless (±a few u16 for f16 precision).
-
-2. **Blur equivalence**: Run Clarity at a small image size (e.g., 64×64) where the
-   downsample factor makes the reduced image very small (16×16). Compare the output
-   against a reference at larger sizes where the approximation is tighter. This stress
-   tests edge cases. (Optional — the behavioral tests already cover correctness.)
-
-3. **Scratch pool multi-resolution reuse**: After running Clarity twice at the same
-   dimensions, verify the pool holds textures at both full and quarter resolution and
-   that they are reused across runs.
+1. **Scratch pool multi-resolution reuse** → PR 1
+2. **Downsample-upsample roundtrip accuracy** → PR 2
+3. **Blur equivalence at small image sizes** → PR 2 (optional)
 
 ### Perf tests
 
@@ -409,6 +400,16 @@ list, and verify correctness + performance. This is the first shader to use the
    The existing blur_h.wgsl, blur_v.wgsl, and combine.wgsl are not modified — they
    adapt to the smaller input via `textureDimensions()`. Update the metadata test
    (`test_clarity_registry_metadata`) to expect 5 passes instead of 3.
+
+**New tests to add:**
+- **Downsample-upsample roundtrip accuracy**: In `clarity/mod.rs` tests, create a
+  two-pass shader-level test (or use `roundtrip` with the new 5-pass Clarity at
+  `amount=0`) that confirms a smooth synthetic image survives the
+  downsample → blur → upsample path with minimal error (±a few u16 for f16
+  precision). This validates the new WGSL shaders produce correct output.
+- **Blur equivalence at small image sizes** (optional): Run Clarity on a 64×64 image
+  (downsample produces 16×16) and verify the behavioral tests still hold. This stress
+  tests the degenerate-size edge case.
 
 **Verification:**
 - `cargo test -p bdip_core` — all Clarity unit tests must pass. The identity test

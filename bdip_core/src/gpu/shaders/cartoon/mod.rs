@@ -1,4 +1,6 @@
-use crate::gpu::shaders::{ParamKind, PassDef, PassInput, PassOutput, SliderDef, TransformShader};
+use crate::gpu::shaders::{
+    ParamKind, PassDef, PassInput, PassOutput, PassScale, SliderDef, TransformShader,
+};
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -52,24 +54,28 @@ impl TransformShader for CartoonParams {
             wgsl_source: include_str!("smooth_h.wgsl"),
             inputs: &[PassInput::Source],
             output: PassOutput::Scratch("sh"),
+            output_scale: PassScale::Full,
         },
         PassDef {
             label: "smooth_v",
             wgsl_source: include_str!("smooth_v.wgsl"),
             inputs: &[PassInput::Scratch("sh")],
             output: PassOutput::Scratch("smooth"),
+            output_scale: PassScale::Full,
         },
         PassDef {
             label: "quantize",
             wgsl_source: include_str!("quantize.wgsl"),
             inputs: &[PassInput::Scratch("smooth")],
             output: PassOutput::Scratch("quant"),
+            output_scale: PassScale::Full,
         },
         PassDef {
             label: "edges",
             wgsl_source: include_str!("edges.wgsl"),
             inputs: &[PassInput::Source],
             output: PassOutput::Scratch("edges"),
+            output_scale: PassScale::Full,
         },
         PassDef {
             label: "combine",
@@ -80,6 +86,7 @@ impl TransformShader for CartoonParams {
                 PassInput::Scratch("edges"),
             ],
             output: PassOutput::Final,
+            output_scale: PassScale::Full,
         },
     ];
 

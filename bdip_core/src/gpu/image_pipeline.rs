@@ -1,4 +1,5 @@
 use crate::gpu::engine::GpuEngine;
+use crate::gpu::shaders::PassScale;
 use crate::gpu::shaders::{PassInput, PassOutput, Transform, registry_by_id};
 use std::collections::{HashMap, hash_map::Entry};
 use wgpu::{
@@ -162,9 +163,9 @@ fn build_pass_bind_group_layout(
 // ========== ScratchPool ==========
 
 struct ScratchPool {
-    width: u32,
-    height: u32,
-    textures: Vec<wgpu::Texture>,
+    source_width: u32,
+    source_height: u32,
+    textures: Vec<(wgpu::Texture, u32, u32)>,
 }
 
 // ========== Renderer ==========
@@ -333,8 +334,8 @@ impl Renderer {
             present_params_bind_group_layout,
             passes_cache: ShaderPassesCache::new(),
             scratch_pool: ScratchPool {
-                width: 0,
-                height: 0,
+                source_width: 0,
+                source_height: 0,
                 textures: Vec::new(),
             },
             staging_buffer: None,
@@ -811,10 +812,10 @@ impl Renderer {
     }
 
     fn sync_scratch_pool_dims(&mut self, width: u32, height: u32) {
-        if self.scratch_pool.width != width || self.scratch_pool.height != height {
+        if self.scratch_pool.source_width != width || self.scratch_pool.source_height != height {
             self.scratch_pool.textures.clear();
-            self.scratch_pool.width = width;
-            self.scratch_pool.height = height;
+            self.scratch_pool.source_width = width;
+            self.scratch_pool.source_height = height;
         }
     }
 
@@ -832,13 +833,25 @@ impl Renderer {
             if let PassOutput::Scratch(name) = pass.output
                 && let Entry::Vacant(e) = borrowed.entry(name)
             {
-                let tex = self.scratch_pool.textures.pop().unwrap_or_else(|| {
+                let (needed_w, needed_h) = match pass.output_scale {
+                    PassScale::Full => (width, height),
+                    PassScale::Down(n) => (width / n, height / n),
+                };
+                let pool_idx = self
+                    .scratch_pool
+                    .textures
+                    .iter()
+                    .position(|(_, w, h)| *w == needed_w && *h == needed_h);
+                let tex = if let Some(idx) = pool_idx {
+                    let (tex, _, _) = self.scratch_pool.textures.swap_remove(idx);
+                    tex
+                } else {
                     let label = format!("{}::{}", shader_id, name);
                     engine.device.create_texture(&wgpu::TextureDescriptor {
-                        label: Some(&label), // Tier 1: relabel on borrow (here at allocation)
+                        label: Some(&label),
                         size: wgpu::Extent3d {
-                            width,
-                            height,
+                            width: needed_w,
+                            height: needed_h,
                             depth_or_array_layers: depth,
                         },
                         mip_level_count: 1,
@@ -849,7 +862,7 @@ impl Renderer {
                             | wgpu::TextureUsages::STORAGE_BINDING,
                         view_formats: &[],
                     })
-                });
+                };
                 e.insert(tex);
             }
         }
@@ -858,7 +871,9 @@ impl Renderer {
 
     fn return_scratch_textures(&mut self, textures: HashMap<&'static str, wgpu::Texture>) {
         for (_, tex) in textures {
-            self.scratch_pool.textures.push(tex);
+            let w = tex.width();
+            let h = tex.height();
+            self.scratch_pool.textures.push((tex, w, h));
         }
     }
 
@@ -1016,7 +1031,7 @@ impl Renderer {
             borrowed_views.insert(*name, tex.create_view(&TextureViewDescriptor::default()));
         }
 
-        let (width, height) = (src_texture.width(), src_texture.height());
+        let (src_width, src_height) = (src_texture.width(), src_texture.height());
 
         for (pass_idx, pass) in passes.iter().enumerate() {
             let pipeline = &pipelines[pass_idx];
@@ -1067,6 +1082,11 @@ impl Renderer {
                 }
             });
 
+            let (out_w, out_h) = match pass.output_scale {
+                PassScale::Full => (src_width, src_height),
+                PassScale::Down(n) => (src_width / n, src_height / n),
+            };
+
             {
                 let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                     label: Some(pass.label),
@@ -1075,28 +1095,34 @@ impl Renderer {
                 cpass.set_pipeline(&pipeline.pipeline);
                 cpass.set_bind_group(0, &texture_bind_group, &[]);
                 cpass.set_bind_group(1, &params_bind_group, &[]);
-                cpass.dispatch_workgroups(width.div_ceil(16), height.div_ceil(16), 1);
+                cpass.dispatch_workgroups(out_w.div_ceil(16), out_h.div_ceil(16), 1);
             }
         }
     }
 
+    /// Returns the pool's source dimensions and free-list count. Source dimensions
+    /// are the key used to invalidate the pool when the image size changes.
     #[cfg(test)]
     pub(crate) fn scratch_pool_info(&self) -> ((u32, u32), usize) {
         (
-            (self.scratch_pool.width, self.scratch_pool.height),
+            (
+                self.scratch_pool.source_width,
+                self.scratch_pool.source_height,
+            ),
             self.scratch_pool.textures.len(),
         )
     }
 
-    /// Returns the pool's current dimensions and the texture at `index` in the
-    /// free list. Used by tests to assert both the active pool size and that the
-    /// same physical GPU allocation is reused across runs (pointer identity is a
-    /// stronger claim than "a texture of the same shape exists").
+    /// Returns the per-texture dimensions and the texture at `index` in the free
+    /// list. Used by tests to assert that the same physical GPU allocation is
+    /// reused across runs (pointer identity is a stronger claim than "a texture
+    /// of the same shape exists").
     #[cfg(test)]
     pub(crate) fn scratch_pool_handle(&self, index: usize) -> ((u32, u32), Option<&wgpu::Texture>) {
-        let dims = (self.scratch_pool.width, self.scratch_pool.height);
-        let tex = self.scratch_pool.textures.get(index);
-        (dims, tex)
+        match self.scratch_pool.textures.get(index) {
+            Some((tex, w, h)) => ((*w, *h), Some(tex)),
+            None => ((0, 0), None),
+        }
     }
 }
 
@@ -1614,6 +1640,74 @@ mod tests {
         assert_eq!(
             ptrs_first, ptrs_second,
             "same physical scratch textures must be reused on the second run"
+        );
+    }
+
+    /// With the tagged pool, each returned texture carries its actual dimensions.
+    /// Running Clarity (all-Full passes, 8×8 image) must produce two pool
+    /// entries each tagged (8, 8), and the same physical allocations must be
+    /// reused on the second run.
+    #[test]
+    fn test_multi_pass_scratch_pool_reuses_mixed_resolution() {
+        let engine = GpuEngine::new().unwrap();
+        let mut renderer = Renderer::new(&engine);
+        let img = make_solid_image(8, 8, 32767, 32767, 32767);
+        let transform = Transform {
+            shader_id: "clarity",
+            values: vec![0.0],
+        };
+
+        roundtrip(
+            &mut renderer,
+            &engine,
+            &img,
+            std::slice::from_ref(&transform),
+        );
+        let (source_dims, pool_len) = renderer.scratch_pool_info();
+        assert_eq!(source_dims, (8, 8), "source dims must reflect image size");
+        assert_eq!(
+            pool_len, 2,
+            "pool must hold 2 scratch textures after first run"
+        );
+
+        // Each pooled texture carries per-texture dims (Full → same as source).
+        let (tex0_dims, tex0) = renderer.scratch_pool_handle(0);
+        let (tex1_dims, tex1) = renderer.scratch_pool_handle(1);
+        assert_eq!(
+            tex0_dims,
+            (8, 8),
+            "pool texture 0 must be tagged with full-res dims"
+        );
+        assert_eq!(
+            tex1_dims,
+            (8, 8),
+            "pool texture 1 must be tagged with full-res dims"
+        );
+        let ptr0_first = tex0.unwrap() as *const wgpu::Texture;
+        let ptr1_first = tex1.unwrap() as *const wgpu::Texture;
+
+        roundtrip(
+            &mut renderer,
+            &engine,
+            &img,
+            std::slice::from_ref(&transform),
+        );
+        let (_, pool_len) = renderer.scratch_pool_info();
+        assert_eq!(
+            pool_len, 2,
+            "pool must still hold 2 scratch textures after second run"
+        );
+
+        let (_, tex0_second) = renderer.scratch_pool_handle(0);
+        let (_, tex1_second) = renderer.scratch_pool_handle(1);
+        let ptr0_second = tex0_second.unwrap() as *const wgpu::Texture;
+        let ptr1_second = tex1_second.unwrap() as *const wgpu::Texture;
+
+        let ptrs_first: std::collections::HashSet<_> = [ptr0_first, ptr1_first].into();
+        let ptrs_second: std::collections::HashSet<_> = [ptr0_second, ptr1_second].into();
+        assert_eq!(
+            ptrs_first, ptrs_second,
+            "tagged pool must reuse the same physical scratch textures on the second run"
         );
     }
 }
