@@ -161,6 +161,11 @@ too (where the user actually wants the full-res blur, not a proxy). Proxy render
 is valuable as a defensive fallback but doesn't reduce the actual work — it just
 postpones it.
 
+## Recommnedations Implemented
+
+1. [Done] Add timestamp queries
+2. [Done] Downsample-blur-upsample
+
 ## Notes on measurement methodology
 
 These numbers come from `cargo perf-test` after the timer split landed
