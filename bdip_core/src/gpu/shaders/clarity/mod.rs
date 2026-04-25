@@ -20,23 +20,37 @@ impl TransformShader for ClarityParams {
     }]);
     const PASSES: &'static [PassDef] = &[
         PassDef {
+            label: "down",
+            wgsl_source: include_str!("downsample.wgsl"),
+            inputs: &[PassInput::Source],
+            output: PassOutput::Scratch("down"),
+            output_scale: PassScale::Down(4),
+        },
+        PassDef {
             label: "blur_h",
             wgsl_source: include_str!("blur_h.wgsl"),
-            inputs: &[PassInput::Source],
+            inputs: &[PassInput::Scratch("down")],
             output: PassOutput::Scratch("h"),
-            output_scale: PassScale::Full,
+            output_scale: PassScale::Down(4),
         },
         PassDef {
             label: "blur_v",
             wgsl_source: include_str!("blur_v.wgsl"),
             inputs: &[PassInput::Scratch("h")],
             output: PassOutput::Scratch("v"),
+            output_scale: PassScale::Down(4),
+        },
+        PassDef {
+            label: "up",
+            wgsl_source: include_str!("upsample.wgsl"),
+            inputs: &[PassInput::Scratch("v")],
+            output: PassOutput::Scratch("up"),
             output_scale: PassScale::Full,
         },
         PassDef {
             label: "combine",
             wgsl_source: include_str!("combine.wgsl"),
-            inputs: &[PassInput::Source, PassInput::Scratch("v")],
+            inputs: &[PassInput::Source, PassInput::Scratch("up")],
             output: PassOutput::Final,
             output_scale: PassScale::Full,
         },
@@ -80,8 +94,8 @@ mod tests {
         );
         assert_eq!(
             reg.meta.passes.len(),
-            3,
-            "Clarity must have exactly 3 passes"
+            5,
+            "Clarity must have exactly 5 passes"
         );
     }
 
@@ -259,6 +273,102 @@ mod tests {
         for pixel in out.pixels() {
             assert_eq!(pixel[3], 65535, "alpha must be preserved");
         }
+    }
+
+    #[test]
+    fn test_clarity_downsample_upsample_roundtrip_accuracy() {
+        // A smooth gradient image run through the full 5-pass Clarity pipeline at
+        // amount=0 exercises the downsample → blur → upsample path. At amount=0
+        // the combine pass reduces to C_in + 0, so the output should be close to
+        // the source. The tolerance accounts for f16 rounding plus the bilinear
+        // interpolation error introduced by the upsample pass.
+        let engine = GpuEngine::new().unwrap();
+        let mut renderer = Renderer::new(&engine);
+
+        // Horizontal gradient from 16384 to 49152 (≈ 0.25 to 0.75 sRGB).
+        let w = 32u32;
+        let h = 16u32;
+        let mut img = crate::Rgba16Image::new(w, h);
+        for y in 0..h {
+            for x in 0..w {
+                let v = (16384 + (x as u32 * 32768 / (w - 1))) as u16;
+                img.put_pixel(x, y, image::Rgba([v, v, v, 65535]));
+            }
+        }
+
+        let out = roundtrip(
+            &mut renderer,
+            &engine,
+            &img,
+            &[Transform {
+                shader_id: "clarity",
+                values: vec![0.0],
+            }],
+        );
+
+        // At amount=0 each output pixel must stay within ±128 u16 of the source.
+        // The extra slack over the ±64 baseline accounts for bilinear upsample
+        // interpolation error on non-constant input.
+        for y in 0..h {
+            for x in 0..w {
+                let src = img.get_pixel(x, y)[0] as i32;
+                let got = out.get_pixel(x, y)[0] as i32;
+                assert!(
+                    (got - src).abs() <= 128,
+                    "pixel ({x},{y}): expected ~{src}, got {got}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_clarity_small_image_behavior() {
+        // Clarity on a 16×16 image produces a 4×4 downsampled texture — exercises
+        // the degenerate-size case. Behavioral properties (positive amount increases
+        // edge contrast) must still hold at small sizes.
+        let engine = GpuEngine::new().unwrap();
+        let mut renderer = Renderer::new(&engine);
+
+        let mut img = crate::Rgba16Image::new(16, 16);
+        for y in 0..16u32 {
+            for x in 0..16u32 {
+                let v: u16 = if x < 8 { 20000 } else { 45000 };
+                img.put_pixel(x, y, image::Rgba([v, v, v, 65535]));
+            }
+        }
+
+        let out_0 = roundtrip(
+            &mut renderer,
+            &engine,
+            &img,
+            &[Transform {
+                shader_id: "clarity",
+                values: vec![0.0],
+            }],
+        );
+        let out_pos = roundtrip(
+            &mut renderer,
+            &engine,
+            &img,
+            &[Transform {
+                shader_id: "clarity",
+                values: vec![0.5],
+            }],
+        );
+
+        let dark_0 = out_0.get_pixel(6, 8)[0] as i32;
+        let dark_pos = out_pos.get_pixel(6, 8)[0] as i32;
+        let bright_0 = out_0.get_pixel(9, 8)[0] as i32;
+        let bright_pos = out_pos.get_pixel(9, 8)[0] as i32;
+
+        assert!(
+            dark_pos < dark_0,
+            "small image: dark-side pixel should be darker at amount=0.5: {dark_pos} vs {dark_0}"
+        );
+        assert!(
+            bright_pos > bright_0,
+            "small image: bright-side pixel should be brighter at amount=0.5: {bright_pos} vs {bright_0}"
+        );
     }
 
     #[test]
