@@ -1509,8 +1509,8 @@ mod tests {
         );
     }
 
-    /// A multi-pass shader (Clarity, 3 passes) must compile to a `Vec<CompiledPass>`
-    /// of length 3.
+    /// A multi-pass shader (Clarity, 5 passes) must compile to a `Vec<CompiledPass>`
+    /// of length 5.
     #[test]
     fn test_pipeline_cache_compiles_per_pass_multi() {
         let engine = GpuEngine::new().unwrap();
@@ -1519,8 +1519,8 @@ mod tests {
         let passes = cache.get_or_create(&engine.device, "clarity");
         assert_eq!(
             passes.len(),
-            3,
-            "Clarity must compile to exactly 3 CompiledPass entries"
+            5,
+            "Clarity must compile to exactly 5 CompiledPass entries"
         );
     }
 
@@ -1540,7 +1540,8 @@ mod tests {
                 values: vec![0.0],
             }],
         );
-        // Pool should hold the 2 scratch textures from Clarity's pass list.
+        // Pool should hold the 4 scratch textures from Clarity's pass list
+        // (down, h, v — each at 1×1 for a 4×4 source with Down(4) — and up at full 4×4).
         let (pool_dims, pool_len) = renderer.scratch_pool_info();
         assert_eq!(
             pool_dims,
@@ -1548,8 +1549,8 @@ mod tests {
             "pool dims must match image dims after first run"
         );
         assert_eq!(
-            pool_len, 2,
-            "pool must hold 2 scratch textures after first run"
+            pool_len, 4,
+            "pool must hold 4 scratch textures after first run"
         );
 
         // Run at a different image size — the pool must be reset.
@@ -1570,15 +1571,15 @@ mod tests {
             "pool dims must update to new image dims after resize"
         );
         assert_eq!(
-            pool_len, 2,
-            "new pool dims must hold 2 scratch textures after resize"
+            pool_len, 4,
+            "new pool dims must hold 4 scratch textures after resize"
         );
     }
 
     /// Running a multi-pass shader twice at the same image dimensions must reuse
     /// the same physical scratch textures. After each run the pool's free list holds
-    /// exactly 2 textures, and the set of pointer addresses must be identical on the
-    /// second run (same GPU allocations, not new ones).
+    /// exactly 4 textures (Clarity: down, h, v at Down(4) and up at Full), and the
+    /// set of pointer addresses must be identical on the second run.
     #[test]
     fn test_multi_pass_scratch_pool_reuses_across_runs() {
         let engine = GpuEngine::new().unwrap();
@@ -1602,14 +1603,18 @@ mod tests {
             "pool dims must match image dims after first run"
         );
         assert_eq!(
-            pool_len, 2,
-            "pool must hold 2 scratch textures after first run"
+            pool_len, 4,
+            "pool must hold 4 scratch textures after first run"
         );
 
         let (_, tex0_after_first) = renderer.scratch_pool_handle(0);
         let (_, tex1_after_first) = renderer.scratch_pool_handle(1);
+        let (_, tex2_after_first) = renderer.scratch_pool_handle(2);
+        let (_, tex3_after_first) = renderer.scratch_pool_handle(3);
         let ptr0_after_first = tex0_after_first.unwrap() as *const wgpu::Texture;
         let ptr1_after_first = tex1_after_first.unwrap() as *const wgpu::Texture;
+        let ptr2_after_first = tex2_after_first.unwrap() as *const wgpu::Texture;
+        let ptr3_after_first = tex3_after_first.unwrap() as *const wgpu::Texture;
 
         roundtrip(
             &mut renderer,
@@ -1623,20 +1628,35 @@ mod tests {
             "pool dims must match image dims after second run"
         );
         assert_eq!(
-            pool_len, 2,
-            "pool must still hold 2 scratch textures after second run"
+            pool_len, 4,
+            "pool must still hold 4 scratch textures after second run"
         );
 
         let (_, tex0_after_second) = renderer.scratch_pool_handle(0);
         let (_, tex1_after_second) = renderer.scratch_pool_handle(1);
+        let (_, tex2_after_second) = renderer.scratch_pool_handle(2);
+        let (_, tex3_after_second) = renderer.scratch_pool_handle(3);
         let ptr0_after_second = tex0_after_second.unwrap() as *const wgpu::Texture;
         let ptr1_after_second = tex1_after_second.unwrap() as *const wgpu::Texture;
+        let ptr2_after_second = tex2_after_second.unwrap() as *const wgpu::Texture;
+        let ptr3_after_second = tex3_after_second.unwrap() as *const wgpu::Texture;
 
         // The set of pointer values must be the same (same physical textures
         // reused), though the pool order may differ between runs.
-        let ptrs_first: std::collections::HashSet<_> = [ptr0_after_first, ptr1_after_first].into();
-        let ptrs_second: std::collections::HashSet<_> =
-            [ptr0_after_second, ptr1_after_second].into();
+        let ptrs_first: std::collections::HashSet<_> = [
+            ptr0_after_first,
+            ptr1_after_first,
+            ptr2_after_first,
+            ptr3_after_first,
+        ]
+        .into();
+        let ptrs_second: std::collections::HashSet<_> = [
+            ptr0_after_second,
+            ptr1_after_second,
+            ptr2_after_second,
+            ptr3_after_second,
+        ]
+        .into();
         assert_eq!(
             ptrs_first, ptrs_second,
             "same physical scratch textures must be reused on the second run"
@@ -1644,9 +1664,9 @@ mod tests {
     }
 
     /// With the tagged pool, each returned texture carries its actual dimensions.
-    /// Running Clarity (all-Full passes, 8×8 image) must produce two pool
-    /// entries each tagged (8, 8), and the same physical allocations must be
-    /// reused on the second run.
+    /// Running Clarity (5-pass, mixed-resolution, 8×8 image) produces four pool entries:
+    /// down/h/v tagged (2, 2) and up tagged (8, 8). The same physical allocations must
+    /// be reused on the second run.
     #[test]
     fn test_multi_pass_scratch_pool_reuses_mixed_resolution() {
         let engine = GpuEngine::new().unwrap();
@@ -1666,25 +1686,27 @@ mod tests {
         let (source_dims, pool_len) = renderer.scratch_pool_info();
         assert_eq!(source_dims, (8, 8), "source dims must reflect image size");
         assert_eq!(
-            pool_len, 2,
-            "pool must hold 2 scratch textures after first run"
+            pool_len, 4,
+            "pool must hold 4 scratch textures after first run"
         );
 
-        // Each pooled texture carries per-texture dims (Full → same as source).
-        let (tex0_dims, tex0) = renderer.scratch_pool_handle(0);
-        let (tex1_dims, tex1) = renderer.scratch_pool_handle(1);
+        // Collect all four tagged entries — verify the pool contains exactly the
+        // expected mix of Down(4) and Full dimensions.
+        let all_dims: Vec<(u32, u32)> = (0..4).map(|i| renderer.scratch_pool_handle(i).0).collect();
+        let small_count = all_dims.iter().filter(|&&d| d == (2, 2)).count();
+        let full_count = all_dims.iter().filter(|&&d| d == (8, 8)).count();
         assert_eq!(
-            tex0_dims,
-            (8, 8),
-            "pool texture 0 must be tagged with full-res dims"
+            small_count, 3,
+            "pool must contain 3 Down(4) textures tagged (2, 2): got {all_dims:?}"
         );
         assert_eq!(
-            tex1_dims,
-            (8, 8),
-            "pool texture 1 must be tagged with full-res dims"
+            full_count, 1,
+            "pool must contain 1 Full texture tagged (8, 8): got {all_dims:?}"
         );
-        let ptr0_first = tex0.unwrap() as *const wgpu::Texture;
-        let ptr1_first = tex1.unwrap() as *const wgpu::Texture;
+
+        let ptrs_first: std::collections::HashSet<_> = (0..4)
+            .map(|i| renderer.scratch_pool_handle(i).1.unwrap() as *const wgpu::Texture)
+            .collect();
 
         roundtrip(
             &mut renderer,
@@ -1694,17 +1716,14 @@ mod tests {
         );
         let (_, pool_len) = renderer.scratch_pool_info();
         assert_eq!(
-            pool_len, 2,
-            "pool must still hold 2 scratch textures after second run"
+            pool_len, 4,
+            "pool must still hold 4 scratch textures after second run"
         );
 
-        let (_, tex0_second) = renderer.scratch_pool_handle(0);
-        let (_, tex1_second) = renderer.scratch_pool_handle(1);
-        let ptr0_second = tex0_second.unwrap() as *const wgpu::Texture;
-        let ptr1_second = tex1_second.unwrap() as *const wgpu::Texture;
+        let ptrs_second: std::collections::HashSet<_> = (0..4)
+            .map(|i| renderer.scratch_pool_handle(i).1.unwrap() as *const wgpu::Texture)
+            .collect();
 
-        let ptrs_first: std::collections::HashSet<_> = [ptr0_first, ptr1_first].into();
-        let ptrs_second: std::collections::HashSet<_> = [ptr0_second, ptr1_second].into();
         assert_eq!(
             ptrs_first, ptrs_second,
             "tagged pool must reuse the same physical scratch textures on the second run"

@@ -50,24 +50,38 @@ impl TransformShader for CartoonParams {
     ]);
     const PASSES: &'static [PassDef] = &[
         PassDef {
+            label: "down",
+            wgsl_source: include_str!("downsample.wgsl"),
+            inputs: &[PassInput::Source],
+            output: PassOutput::Scratch("down"),
+            output_scale: PassScale::Down(4),
+        },
+        PassDef {
             label: "smooth_h",
             wgsl_source: include_str!("smooth_h.wgsl"),
-            inputs: &[PassInput::Source],
+            inputs: &[PassInput::Scratch("down")],
             output: PassOutput::Scratch("sh"),
-            output_scale: PassScale::Full,
+            output_scale: PassScale::Down(4),
         },
         PassDef {
             label: "smooth_v",
             wgsl_source: include_str!("smooth_v.wgsl"),
             inputs: &[PassInput::Scratch("sh")],
             output: PassOutput::Scratch("smooth"),
-            output_scale: PassScale::Full,
+            output_scale: PassScale::Down(4),
         },
         PassDef {
             label: "quantize",
             wgsl_source: include_str!("quantize.wgsl"),
             inputs: &[PassInput::Scratch("smooth")],
             output: PassOutput::Scratch("quant"),
+            output_scale: PassScale::Down(4),
+        },
+        PassDef {
+            label: "up",
+            wgsl_source: include_str!("upsample.wgsl"),
+            inputs: &[PassInput::Scratch("quant")],
+            output: PassOutput::Scratch("quant_up"),
             output_scale: PassScale::Full,
         },
         PassDef {
@@ -82,7 +96,7 @@ impl TransformShader for CartoonParams {
             wgsl_source: include_str!("combine.wgsl"),
             inputs: &[
                 PassInput::Source,
-                PassInput::Scratch("quant"),
+                PassInput::Scratch("quant_up"),
                 PassInput::Scratch("edges"),
             ],
             output: PassOutput::Final,
@@ -158,8 +172,8 @@ mod tests {
         );
         assert_eq!(
             reg.meta.passes.len(),
-            5,
-            "Cartoon must have exactly 5 passes"
+            7,
+            "Cartoon must have exactly 7 passes"
         );
     }
 

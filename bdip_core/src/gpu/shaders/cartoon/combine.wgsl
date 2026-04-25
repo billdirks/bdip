@@ -4,7 +4,7 @@
 //
 // Binding layout (position-indexed, 3 inputs → inputs at 0–2, output at 3):
 //   @binding(0) Source
-//   @binding(1) Scratch("quant")
+//   @binding(1) Scratch("quant_up")  — upsampled posterized image (full-res)
 //   @binding(2) Scratch("edges")
 //   @binding(3) output
 //
