@@ -1,6 +1,10 @@
+use crate::gpu::assets::AuxTextureCache;
 use crate::gpu::engine::GpuEngine;
 use crate::gpu::shaders::PassScale;
-use crate::gpu::shaders::{PassInput, PassOutput, Transform, registry_by_id};
+use crate::gpu::shaders::{
+    AuxSamplerFilter, AuxTextureDef, AuxTextureDimension, PassInput, PassOutput, Transform,
+    registry_by_id,
+};
 use std::collections::{HashMap, hash_map::Entry};
 use wgpu::{
     BindGroupDescriptor, BindGroupEntry, BindGroupLayoutDescriptor, BindGroupLayoutEntry,
@@ -34,6 +38,7 @@ struct CompiledPass {
     pipeline: ComputePipeline,
     texture_bind_group_layout: wgpu::BindGroupLayout,
     params_bind_group_layout: wgpu::BindGroupLayout,
+    aux_bind_group_layout: Option<wgpu::BindGroupLayout>,
 }
 
 // ========== ShaderPassesCache ==========
@@ -95,12 +100,28 @@ impl ShaderPassesCache {
                     }],
                 });
 
+            let aux_bind_group_layout = if !pass.aux_textures.is_empty() {
+                let aux_bgl_label = format!("{} Aux BGL ({})", meta.display_name, pass.label);
+                Some(build_aux_bind_group_layout(
+                    device,
+                    pass.aux_textures,
+                    &aux_bgl_label,
+                ))
+            } else {
+                None
+            };
+
+            let mut bind_group_layouts: Vec<Option<&wgpu::BindGroupLayout>> = vec![
+                Some(&texture_bind_group_layout),
+                Some(&params_bind_group_layout),
+            ];
+            if let Some(ref aux_bgl) = aux_bind_group_layout {
+                bind_group_layouts.push(Some(aux_bgl));
+            }
+
             let pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
                 label: Some(&pl_label),
-                bind_group_layouts: &[
-                    Some(&texture_bind_group_layout),
-                    Some(&params_bind_group_layout),
-                ],
+                bind_group_layouts: &bind_group_layouts,
                 immediate_size: 0,
             });
 
@@ -117,6 +138,7 @@ impl ShaderPassesCache {
                 pipeline,
                 texture_bind_group_layout,
                 params_bind_group_layout,
+                aux_bind_group_layout,
             });
         }
 
@@ -160,6 +182,43 @@ fn build_pass_bind_group_layout(
     })
 }
 
+fn build_aux_bind_group_layout(
+    device: &wgpu::Device,
+    aux_textures: &[AuxTextureDef],
+    label: &str,
+) -> wgpu::BindGroupLayout {
+    let mut entries = Vec::new();
+    for (i, aux) in aux_textures.iter().enumerate() {
+        let binding_base = (i * 2) as u32;
+        entries.push(BindGroupLayoutEntry {
+            binding: binding_base,
+            visibility: ShaderStages::COMPUTE,
+            ty: BindingType::Texture {
+                sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                view_dimension: match aux.dimension {
+                    AuxTextureDimension::D2 => TextureViewDimension::D2,
+                    AuxTextureDimension::D3 => TextureViewDimension::D3,
+                },
+                multisampled: false,
+            },
+            count: None,
+        });
+        entries.push(BindGroupLayoutEntry {
+            binding: binding_base + 1,
+            visibility: ShaderStages::COMPUTE,
+            ty: BindingType::Sampler(match aux.filter {
+                AuxSamplerFilter::Linear => wgpu::SamplerBindingType::Filtering,
+                AuxSamplerFilter::Nearest => wgpu::SamplerBindingType::NonFiltering,
+            }),
+            count: None,
+        });
+    }
+    device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+        label: Some(label),
+        entries: &entries,
+    })
+}
+
 // ========== ScratchPool ==========
 
 struct ScratchPool {
@@ -180,6 +239,8 @@ pub struct Renderer {
 
     // Transform pipelines are compiled on first use.
     passes_cache: ShaderPassesCache,
+
+    aux_texture_cache: AuxTextureCache,
 
     scratch_pool: ScratchPool,
 
@@ -333,6 +394,7 @@ impl Renderer {
             present_texture_bind_group_layout,
             present_params_bind_group_layout,
             passes_cache: ShaderPassesCache::new(),
+            aux_texture_cache: AuxTextureCache::new(),
             scratch_pool: ScratchPool {
                 source_width: 0,
                 source_height: 0,
@@ -777,6 +839,19 @@ impl Renderer {
             view_formats: &[],
         });
 
+        for pass in passes {
+            for aux in pass.aux_textures {
+                self.aux_texture_cache
+                    .get_or_upload(&engine.device, &engine.queue, aux.name)
+                    .unwrap_or_else(|e| {
+                        panic!(
+                            "Failed to load auxiliary texture '{}' for shader '{}': {e}",
+                            aux.name, transform.shader_id,
+                        )
+                    });
+            }
+        }
+
         let params_buffer = Self::create_params_buffer(engine, reg, &transform.values);
 
         let cached_pipelines = self
@@ -792,6 +867,7 @@ impl Renderer {
                 &final_texture,
                 &borrowed_scratches,
                 &params_buffer,
+                &self.aux_texture_cache,
             )
         } else {
             Self::encode_transform_passes(
@@ -802,6 +878,7 @@ impl Renderer {
                 &final_texture,
                 &borrowed_scratches,
                 &params_buffer,
+                &self.aux_texture_cache,
             );
             Vec::new()
         };
@@ -892,6 +969,7 @@ impl Renderer {
             })
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn encode_transform_passes(
         engine: &GpuEngine,
         pipelines: &[CompiledPass],
@@ -900,6 +978,7 @@ impl Renderer {
         final_texture: &wgpu::Texture,
         scratch_textures: &HashMap<&'static str, wgpu::Texture>,
         params_buffer: &wgpu::Buffer,
+        aux_texture_cache: &AuxTextureCache,
     ) {
         let mut encoder = engine
             .device
@@ -914,12 +993,14 @@ impl Renderer {
             final_texture,
             scratch_textures,
             params_buffer,
+            aux_texture_cache,
             None,
         );
 
         engine.queue.submit(Some(encoder.finish()));
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn encode_transform_passes_timed(
         engine: &GpuEngine,
         pipelines: &[CompiledPass],
@@ -928,6 +1009,7 @@ impl Renderer {
         final_texture: &wgpu::Texture,
         scratch_textures: &HashMap<&'static str, wgpu::Texture>,
         params_buffer: &wgpu::Buffer,
+        aux_texture_cache: &AuxTextureCache,
     ) -> Vec<PassTiming> {
         let num_passes = passes.len() as u32;
         let query_count = 2 * num_passes;
@@ -966,6 +1048,7 @@ impl Renderer {
             final_texture,
             scratch_textures,
             params_buffer,
+            aux_texture_cache,
             Some(&query_set),
         );
 
@@ -1021,6 +1104,7 @@ impl Renderer {
         final_texture: &wgpu::Texture,
         scratch_textures: &HashMap<&'static str, wgpu::Texture>,
         params_buffer: &wgpu::Buffer,
+        aux_texture_cache: &AuxTextureCache,
         query_set: Option<&wgpu::QuerySet>,
     ) {
         let src_view = src_texture.create_view(&TextureViewDescriptor::default());
@@ -1073,6 +1157,46 @@ impl Renderer {
                 }],
             });
 
+            let aux_bind_group = if !pass.aux_textures.is_empty() {
+                let mut views = Vec::new();
+                let mut samplers = Vec::new();
+                for aux_def in pass.aux_textures {
+                    let tex = aux_texture_cache
+                        .get(aux_def.name)
+                        .unwrap_or_else(|| panic!("Aux texture '{}' not in cache", aux_def.name));
+                    views.push(tex.create_view(&TextureViewDescriptor::default()));
+                    let filter = match aux_def.filter {
+                        AuxSamplerFilter::Linear => wgpu::FilterMode::Linear,
+                        AuxSamplerFilter::Nearest => wgpu::FilterMode::Nearest,
+                    };
+                    samplers.push(engine.device.create_sampler(&wgpu::SamplerDescriptor {
+                        mag_filter: filter,
+                        min_filter: filter,
+                        ..Default::default()
+                    }));
+                }
+                let mut entries = Vec::new();
+                for i in 0..pass.aux_textures.len() {
+                    let base = (i * 2) as u32;
+                    entries.push(BindGroupEntry {
+                        binding: base,
+                        resource: BindingResource::TextureView(&views[i]),
+                    });
+                    entries.push(BindGroupEntry {
+                        binding: base + 1,
+                        resource: BindingResource::Sampler(&samplers[i]),
+                    });
+                }
+                let layout = pipeline.aux_bind_group_layout.as_ref().unwrap();
+                Some(engine.device.create_bind_group(&BindGroupDescriptor {
+                    label: Some("Aux Texture Bind Group"),
+                    layout,
+                    entries: &entries,
+                }))
+            } else {
+                None
+            };
+
             let timestamp_writes = query_set.map(|qs| {
                 let qi = pass_idx as u32 * 2;
                 wgpu::ComputePassTimestampWrites {
@@ -1095,6 +1219,9 @@ impl Renderer {
                 cpass.set_pipeline(&pipeline.pipeline);
                 cpass.set_bind_group(0, &texture_bind_group, &[]);
                 cpass.set_bind_group(1, &params_bind_group, &[]);
+                if let Some(ref aux_bg) = aux_bind_group {
+                    cpass.set_bind_group(2, aux_bg, &[]);
+                }
                 cpass.dispatch_workgroups(out_w.div_ceil(16), out_h.div_ceil(16), 1);
             }
         }
@@ -1727,6 +1854,141 @@ mod tests {
         assert_eq!(
             ptrs_first, ptrs_second,
             "tagged pool must reuse the same physical scratch textures on the second run"
+        );
+    }
+
+    // ========== Auxiliary texture infrastructure tests ==========
+
+    #[test]
+    fn test_build_aux_layout_with_one_2d() {
+        use crate::gpu::shaders::{AuxSamplerFilter, AuxTextureDef, AuxTextureDimension};
+
+        let engine = GpuEngine::new().unwrap();
+        let aux = [AuxTextureDef {
+            name: "test",
+            dimension: AuxTextureDimension::D2,
+            filter: AuxSamplerFilter::Linear,
+        }];
+        let _layout = build_aux_bind_group_layout(&engine.device, &aux, "test_2d");
+    }
+
+    #[test]
+    fn test_build_aux_layout_with_one_3d() {
+        use crate::gpu::shaders::{AuxSamplerFilter, AuxTextureDef, AuxTextureDimension};
+
+        let engine = GpuEngine::new().unwrap();
+        let aux = [AuxTextureDef {
+            name: "test",
+            dimension: AuxTextureDimension::D3,
+            filter: AuxSamplerFilter::Linear,
+        }];
+        let _layout = build_aux_bind_group_layout(&engine.device, &aux, "test_3d");
+    }
+
+    #[test]
+    fn test_build_aux_layout_with_two_aux() {
+        use crate::gpu::shaders::{AuxSamplerFilter, AuxTextureDef, AuxTextureDimension};
+
+        let engine = GpuEngine::new().unwrap();
+        let aux = [
+            AuxTextureDef {
+                name: "a",
+                dimension: AuxTextureDimension::D2,
+                filter: AuxSamplerFilter::Linear,
+            },
+            AuxTextureDef {
+                name: "b",
+                dimension: AuxTextureDimension::D3,
+                filter: AuxSamplerFilter::Nearest,
+            },
+        ];
+        let _layout = build_aux_bind_group_layout(&engine.device, &aux, "test_two");
+    }
+
+    #[test]
+    fn test_compile_no_aux_has_two_group_layout() {
+        let engine = GpuEngine::new().unwrap();
+        let mut cache = ShaderPassesCache::new();
+        let passes = cache.get_or_create(&engine.device, "brightness");
+        assert_eq!(passes.len(), 1);
+        assert!(
+            passes[0].aux_bind_group_layout.is_none(),
+            "shader without aux textures must have aux_bind_group_layout = None"
+        );
+    }
+
+    #[test]
+    fn test_compile_with_aux_has_three_group_layout() {
+        use crate::gpu::shaders::{
+            AuxSamplerFilter, AuxTextureDef, AuxTextureDimension, ParamKind, PassDef, PassInput,
+            PassOutput, PassScale, ShaderRegistration, SliderDef, TransformShader,
+        };
+
+        #[repr(C)]
+        #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+        struct TestAuxParams {
+            intensity: f32,
+            _padding: [f32; 3],
+        }
+
+        impl TransformShader for TestAuxParams {
+            const ID: &'static str = "__test_aux_shader";
+            const DISPLAY_NAME: &'static str = "__Test Aux Shader";
+            const PARAM: ParamKind = ParamKind::Sliders(&[SliderDef {
+                name: "Intensity",
+                min: 0.0,
+                max: 1.0,
+                default: 0.0,
+            }]);
+            const PASSES: &'static [PassDef] = &[PassDef {
+                label: "test_aux",
+                wgsl_source: concat!(
+                    "@group(0) @binding(0) var src: texture_2d<f32>;\n",
+                    "@group(0) @binding(1) var dst: texture_storage_2d<rgba16float, write>;\n",
+                    "@group(1) @binding(0) var<uniform> params: vec4<f32>;\n",
+                    "@compute @workgroup_size(16, 16)\n",
+                    "fn main(@builtin(global_invocation_id) gid: vec3<u32>) {\n",
+                    "  let dims = textureDimensions(src);\n",
+                    "  if gid.x >= dims.x || gid.y >= dims.y { return; }\n",
+                    "  let c = textureLoad(src, vec2<u32>(gid.xy), 0);\n",
+                    "  textureStore(dst, vec2<u32>(gid.xy), c);\n",
+                    "}\n",
+                ),
+                inputs: &[PassInput::Source],
+                output: PassOutput::Final,
+                output_scale: PassScale::Full,
+                aux_textures: &[AuxTextureDef {
+                    name: "__test_aux_tex",
+                    dimension: AuxTextureDimension::D2,
+                    filter: AuxSamplerFilter::Linear,
+                }],
+            }];
+
+            fn from_values(values: &[f32]) -> Self {
+                Self {
+                    intensity: values[0],
+                    _padding: [0.0; 3],
+                }
+            }
+        }
+
+        inventory::submit!(ShaderRegistration::new::<TestAuxParams>());
+
+        // Register a corresponding test asset so the safety-net test passes.
+        inventory::submit!(crate::gpu::assets::AuxAssetRegistration {
+            name: "__test_aux_tex",
+            raw_bytes: include_bytes!("assets/test_2x2_white.png"),
+            format: crate::gpu::assets::AuxAssetFormat::Png,
+            dimension: AuxTextureDimension::D2,
+        });
+
+        let engine = GpuEngine::new().unwrap();
+        let mut cache = ShaderPassesCache::new();
+        let passes = cache.get_or_create(&engine.device, "__test_aux_shader");
+        assert_eq!(passes.len(), 1);
+        assert!(
+            passes[0].aux_bind_group_layout.is_some(),
+            "shader with aux textures must have aux_bind_group_layout = Some(...)"
         );
     }
 }

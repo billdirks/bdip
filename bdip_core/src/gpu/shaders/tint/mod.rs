@@ -24,6 +24,7 @@ impl TransformShader for TintParams {
         inputs: &[PassInput::Source],
         output: PassOutput::Final,
         output_scale: PassScale::Full,
+        aux_textures: &[],
     }];
 
     fn from_values(values: &[f32]) -> Self {

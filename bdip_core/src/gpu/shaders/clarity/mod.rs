@@ -25,6 +25,7 @@ impl TransformShader for ClarityParams {
             inputs: &[PassInput::Source],
             output: PassOutput::Scratch("down"),
             output_scale: PassScale::Down(4),
+            aux_textures: &[],
         },
         PassDef {
             label: "blur_h",
@@ -32,6 +33,7 @@ impl TransformShader for ClarityParams {
             inputs: &[PassInput::Scratch("down")],
             output: PassOutput::Scratch("h"),
             output_scale: PassScale::Down(4),
+            aux_textures: &[],
         },
         PassDef {
             label: "blur_v",
@@ -39,6 +41,7 @@ impl TransformShader for ClarityParams {
             inputs: &[PassInput::Scratch("h")],
             output: PassOutput::Scratch("v"),
             output_scale: PassScale::Down(4),
+            aux_textures: &[],
         },
         PassDef {
             label: "up",
@@ -46,6 +49,7 @@ impl TransformShader for ClarityParams {
             inputs: &[PassInput::Scratch("v")],
             output: PassOutput::Scratch("up"),
             output_scale: PassScale::Full,
+            aux_textures: &[],
         },
         PassDef {
             label: "combine",
@@ -53,6 +57,7 @@ impl TransformShader for ClarityParams {
             inputs: &[PassInput::Source, PassInput::Scratch("up")],
             output: PassOutput::Final,
             output_scale: PassScale::Full,
+            aux_textures: &[],
         },
     ];
 

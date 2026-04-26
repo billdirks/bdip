@@ -54,6 +54,26 @@ pub enum PassScale {
     Down(u32),
 }
 
+/// Describes an auxiliary texture a pass needs bound at render time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AuxTextureDef {
+    pub name: &'static str,
+    pub dimension: AuxTextureDimension,
+    pub filter: AuxSamplerFilter,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuxTextureDimension {
+    D2,
+    D3,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuxSamplerFilter {
+    Linear,
+    Nearest,
+}
+
 /// Declarative description of one compute pass.
 #[derive(Debug, Clone, Copy)]
 pub struct PassDef {
@@ -62,6 +82,7 @@ pub struct PassDef {
     pub inputs: &'static [PassInput],
     pub output: PassOutput,
     pub output_scale: PassScale,
+    pub aux_textures: &'static [AuxTextureDef],
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -164,6 +185,28 @@ pub const fn validate_pass_list(passes: &[PassDef]) {
     // The last pass must output Final.
     if !matches!(passes[n - 1].output, PassOutput::Final) {
         panic!("validate_pass_list: the last pass must have PassOutput::Final");
+    }
+
+    // No auxiliary texture name may collide with a scratch output name.
+    let mut ai = 0;
+    while ai < n {
+        let mut ak = 0;
+        while ak < passes[ai].aux_textures.len() {
+            let aux_name = passes[ai].aux_textures[ak].name;
+            let mut sj = 0;
+            while sj < n {
+                if let PassOutput::Scratch(scratch_name) = passes[sj].output
+                    && bytes_eq(aux_name.as_bytes(), scratch_name.as_bytes())
+                {
+                    panic!(
+                        "validate_pass_list: auxiliary texture name collides with a scratch output name"
+                    );
+                }
+                sj += 1;
+            }
+            ak += 1;
+        }
+        ai += 1;
     }
 }
 
@@ -361,6 +404,7 @@ mod tests {
                 inputs: &[PassInput::Source],
                 output: PassOutput::Final, // Final not at last position
                 output_scale: PassScale::Full,
+                aux_textures: &[],
             },
             PassDef {
                 label: "b",
@@ -368,6 +412,7 @@ mod tests {
                 inputs: &[PassInput::Source],
                 output: PassOutput::Final,
                 output_scale: PassScale::Full,
+                aux_textures: &[],
             },
         ];
         let result = std::panic::catch_unwind(|| validate_pass_list(PASSES));
@@ -387,6 +432,7 @@ mod tests {
             inputs: &[PassInput::Scratch("h")], // "h" never written
             output: PassOutput::Final,
             output_scale: PassScale::Full,
+            aux_textures: &[],
         }];
         let result = std::panic::catch_unwind(|| validate_pass_list(PASSES));
         assert!(result.is_err(), "expected panic: unresolved scratch input");
@@ -403,6 +449,7 @@ mod tests {
                 inputs: &[PassInput::Source],
                 output: PassOutput::Scratch("h"),
                 output_scale: PassScale::Full,
+                aux_textures: &[],
             },
             PassDef {
                 label: "b",
@@ -410,6 +457,7 @@ mod tests {
                 inputs: &[PassInput::Source],
                 output: PassOutput::Scratch("h"), // duplicate write
                 output_scale: PassScale::Full,
+                aux_textures: &[],
             },
             PassDef {
                 label: "c",
@@ -417,6 +465,7 @@ mod tests {
                 inputs: &[PassInput::Scratch("h")],
                 output: PassOutput::Final,
                 output_scale: PassScale::Full,
+                aux_textures: &[],
             },
         ];
         let result = std::panic::catch_unwind(|| validate_pass_list(PASSES));
@@ -424,5 +473,54 @@ mod tests {
             result.is_err(),
             "expected panic: duplicate scratch output name"
         );
+    }
+
+    #[test]
+    fn test_validate_pass_list_aux_name_collides_with_scratch() {
+        const PASSES: &[PassDef] = &[
+            PassDef {
+                label: "a",
+                wgsl_source: "",
+                inputs: &[PassInput::Source],
+                output: PassOutput::Scratch("shared"),
+                output_scale: PassScale::Full,
+                aux_textures: &[],
+            },
+            PassDef {
+                label: "b",
+                wgsl_source: "",
+                inputs: &[PassInput::Scratch("shared")],
+                output: PassOutput::Final,
+                output_scale: PassScale::Full,
+                aux_textures: &[AuxTextureDef {
+                    name: "shared",
+                    dimension: AuxTextureDimension::D2,
+                    filter: AuxSamplerFilter::Linear,
+                }],
+            },
+        ];
+        let result = std::panic::catch_unwind(|| validate_pass_list(PASSES));
+        assert!(
+            result.is_err(),
+            "expected panic: aux name collides with scratch name"
+        );
+    }
+
+    #[test]
+    fn test_all_aux_textures_have_registered_assets() {
+        for reg in inventory::iter::<ShaderRegistration> {
+            for pass in reg.meta.passes {
+                for aux in pass.aux_textures {
+                    assert!(
+                        crate::gpu::assets::find_asset_by_name(aux.name).is_some(),
+                        "Shader '{}', pass '{}': auxiliary texture '{}' \
+                         has no registered AuxAssetRegistration",
+                        reg.meta.id,
+                        pass.label,
+                        aux.name,
+                    );
+                }
+            }
+        }
     }
 }

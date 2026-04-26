@@ -16,6 +16,7 @@ impl TransformShader for InvertParams {
         inputs: &[PassInput::Source],
         output: PassOutput::Final,
         output_scale: PassScale::Full,
+        aux_textures: &[],
     }];
 
     fn from_values(_: &[f32]) -> Self {

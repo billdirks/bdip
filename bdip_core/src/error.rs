@@ -16,4 +16,7 @@ pub enum BdipError {
 
     #[error("GPU error: {0}")]
     Gpu(String),
+
+    #[error("Missing auxiliary texture asset: {0}")]
+    MissingAuxTexture(String),
 }

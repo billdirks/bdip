@@ -1,3 +1,4 @@
+pub mod assets;
 pub mod engine;
 pub mod image_pipeline;
 pub mod shaders;

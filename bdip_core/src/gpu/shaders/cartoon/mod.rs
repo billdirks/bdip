@@ -55,6 +55,7 @@ impl TransformShader for CartoonParams {
             inputs: &[PassInput::Source],
             output: PassOutput::Scratch("down"),
             output_scale: PassScale::Down(4),
+            aux_textures: &[],
         },
         PassDef {
             label: "smooth_h",
@@ -62,6 +63,7 @@ impl TransformShader for CartoonParams {
             inputs: &[PassInput::Scratch("down")],
             output: PassOutput::Scratch("sh"),
             output_scale: PassScale::Down(4),
+            aux_textures: &[],
         },
         PassDef {
             label: "smooth_v",
@@ -69,6 +71,7 @@ impl TransformShader for CartoonParams {
             inputs: &[PassInput::Scratch("sh")],
             output: PassOutput::Scratch("smooth"),
             output_scale: PassScale::Down(4),
+            aux_textures: &[],
         },
         PassDef {
             label: "quantize",
@@ -76,6 +79,7 @@ impl TransformShader for CartoonParams {
             inputs: &[PassInput::Scratch("smooth")],
             output: PassOutput::Scratch("quant"),
             output_scale: PassScale::Down(4),
+            aux_textures: &[],
         },
         PassDef {
             label: "up",
@@ -83,6 +87,7 @@ impl TransformShader for CartoonParams {
             inputs: &[PassInput::Scratch("quant")],
             output: PassOutput::Scratch("quant_up"),
             output_scale: PassScale::Full,
+            aux_textures: &[],
         },
         PassDef {
             label: "edges",
@@ -90,6 +95,7 @@ impl TransformShader for CartoonParams {
             inputs: &[PassInput::Source],
             output: PassOutput::Scratch("edges"),
             output_scale: PassScale::Full,
+            aux_textures: &[],
         },
         PassDef {
             label: "combine",
@@ -101,6 +107,7 @@ impl TransformShader for CartoonParams {
             ],
             output: PassOutput::Final,
             output_scale: PassScale::Full,
+            aux_textures: &[],
         },
     ];
 
