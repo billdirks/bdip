@@ -891,12 +891,14 @@ mod tests {
         RuntimeShaderMeta {
             id: "brightness",
             display_name: "Brightness",
+            description: "",
             passes: &[],
             param: ParamKind::Sliders(&[SliderDef {
                 name: "Amount",
                 min: -1.0,
                 max: 1.0,
                 default: 0.0,
+                description: "",
             }]),
         }
     }
@@ -905,6 +907,7 @@ mod tests {
         RuntimeShaderMeta {
             id: "test_two",
             display_name: "Test Two",
+            description: "",
             passes: &[],
             param: ParamKind::Sliders(&[
                 SliderDef {
@@ -912,12 +915,14 @@ mod tests {
                     min: 0.0,
                     max: 1.0,
                     default: 0.1,
+                    description: "",
                 },
                 SliderDef {
                     name: "B",
                     min: 0.0,
                     max: 1.0,
                     default: 0.2,
+                    description: "",
                 },
             ]),
         }

@@ -12,11 +12,15 @@ pub struct ContrastParams {
 impl TransformShader for ContrastParams {
     const ID: &'static str = "contrast";
     const DISPLAY_NAME: &'static str = "Contrast";
+    const DESCRIPTION: &'static str =
+        "Adjusts image contrast by scaling pixel values around a linear 0.5 midpoint.";
     const PARAM: ParamKind = ParamKind::Sliders(&[SliderDef {
         name: "Amount",
         min: -1.0,
         max: 1.0,
         default: 0.0,
+        description: "Contrast offset. Negative values flatten toward gray; \
+                      positive values steepen the tonal curve.",
     }]);
     const PASSES: &'static [PassDef] = &[PassDef {
         label: "contrast",
@@ -61,6 +65,8 @@ mod tests {
                 min: -1.0,
                 max: 1.0,
                 default: 0.0,
+                description: "Contrast offset. Negative values flatten toward gray; \
+                              positive values steepen the tonal curve.",
             }])
         );
     }

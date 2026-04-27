@@ -12,11 +12,14 @@ pub struct BrightnessParams {
 impl TransformShader for BrightnessParams {
     const ID: &'static str = "brightness";
     const DISPLAY_NAME: &'static str = "Brightness";
+    const DESCRIPTION: &'static str =
+        "Shifts image brightness on a linear scale in the working color space.";
     const PARAM: ParamKind = ParamKind::Sliders(&[SliderDef {
         name: "Amount",
         min: -1.0,
         max: 1.0,
         default: 0.0,
+        description: "Amount to brighten or darken. Negative values darken; positive values brighten.",
     }]);
     const PASSES: &'static [PassDef] = &[PassDef {
         label: "brightness",
@@ -63,6 +66,7 @@ mod tests {
                 min: -1.0,
                 max: 1.0,
                 default: 0.0,
+                description: "Amount to brighten or darken. Negative values darken; positive values brighten.",
             }])
         );
     }

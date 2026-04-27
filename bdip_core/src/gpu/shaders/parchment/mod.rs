@@ -15,18 +15,23 @@ pub struct ParchmentParams {
 impl TransformShader for ParchmentParams {
     const ID: &'static str = "parchment";
     const DISPLAY_NAME: &'static str = "Parchment";
+    const DESCRIPTION: &'static str =
+        "Overlays a paper grain texture to simulate aged parchment or printed paper.";
     const PARAM: ParamKind = ParamKind::Sliders(&[
         SliderDef {
             name: "Intensity",
             min: 0.0,
             max: 1.0,
             default: 0.0,
+            description: "Blend factor for the paper grain overlay; 0 is unchanged, 1 is full grain.",
         },
         SliderDef {
             name: "Scale",
             min: 0.5,
             max: 4.0,
             default: 1.0,
+            description: "UV scale multiplier for the grain texture; \
+                          higher values zoom in, lower values tile more finely.",
         },
     ]);
     const PASSES: &'static [PassDef] = &[PassDef {
@@ -82,12 +87,15 @@ mod tests {
                     min: 0.0,
                     max: 1.0,
                     default: 0.0,
+                    description: "Blend factor for the paper grain overlay; 0 is unchanged, 1 is full grain.",
                 },
                 SliderDef {
                     name: "Scale",
                     min: 0.5,
                     max: 4.0,
                     default: 1.0,
+                    description: "UV scale multiplier for the grain texture; \
+                                  higher values zoom in, lower values tile more finely.",
                 },
             ])
         );

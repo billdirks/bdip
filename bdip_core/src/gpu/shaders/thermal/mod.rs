@@ -15,11 +15,14 @@ pub struct ThermalParams {
 impl TransformShader for ThermalParams {
     const ID: &'static str = "thermal";
     const DISPLAY_NAME: &'static str = "Thermal Heat Map";
+    const DESCRIPTION: &'static str = "Remaps luminance through a thermal heat-map color gradient, simulating an infrared camera look.";
     const PARAM: ParamKind = ParamKind::Sliders(&[SliderDef {
         name: "Intensity",
         min: 0.0,
         max: 1.0,
         default: 0.0,
+        description: "Blend factor between the original image and the thermal gradient output; \
+                      0 is unchanged.",
     }]);
     const PASSES: &'static [PassDef] = &[PassDef {
         label: "thermal",
@@ -71,6 +74,8 @@ mod tests {
                 min: 0.0,
                 max: 1.0,
                 default: 0.0,
+                description: "Blend factor between the original image and the thermal gradient output; \
+                              0 is unchanged.",
             }])
         );
         assert_eq!(

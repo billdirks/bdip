@@ -14,24 +14,30 @@ pub struct ShadowsParams {
 impl TransformShader for ShadowsParams {
     const ID: &'static str = "shadows";
     const DISPLAY_NAME: &'static str = "Shadows";
+    const DESCRIPTION: &'static str =
+        "Selectively darkens or brightens dark regions without affecting highlights.";
     const PARAM: ParamKind = ParamKind::Sliders(&[
         SliderDef {
             name: "Amount",
             min: -1.0,
             max: 1.0,
             default: 0.0,
+            description: "Lift or lower shadows. Positive brightens; negative darkens.",
         },
         SliderDef {
             name: "Range",
             min: 0.0,
             max: 1.0,
             default: 0.4,
+            description: "Upper luminance boundary of the affected shadow band.",
         },
         SliderDef {
             name: "Start",
             min: 0.0,
             max: 1.0,
             default: 0.05,
+            description: "Luminance below which the shadow weight tapers to zero, \
+                          protecting pure blacks.",
         },
     ]);
     const PASSES: &'static [PassDef] = &[PassDef {
@@ -80,18 +86,22 @@ mod tests {
                     min: -1.0,
                     max: 1.0,
                     default: 0.0,
+                    description: "Lift or lower shadows. Positive brightens; negative darkens.",
                 },
                 SliderDef {
                     name: "Range",
                     min: 0.0,
                     max: 1.0,
                     default: 0.4,
+                    description: "Upper luminance boundary of the affected shadow band.",
                 },
                 SliderDef {
                     name: "Start",
                     min: 0.0,
                     max: 1.0,
                     default: 0.05,
+                    description: "Luminance below which the shadow weight tapers to zero, \
+                                  protecting pure blacks.",
                 },
             ])
         );

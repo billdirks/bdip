@@ -14,18 +14,21 @@ pub struct FilmGrainBlueParams {
 impl TransformShader for FilmGrainBlueParams {
     const ID: &'static str = "film_grain_blue";
     const DISPLAY_NAME: &'static str = "Film Grain (Blue)";
+    const DESCRIPTION: &'static str = "Adds luminance-weighted film grain using a blue noise texture for even spatial distribution.";
     const PARAM: ParamKind = ParamKind::Sliders(&[
         SliderDef {
             name: "Amount",
             min: 0.0,
             max: 0.1,
             default: 0.0,
+            description: "Maximum grain amplitude; 0 is silent, 0.1 is coarse.",
         },
         SliderDef {
             name: "Variation",
             min: 0.0,
             max: 1.0,
             default: 0.0,
+            description: "Offsets the blue noise sampling position to produce a different grain pattern.",
         },
     ]);
     const PASSES: &'static [PassDef] = &[PassDef {
@@ -79,12 +82,14 @@ mod tests {
                     min: 0.0,
                     max: 0.1,
                     default: 0.0,
+                    description: "Maximum grain amplitude; 0 is silent, 0.1 is coarse.",
                 },
                 SliderDef {
                     name: "Variation",
                     min: 0.0,
                     max: 1.0,
                     default: 0.0,
+                    description: "Offsets the blue noise sampling position to produce a different grain pattern.",
                 },
             ])
         );

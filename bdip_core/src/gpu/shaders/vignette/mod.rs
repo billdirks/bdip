@@ -13,18 +13,23 @@ pub struct VignetteParams {
 impl TransformShader for VignetteParams {
     const ID: &'static str = "vignette";
     const DISPLAY_NAME: &'static str = "Vignette";
+    const DESCRIPTION: &'static str =
+        "Darkens image edges with a radial falloff centered on the frame.";
     const PARAM: ParamKind = ParamKind::Sliders(&[
         SliderDef {
             name: "Radius",
             min: 0.0,
             max: 1.5,
             default: 0.8,
+            description: "Distance from center at which full darkening begins; \
+                          larger values push darkening toward the edges.",
         },
         SliderDef {
             name: "Softness",
             min: 0.0,
             max: 1.0,
             default: 0.5,
+            description: "Width of the transition zone from full brightness to full darkening.",
         },
     ]);
     const PASSES: &'static [PassDef] = &[PassDef {
@@ -71,13 +76,16 @@ mod tests {
                     name: "Radius",
                     min: 0.0,
                     max: 1.5,
-                    default: 0.8
+                    default: 0.8,
+                    description: "Distance from center at which full darkening begins; \
+                                  larger values push darkening toward the edges.",
                 },
                 SliderDef {
                     name: "Softness",
                     min: 0.0,
                     max: 1.0,
-                    default: 0.5
+                    default: 0.5,
+                    description: "Width of the transition zone from full brightness to full darkening.",
                 },
             ])
         );

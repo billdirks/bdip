@@ -15,11 +15,15 @@ pub struct ColorLutParams {
 impl TransformShader for ColorLutParams {
     const ID: &'static str = "color_lut";
     const DISPLAY_NAME: &'static str = "Color LUT";
+    const DESCRIPTION: &'static str =
+        "Applies a 3D color look-up table (LUT) color grade to the image.";
     const PARAM: ParamKind = ParamKind::Sliders(&[SliderDef {
         name: "Intensity",
         min: 0.0,
         max: 1.0,
         default: 1.0,
+        description: "How strongly the LUT color grade is applied; \
+                      0 leaves the image unchanged, 1 applies it fully.",
     }]);
     const PASSES: &'static [PassDef] = &[PassDef {
         label: "color_lut",
@@ -71,6 +75,8 @@ mod tests {
                 min: 0.0,
                 max: 1.0,
                 default: 1.0,
+                description: "How strongly the LUT color grade is applied; \
+                              0 leaves the image unchanged, 1 applies it fully.",
             }])
         );
         assert_eq!(

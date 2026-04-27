@@ -12,11 +12,14 @@ pub struct ExposureParams {
 impl TransformShader for ExposureParams {
     const ID: &'static str = "exposure";
     const DISPLAY_NAME: &'static str = "Exposure";
+    const DESCRIPTION: &'static str =
+        "Adjusts exposure in stops by multiplying linear light values by a power-of-two factor.";
     const PARAM: ParamKind = ParamKind::Sliders(&[SliderDef {
         name: "Exposure",
         min: -4.0,
         max: 4.0,
         default: 0.0,
+        description: "Exposure shift in stops. +1 doubles luminance; -1 halves it.",
     }]);
     const PASSES: &'static [PassDef] = &[PassDef {
         label: "exposure",
@@ -61,6 +64,7 @@ mod tests {
                 min: -4.0,
                 max: 4.0,
                 default: 0.0,
+                description: "Exposure shift in stops. +1 doubles luminance; -1 halves it.",
             }])
         );
     }

@@ -12,11 +12,15 @@ pub struct TintParams {
 impl TransformShader for TintParams {
     const ID: &'static str = "tint";
     const DISPLAY_NAME: &'static str = "Tint";
+    const DESCRIPTION: &'static str =
+        "Shifts color along the green–magenta axis by adjusting the YIQ Q component.";
     const PARAM: ParamKind = ParamKind::Sliders(&[SliderDef {
         name: "Tint",
         min: -1.0,
         max: 1.0,
         default: 0.0,
+        description: "Tint offset in the green–magenta direction. \
+                      Positive shifts toward magenta; negative shifts toward green.",
     }]);
     const PASSES: &'static [PassDef] = &[PassDef {
         label: "tint",
@@ -61,6 +65,8 @@ mod tests {
                 min: -1.0,
                 max: 1.0,
                 default: 0.0,
+                description: "Tint offset in the green\u{2013}magenta direction. \
+                              Positive shifts toward magenta; negative shifts toward green.",
             }])
         );
     }

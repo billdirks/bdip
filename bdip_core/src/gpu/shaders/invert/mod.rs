@@ -9,6 +9,7 @@ pub struct InvertParams {
 impl TransformShader for InvertParams {
     const ID: &'static str = "invert";
     const DISPLAY_NAME: &'static str = "Invert";
+    const DESCRIPTION: &'static str = "Inverts all color channels in linear light (1 − value).";
     const PARAM: ParamKind = ParamKind::Toggle;
     const PASSES: &'static [PassDef] = &[PassDef {
         label: "invert",

@@ -1934,11 +1934,13 @@ mod tests {
         impl TransformShader for TestAuxParams {
             const ID: &'static str = "__test_aux_shader";
             const DISPLAY_NAME: &'static str = "__Test Aux Shader";
+            const DESCRIPTION: &'static str = "Internal test shader.";
             const PARAM: ParamKind = ParamKind::Sliders(&[SliderDef {
                 name: "Intensity",
                 min: 0.0,
                 max: 1.0,
                 default: 0.0,
+                description: "Test intensity.",
             }]);
             const PASSES: &'static [PassDef] = &[PassDef {
                 label: "test_aux",

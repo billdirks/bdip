@@ -12,11 +12,15 @@ pub struct TemperatureParams {
 impl TransformShader for TemperatureParams {
     const ID: &'static str = "temperature";
     const DISPLAY_NAME: &'static str = "Temperature";
+    const DESCRIPTION: &'static str =
+        "Shifts white balance by scaling the red and blue channels in opposite directions.";
     const PARAM: ParamKind = ParamKind::Sliders(&[SliderDef {
         name: "Temperature",
         min: -1.0,
         max: 1.0,
         default: 0.0,
+        description: "Color temperature offset. Positive warms (more red, less blue); \
+                      negative cools (less red, more blue).",
     }]);
     const PASSES: &'static [PassDef] = &[PassDef {
         label: "temperature",
@@ -63,6 +67,8 @@ mod tests {
                 min: -1.0,
                 max: 1.0,
                 default: 0.0,
+                description: "Color temperature offset. Positive warms (more red, less blue); \
+                              negative cools (less red, more blue).",
             }])
         );
     }

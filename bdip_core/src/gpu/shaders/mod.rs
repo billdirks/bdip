@@ -27,6 +27,7 @@ pub struct SliderDef {
     pub min: f32,
     pub max: f32,
     pub default: f32,
+    pub description: &'static str,
 }
 
 /// Describes what kind of parameter a shader accepts.
@@ -94,6 +95,7 @@ pub struct PassDef {
 pub struct RuntimeShaderMeta {
     pub id: &'static str,
     pub display_name: &'static str,
+    pub description: &'static str,
     pub passes: &'static [PassDef],
     pub param: ParamKind,
 }
@@ -228,6 +230,7 @@ impl ShaderRegistration {
             meta: RuntimeShaderMeta {
                 id: T::ID,
                 display_name: T::DISPLAY_NAME,
+                description: T::DESCRIPTION,
                 passes: T::PASSES,
                 param: T::PARAM,
             },
@@ -245,6 +248,7 @@ impl ShaderRegistration {
 pub trait TransformShader: bytemuck::Pod {
     const ID: &'static str;
     const DISPLAY_NAME: &'static str;
+    const DESCRIPTION: &'static str;
     const PARAM: ParamKind;
     const PASSES: &'static [PassDef];
 

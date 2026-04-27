@@ -12,11 +12,14 @@ pub struct ClarityParams {
 impl TransformShader for ClarityParams {
     const ID: &'static str = "clarity";
     const DISPLAY_NAME: &'static str = "Clarity";
+    const DESCRIPTION: &'static str = "Adds midtone contrast via a high-pass (unsharp mask) operation in the working color space.";
     const PARAM: ParamKind = ParamKind::Sliders(&[SliderDef {
         name: "Amount",
         min: -1.0,
         max: 1.0,
         default: 0.0,
+        description: "Strength of the midtone contrast adjustment. \
+                      Negative values soften edges; positive values sharpen them.",
     }]);
     const PASSES: &'static [PassDef] = &[
         PassDef {
@@ -95,6 +98,8 @@ mod tests {
                 min: -1.0,
                 max: 1.0,
                 default: 0.0,
+                description: "Strength of the midtone contrast adjustment. \
+                              Negative values soften edges; positive values sharpen them.",
             }])
         );
         assert_eq!(

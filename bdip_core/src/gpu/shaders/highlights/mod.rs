@@ -14,24 +14,30 @@ pub struct HighlightsParams {
 impl TransformShader for HighlightsParams {
     const ID: &'static str = "highlights";
     const DISPLAY_NAME: &'static str = "Highlights";
+    const DESCRIPTION: &'static str =
+        "Selectively darkens or brightens bright regions without affecting shadows.";
     const PARAM: ParamKind = ParamKind::Sliders(&[
         SliderDef {
             name: "Amount",
             min: -1.0,
             max: 1.0,
             default: 0.0,
+            description: "Lift or lower highlights. Negative darkens; positive brightens.",
         },
         SliderDef {
             name: "Range",
             min: 0.0,
             max: 1.0,
             default: 0.6,
+            description: "Upper luminance boundary of the affected highlight band.",
         },
         SliderDef {
             name: "End",
             min: 0.0,
             max: 1.0,
             default: 0.95,
+            description: "Luminance above which the highlight weight tapers to zero, \
+                          protecting specular whites.",
         },
     ]);
     const PASSES: &'static [PassDef] = &[PassDef {
@@ -82,18 +88,22 @@ mod tests {
                     min: -1.0,
                     max: 1.0,
                     default: 0.0,
+                    description: "Lift or lower highlights. Negative darkens; positive brightens.",
                 },
                 SliderDef {
                     name: "Range",
                     min: 0.0,
                     max: 1.0,
                     default: 0.6,
+                    description: "Upper luminance boundary of the affected highlight band.",
                 },
                 SliderDef {
                     name: "End",
                     min: 0.0,
                     max: 1.0,
                     default: 0.95,
+                    description: "Luminance above which the highlight weight tapers to zero, \
+                                  protecting specular whites.",
                 },
             ])
         );

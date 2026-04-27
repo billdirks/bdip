@@ -9,6 +9,8 @@ pub struct GrayscaleParams {
 impl TransformShader for GrayscaleParams {
     const ID: &'static str = "grayscale";
     const DISPLAY_NAME: &'static str = "Grayscale";
+    const DESCRIPTION: &'static str =
+        "Converts the image to grayscale using Rec. 709 luminance coefficients.";
     const PARAM: ParamKind = ParamKind::Toggle;
     const PASSES: &'static [PassDef] = &[PassDef {
         label: "grayscale",

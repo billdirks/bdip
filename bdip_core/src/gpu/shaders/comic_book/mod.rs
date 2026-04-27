@@ -15,30 +15,36 @@ pub struct ComicBookParams {
 impl TransformShader for ComicBookParams {
     const ID: &'static str = "comic_book";
     const DISPLAY_NAME: &'static str = "Comic Book";
+    const DESCRIPTION: &'static str =
+        "Renders the image with a halftone dot pattern and ink outlines for a comic book style.";
     const PARAM: ParamKind = ParamKind::Sliders(&[
         SliderDef {
             name: "Strength",
             min: 0.0,
             max: 1.0,
             default: 0.0,
+            description: "Blend factor between the original image and the halftone+edge result.",
         },
         SliderDef {
             name: "Dot Scale",
             min: 4.0,
             max: 64.0,
             default: 16.0,
+            description: "Controls the size (in pixels) of the halftone dot pattern.",
         },
         SliderDef {
             name: "Edge Threshold",
             min: 0.0,
             max: 1.0,
             default: 0.10,
+            description: "Minimum Sobel gradient magnitude that triggers ink outline drawing.",
         },
         SliderDef {
             name: "Edge Thickness",
             min: 0.01,
             max: 0.5,
             default: 0.15,
+            description: "Controls the sharpness of the transition from unoutlined to outlined pixels.",
         },
     ]);
     const PASSES: &'static [PassDef] = &[
@@ -114,24 +120,28 @@ mod tests {
                     min: 0.0,
                     max: 1.0,
                     default: 0.0,
+                    description: "Blend factor between the original image and the halftone+edge result.",
                 },
                 SliderDef {
                     name: "Dot Scale",
                     min: 4.0,
                     max: 64.0,
                     default: 16.0,
+                    description: "Controls the size (in pixels) of the halftone dot pattern.",
                 },
                 SliderDef {
                     name: "Edge Threshold",
                     min: 0.0,
                     max: 1.0,
                     default: 0.10,
+                    description: "Minimum Sobel gradient magnitude that triggers ink outline drawing.",
                 },
                 SliderDef {
                     name: "Edge Thickness",
                     min: 0.01,
                     max: 0.5,
                     default: 0.15,
+                    description: "Controls the sharpness of the transition from unoutlined to outlined pixels.",
                 },
             ])
         );

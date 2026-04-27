@@ -16,36 +16,43 @@ pub struct CartoonParams {
 impl TransformShader for CartoonParams {
     const ID: &'static str = "cartoon";
     const DISPLAY_NAME: &'static str = "Cartoon";
+    const DESCRIPTION: &'static str =
+        "Posterizes colors and draws ink outlines to create a cartoon or illustration look.";
     const PARAM: ParamKind = ParamKind::Sliders(&[
         SliderDef {
             name: "Strength",
             min: 0.0,
             max: 1.0,
             default: 0.0,
+            description: "Blend factor between the original image and the posterized result.",
         },
         SliderDef {
             name: "Levels",
             min: 2.0,
             max: 16.0,
             default: 8.0,
+            description: "Number of discrete tonal steps in the quantized color palette.",
         },
         SliderDef {
             name: "Edge Threshold",
             min: 0.0,
             max: 1.0,
             default: 0.15,
+            description: "Minimum Sobel gradient magnitude that triggers edge darkening.",
         },
         SliderDef {
             name: "Edge Softness",
             min: 0.01,
             max: 0.5,
             default: 0.10,
+            description: "Width of the gradient ramp from no-darkening to full-darkening at edges.",
         },
         SliderDef {
             name: "Edge Darkness",
             min: 0.0,
             max: 1.0,
             default: 1.0,
+            description: "Maximum darkening applied at detected edges; 0 disables edge outlines.",
         },
     ]);
     const PASSES: &'static [PassDef] = &[
@@ -149,31 +156,36 @@ mod tests {
                     name: "Strength",
                     min: 0.0,
                     max: 1.0,
-                    default: 0.0
+                    default: 0.0,
+                    description: "Blend factor between the original image and the posterized result.",
                 },
                 SliderDef {
                     name: "Levels",
                     min: 2.0,
                     max: 16.0,
-                    default: 8.0
+                    default: 8.0,
+                    description: "Number of discrete tonal steps in the quantized color palette.",
                 },
                 SliderDef {
                     name: "Edge Threshold",
                     min: 0.0,
                     max: 1.0,
-                    default: 0.15
+                    default: 0.15,
+                    description: "Minimum Sobel gradient magnitude that triggers edge darkening.",
                 },
                 SliderDef {
                     name: "Edge Softness",
                     min: 0.01,
                     max: 0.5,
-                    default: 0.10
+                    default: 0.10,
+                    description: "Width of the gradient ramp from no-darkening to full-darkening at edges.",
                 },
                 SliderDef {
                     name: "Edge Darkness",
                     min: 0.0,
                     max: 1.0,
-                    default: 1.0
+                    default: 1.0,
+                    description: "Maximum darkening applied at detected edges; 0 disables edge outlines.",
                 },
             ])
         );

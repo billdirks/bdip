@@ -12,11 +12,15 @@ pub struct SaturationParams {
 impl TransformShader for SaturationParams {
     const ID: &'static str = "saturation";
     const DISPLAY_NAME: &'static str = "Saturation";
+    const DESCRIPTION: &'static str =
+        "Adjusts color saturation by scaling each channel's distance from the Rec. 709 luminance.";
     const PARAM: ParamKind = ParamKind::Sliders(&[SliderDef {
         name: "Amount",
         min: -1.0,
         max: 1.0,
         default: 0.0,
+        description: "Saturation offset. -1 fully desaturates to grayscale; \
+                      positive values push colors further from neutral.",
     }]);
     const PASSES: &'static [PassDef] = &[PassDef {
         label: "saturation",
@@ -63,6 +67,8 @@ mod tests {
                 min: -1.0,
                 max: 1.0,
                 default: 0.0,
+                description: "Saturation offset. -1 fully desaturates to grayscale; \
+                              positive values push colors further from neutral.",
             }])
         );
     }
