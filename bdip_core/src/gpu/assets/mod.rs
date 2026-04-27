@@ -1,5 +1,6 @@
 pub mod blue_noise;
 pub mod halftone_dots;
+pub mod luts;
 
 use crate::error::BdipError;
 use crate::gpu::shaders::AuxTextureDimension;
@@ -124,7 +125,13 @@ fn decode_and_upload_cube_raw(
     asset: &AuxAssetRegistration,
     size: u32,
 ) -> wgpu::Texture {
-    let floats: &[f32] = bytemuck::cast_slice(asset.raw_bytes);
+    // `include_bytes!` data is 1-byte aligned; read each f32 via from_le_bytes
+    // to avoid the alignment requirement that bytemuck::cast_slice would impose.
+    let floats: Vec<f32> = asset
+        .raw_bytes
+        .chunks_exact(4)
+        .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+        .collect();
     let pixel_count = (size * size * size) as usize;
     assert_eq!(
         floats.len(),

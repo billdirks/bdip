@@ -353,6 +353,41 @@ fn perf_gpu_roundtrip_24mp_comic_book() {
     );
 }
 
+/// Times the GPU critical path on a 24 MP image with the Color LUT single-pass
+/// shader. Uses the identity LUT at full intensity to benchmark the Group 2
+/// bind group setup cost and the `get_or_upload` cache-hit path on the warm run.
+/// This is the first shader in the plan that exercises the 3D texture pipeline.
+#[test]
+fn perf_gpu_roundtrip_24mp_color_lut() {
+    let engine = GpuEngine::new().unwrap();
+    let mut renderer = Renderer::new(&engine);
+
+    let img = make_solid_image(PERF_WIDTH, PERF_HEIGHT, 32767, 32767, 32767);
+    let uploaded = upload_texture(&engine.device, &engine.queue, &img);
+
+    let transform = Transform {
+        shader_id: "color_lut",
+        values: vec![1.0f32],
+    };
+    let result = bench_shader_roundtrip(
+        &engine,
+        &mut renderer,
+        &uploaded,
+        img.width(),
+        img.height(),
+        &transform,
+    );
+
+    let (label, pass_count) = shader_display_info(transform.shader_id);
+    print_perf_report(label, pass_count, &result, PERF_WARM_TARGET_MS);
+
+    assert!(
+        result.warm.critical_path_ms() < PERF_WARM_TARGET_MS,
+        "{label} warm critical path exceeded {PERF_WARM_TARGET_MS:.0} ms target: {:.2} ms",
+        result.warm.critical_path_ms()
+    );
+}
+
 /// Times the GPU critical path on a 24 MP image with the Cartoon multi-pass
 /// shader (smooth_h, smooth_v, quantize, edges, combine). See
 /// `perf_gpu_roundtrip_24mp` and `PhaseTiming` for the measurement model.
