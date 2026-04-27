@@ -1,3 +1,5 @@
+pub mod blue_noise;
+
 use crate::error::BdipError;
 use crate::gpu::shaders::AuxTextureDimension;
 use std::collections::HashMap;

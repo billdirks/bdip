@@ -3,6 +3,7 @@ pub mod cartoon;
 pub mod clarity;
 pub mod contrast;
 pub mod exposure;
+pub mod film_grain_blue;
 pub mod grayscale;
 pub mod highlights;
 pub mod invert;
