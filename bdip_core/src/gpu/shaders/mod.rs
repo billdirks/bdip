@@ -1,6 +1,7 @@
 pub mod brightness;
 pub mod cartoon;
 pub mod clarity;
+pub mod comic_book;
 pub mod contrast;
 pub mod exposure;
 pub mod film_grain_blue;

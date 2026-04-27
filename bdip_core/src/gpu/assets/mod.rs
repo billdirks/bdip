@@ -1,4 +1,5 @@
 pub mod blue_noise;
+pub mod halftone_dots;
 
 use crate::error::BdipError;
 use crate::gpu::shaders::AuxTextureDimension;
