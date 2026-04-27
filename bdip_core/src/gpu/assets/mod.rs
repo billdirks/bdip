@@ -1,6 +1,8 @@
 pub mod blue_noise;
 pub mod halftone_dots;
 pub mod luts;
+pub mod paper_grain;
+pub mod thermal_gradient;
 
 use crate::error::BdipError;
 use crate::gpu::shaders::AuxTextureDimension;

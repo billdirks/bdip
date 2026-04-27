@@ -9,9 +9,11 @@ pub mod film_grain_blue;
 pub mod grayscale;
 pub mod highlights;
 pub mod invert;
+pub mod parchment;
 pub mod saturation;
 pub mod shadows;
 pub mod temperature;
+pub mod thermal;
 pub mod tint;
 pub mod vignette;
 
