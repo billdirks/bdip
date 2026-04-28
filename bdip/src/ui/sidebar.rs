@@ -1,5 +1,5 @@
 use iced::widget::{
-    button, column, container, pick_list, row, rule, scrollable, slider, text, toggler,
+    button, column, container, pick_list, row, rule, scrollable, slider, text, toggler, tooltip,
 };
 use iced::{Element, Length};
 
@@ -66,8 +66,14 @@ fn transform_view(app: &BdipApp) -> Element<'_, Message> {
                     Some(ps) if ps.param_index == i => ps.value,
                     _ => base_vals.get(i).copied().unwrap_or(def.default),
                 };
-                let label_row = row![
+                let label: Element<'_, Message> = tooltip(
                     text(def.name),
+                    text(def.description),
+                    tooltip::Position::Right,
+                )
+                .into();
+                let label_row = row![
+                    label,
                     text(format!(
                         "{:.*}",
                         SLIDER_DECIMAL_PLACES as usize, display_val
@@ -92,13 +98,18 @@ fn transform_view(app: &BdipApp) -> Element<'_, Message> {
         }
         _ => {
             let is_active = app.is_transform_active(&app.selected_transform);
-            row![
+            let base_row: Element<'_, Message> = row![
                 text("Apply"),
                 toggler(is_active).on_toggle(|_| Message::ToggleParameterless),
             ]
             .spacing(8)
             .align_y(iced::Alignment::Center)
-            .into()
+            .into();
+            if let Some(meta) = selected_reg.map(|r| &r.meta) {
+                tooltip(base_row, text(meta.description), tooltip::Position::Right).into()
+            } else {
+                base_row
+            }
         }
     };
 
