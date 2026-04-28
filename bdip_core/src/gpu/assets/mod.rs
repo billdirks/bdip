@@ -85,8 +85,15 @@ fn decode_and_upload_png(
 ) -> wgpu::Texture {
     let img = image::load_from_memory(asset.raw_bytes)
         .expect("Failed to decode PNG aux texture")
-        .to_rgba8();
+        .to_rgba16();
     let (width, height) = img.dimensions();
+
+    // Convert u16 [0, 65535] → f16 to match the main pipeline's Rgba16Float format.
+    let rgba_f16: Vec<u8> = img
+        .as_raw()
+        .iter()
+        .flat_map(|&v| f32_to_f16(v as f32 / 65535.0).to_le_bytes())
+        .collect();
 
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some(asset.name),
@@ -98,17 +105,17 @@ fn decode_and_upload_png(
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
-        format: TextureFormat::Rgba8Unorm,
+        format: TextureFormat::Rgba16Float,
         usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
         view_formats: &[],
     });
 
     queue.write_texture(
         texture.as_image_copy(),
-        &img,
+        &rgba_f16,
         wgpu::TexelCopyBufferLayout {
             offset: 0,
-            bytes_per_row: Some(4 * width),
+            bytes_per_row: Some(8 * width), // 4 channels × 2 bytes (f16)
             rows_per_image: None,
         },
         wgpu::Extent3d {
