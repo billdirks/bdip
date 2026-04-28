@@ -733,7 +733,13 @@ fn execute_render_pipeline(
     for t in render_list {
         let new_tex = {
             let src = current.as_ref().unwrap_or(base);
-            gpu.renderer.apply(&gpu.engine, src, t)
+            match gpu.renderer.apply(&gpu.engine, src, t) {
+                Ok(tex) => tex,
+                Err(e) => {
+                    eprintln!("Failed to apply transform '{}': {e}", t.shader_id);
+                    return None;
+                }
+            }
         };
         current = Some(new_tex);
     }

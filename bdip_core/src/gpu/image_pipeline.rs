@@ -1,9 +1,10 @@
+use crate::error::BdipError;
 use crate::gpu::assets::AuxTextureCache;
 use crate::gpu::engine::GpuEngine;
 use crate::gpu::shaders::PassScale;
 use crate::gpu::shaders::{
-    AuxSamplerFilter, AuxTextureDef, AuxTextureDimension, PassInput, PassOutput, Transform,
-    registry_by_id,
+    AuxSamplerFilter, AuxTextureDef, AuxTextureDimension, PassDef, PassInput, PassOutput,
+    Transform, registry_by_id,
 };
 use std::collections::{HashMap, hash_map::Entry};
 use wgpu::{
@@ -219,6 +220,62 @@ fn build_aux_bind_group_layout(
     })
 }
 
+/// Builds the Group 2 bind group for a pass's aux textures, reusing samplers
+/// from `sampler_cache`. The returned bind group references textures owned by
+/// `aux_texture_cache` and samplers owned by `sampler_cache`; both must outlive
+/// the bind group.
+fn build_aux_bind_group(
+    device: &wgpu::Device,
+    aux_textures: &[AuxTextureDef],
+    layout: &wgpu::BindGroupLayout,
+    aux_texture_cache: &AuxTextureCache,
+    sampler_cache: &mut HashMap<AuxSamplerFilter, wgpu::Sampler>,
+) -> wgpu::BindGroup {
+    // Ensure samplers exist before borrowing them by reference for entries.
+    for aux_def in aux_textures {
+        sampler_cache.entry(aux_def.filter).or_insert_with(|| {
+            let filter = match aux_def.filter {
+                AuxSamplerFilter::Linear => wgpu::FilterMode::Linear,
+                AuxSamplerFilter::Nearest => wgpu::FilterMode::Nearest,
+            };
+            device.create_sampler(&wgpu::SamplerDescriptor {
+                mag_filter: filter,
+                min_filter: filter,
+                ..Default::default()
+            })
+        });
+    }
+
+    let views: Vec<wgpu::TextureView> = aux_textures
+        .iter()
+        .map(|aux_def| {
+            let tex = aux_texture_cache
+                .get(aux_def.name)
+                .unwrap_or_else(|| panic!("Aux texture '{}' not in cache", aux_def.name));
+            tex.create_view(&TextureViewDescriptor::default())
+        })
+        .collect();
+
+    let mut entries = Vec::with_capacity(aux_textures.len() * 2);
+    for (i, aux_def) in aux_textures.iter().enumerate() {
+        let base = (i * 2) as u32;
+        entries.push(BindGroupEntry {
+            binding: base,
+            resource: BindingResource::TextureView(&views[i]),
+        });
+        entries.push(BindGroupEntry {
+            binding: base + 1,
+            resource: BindingResource::Sampler(&sampler_cache[&aux_def.filter]),
+        });
+    }
+
+    device.create_bind_group(&BindGroupDescriptor {
+        label: Some("Aux Texture Bind Group"),
+        layout,
+        entries: &entries,
+    })
+}
+
 // ========== ScratchPool ==========
 
 struct ScratchPool {
@@ -241,6 +298,17 @@ pub struct Renderer {
     passes_cache: ShaderPassesCache,
 
     aux_texture_cache: AuxTextureCache,
+
+    // Cached samplers keyed by filter mode. Samplers are cheap GPU objects and
+    // there are only ever two (Linear, Nearest), but reusing them lets the
+    // aux bind group cache be keyed purely by pass identity.
+    aux_sampler_cache: HashMap<AuxSamplerFilter, wgpu::Sampler>,
+
+    // Cached aux bind groups keyed by `&'static PassDef` pointer cast to
+    // `usize`. Aux textures are static (uploaded once, never change) and each
+    // `PassDef` has a fixed `aux_textures` slice, so the bind group only needs
+    // to be built once per pass — every subsequent dispatch reuses it.
+    aux_bind_group_cache: HashMap<usize, wgpu::BindGroup>,
 
     scratch_pool: ScratchPool,
 
@@ -395,6 +463,8 @@ impl Renderer {
             present_params_bind_group_layout,
             passes_cache: ShaderPassesCache::new(),
             aux_texture_cache: AuxTextureCache::new(),
+            aux_sampler_cache: HashMap::new(),
+            aux_bind_group_cache: HashMap::new(),
             scratch_pool: ScratchPool {
                 source_width: 0,
                 source_height: 0,
@@ -771,11 +841,11 @@ impl Renderer {
         engine: &GpuEngine,
         src_texture: &wgpu::Texture,
         transform: &Transform,
-    ) -> wgpu::Texture {
+    ) -> Result<wgpu::Texture, BdipError> {
         let reg = registry_by_id(transform.shader_id)
             .unwrap_or_else(|| panic!("Unknown shader ID: '{}'", transform.shader_id));
         self.apply_passes(engine, src_texture, transform, reg, reg.meta.passes, false)
-            .0
+            .map(|(tex, _)| tex)
     }
 
     /// Like `apply`, but instruments each compute pass with GPU timestamp
@@ -786,7 +856,7 @@ impl Renderer {
         engine: &GpuEngine,
         src_texture: &wgpu::Texture,
         transform: &Transform,
-    ) -> (wgpu::Texture, Vec<PassTiming>) {
+    ) -> Result<(wgpu::Texture, Vec<PassTiming>), BdipError> {
         assert!(
             engine.supports_timestamps(),
             "apply_with_timestamps requires TIMESTAMP_QUERY device feature"
@@ -804,7 +874,7 @@ impl Renderer {
         reg: &'static crate::gpu::shaders::ShaderRegistration,
         passes: &[crate::gpu::shaders::PassDef],
         timed: bool,
-    ) -> (wgpu::Texture, Vec<PassTiming>) {
+    ) -> Result<(wgpu::Texture, Vec<PassTiming>), BdipError> {
         let (width, height, depth) = (
             src_texture.width(),
             src_texture.height(),
@@ -842,21 +912,43 @@ impl Renderer {
         for pass in passes {
             for aux in pass.aux_textures {
                 self.aux_texture_cache
-                    .get_or_upload(&engine.device, &engine.queue, aux.name)
-                    .unwrap_or_else(|e| {
-                        panic!(
-                            "Failed to load auxiliary texture '{}' for shader '{}': {e}",
-                            aux.name, transform.shader_id,
-                        )
-                    });
+                    .get_or_upload(&engine.device, &engine.queue, aux.name)?;
             }
         }
 
         let params_buffer = Self::create_params_buffer(engine, reg, &transform.values);
 
-        let cached_pipelines = self
-            .passes_cache
+        // Compile pipelines first so we can read each pass's aux bind group
+        // layout when populating the bind group cache below. The pipeline cache
+        // and aux bind group cache are independent borrows of `self`.
+        self.passes_cache
             .get_or_create(&engine.device, transform.shader_id);
+
+        // Populate (or reuse) the cached aux bind group for each pass that
+        // declares aux textures. Keyed by `&'static PassDef` pointer so each
+        // pass's bind group is built exactly once for the lifetime of the
+        // renderer.
+        let pipelines = self.passes_cache.cache.get(transform.shader_id).unwrap();
+        for (pass_idx, pass) in passes.iter().enumerate() {
+            if pass.aux_textures.is_empty() {
+                continue;
+            }
+            let key = pass as *const PassDef as usize;
+            if self.aux_bind_group_cache.contains_key(&key) {
+                continue;
+            }
+            let layout = pipelines[pass_idx].aux_bind_group_layout.as_ref().unwrap();
+            let bind_group = build_aux_bind_group(
+                &engine.device,
+                pass.aux_textures,
+                layout,
+                &self.aux_texture_cache,
+                &mut self.aux_sampler_cache,
+            );
+            self.aux_bind_group_cache.insert(key, bind_group);
+        }
+
+        let cached_pipelines = self.passes_cache.cache.get(transform.shader_id).unwrap();
 
         let timings = if timed {
             Self::encode_transform_passes_timed(
@@ -867,7 +959,7 @@ impl Renderer {
                 &final_texture,
                 &borrowed_scratches,
                 &params_buffer,
-                &self.aux_texture_cache,
+                &self.aux_bind_group_cache,
             )
         } else {
             Self::encode_transform_passes(
@@ -878,14 +970,14 @@ impl Renderer {
                 &final_texture,
                 &borrowed_scratches,
                 &params_buffer,
-                &self.aux_texture_cache,
+                &self.aux_bind_group_cache,
             );
             Vec::new()
         };
 
         self.return_scratch_textures(borrowed_scratches);
 
-        (final_texture, timings)
+        Ok((final_texture, timings))
     }
 
     fn sync_scratch_pool_dims(&mut self, width: u32, height: u32) {
@@ -978,7 +1070,7 @@ impl Renderer {
         final_texture: &wgpu::Texture,
         scratch_textures: &HashMap<&'static str, wgpu::Texture>,
         params_buffer: &wgpu::Buffer,
-        aux_texture_cache: &AuxTextureCache,
+        aux_bind_group_cache: &HashMap<usize, wgpu::BindGroup>,
     ) {
         let mut encoder = engine
             .device
@@ -993,7 +1085,7 @@ impl Renderer {
             final_texture,
             scratch_textures,
             params_buffer,
-            aux_texture_cache,
+            aux_bind_group_cache,
             None,
         );
 
@@ -1009,7 +1101,7 @@ impl Renderer {
         final_texture: &wgpu::Texture,
         scratch_textures: &HashMap<&'static str, wgpu::Texture>,
         params_buffer: &wgpu::Buffer,
-        aux_texture_cache: &AuxTextureCache,
+        aux_bind_group_cache: &HashMap<usize, wgpu::BindGroup>,
     ) -> Vec<PassTiming> {
         let num_passes = passes.len() as u32;
         let query_count = 2 * num_passes;
@@ -1048,7 +1140,7 @@ impl Renderer {
             final_texture,
             scratch_textures,
             params_buffer,
-            aux_texture_cache,
+            aux_bind_group_cache,
             Some(&query_set),
         );
 
@@ -1104,7 +1196,7 @@ impl Renderer {
         final_texture: &wgpu::Texture,
         scratch_textures: &HashMap<&'static str, wgpu::Texture>,
         params_buffer: &wgpu::Buffer,
-        aux_texture_cache: &AuxTextureCache,
+        aux_bind_group_cache: &HashMap<usize, wgpu::BindGroup>,
         query_set: Option<&wgpu::QuerySet>,
     ) {
         let src_view = src_texture.create_view(&TextureViewDescriptor::default());
@@ -1157,44 +1249,15 @@ impl Renderer {
                 }],
             });
 
-            let aux_bind_group = if !pass.aux_textures.is_empty() {
-                let mut views = Vec::new();
-                let mut samplers = Vec::new();
-                for aux_def in pass.aux_textures {
-                    let tex = aux_texture_cache
-                        .get(aux_def.name)
-                        .unwrap_or_else(|| panic!("Aux texture '{}' not in cache", aux_def.name));
-                    views.push(tex.create_view(&TextureViewDescriptor::default()));
-                    let filter = match aux_def.filter {
-                        AuxSamplerFilter::Linear => wgpu::FilterMode::Linear,
-                        AuxSamplerFilter::Nearest => wgpu::FilterMode::Nearest,
-                    };
-                    samplers.push(engine.device.create_sampler(&wgpu::SamplerDescriptor {
-                        mag_filter: filter,
-                        min_filter: filter,
-                        ..Default::default()
-                    }));
-                }
-                let mut entries = Vec::new();
-                for i in 0..pass.aux_textures.len() {
-                    let base = (i * 2) as u32;
-                    entries.push(BindGroupEntry {
-                        binding: base,
-                        resource: BindingResource::TextureView(&views[i]),
-                    });
-                    entries.push(BindGroupEntry {
-                        binding: base + 1,
-                        resource: BindingResource::Sampler(&samplers[i]),
-                    });
-                }
-                let layout = pipeline.aux_bind_group_layout.as_ref().unwrap();
-                Some(engine.device.create_bind_group(&BindGroupDescriptor {
-                    label: Some("Aux Texture Bind Group"),
-                    layout,
-                    entries: &entries,
-                }))
-            } else {
+            let aux_bind_group = if pass.aux_textures.is_empty() {
                 None
+            } else {
+                let key = pass as *const PassDef as usize;
+                Some(
+                    aux_bind_group_cache
+                        .get(&key)
+                        .expect("aux bind group should have been pre-built in apply_passes"),
+                )
             };
 
             let timestamp_writes = query_set.map(|qs| {
@@ -1219,7 +1282,7 @@ impl Renderer {
                 cpass.set_pipeline(&pipeline.pipeline);
                 cpass.set_bind_group(0, &texture_bind_group, &[]);
                 cpass.set_bind_group(1, &params_bind_group, &[]);
-                if let Some(ref aux_bg) = aux_bind_group {
+                if let Some(aux_bg) = aux_bind_group {
                     cpass.set_bind_group(2, aux_bg, &[]);
                 }
                 cpass.dispatch_workgroups(out_w.div_ceil(16), out_h.div_ceil(16), 1);

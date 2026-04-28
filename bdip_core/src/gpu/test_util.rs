@@ -21,7 +21,7 @@ pub fn roundtrip(
     let upload = upload_texture(&engine.device, &engine.queue, img);
     let mut current = renderer.ingest(engine, &upload);
     for t in transforms {
-        current = renderer.apply(engine, &current, t);
+        current = renderer.apply(engine, &current, t).unwrap();
     }
     let buf = renderer.present(engine, &current);
     download_presentation_buffer(&engine.device, &engine.queue, &buf, w, h).unwrap()

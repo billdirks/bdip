@@ -94,7 +94,7 @@ fn main() -> anyhow::Result<()> {
         let mut current_texture = renderer.ingest(&engine, &uploaded_texture);
         for transform in &transforms {
             println!("Applying {:?}", transform);
-            current_texture = renderer.apply(&engine, &current_texture, transform);
+            current_texture = renderer.apply(&engine, &current_texture, transform)?;
         }
         timer.lap("gpu execute");
 

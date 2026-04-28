@@ -92,9 +92,14 @@ fn bench_shader_roundtrip(
     let t_execute = Instant::now();
     let ingested = renderer.ingest(engine, uploaded);
     let (transformed, cold_pass_timings) = if use_timestamps {
-        renderer.apply_with_timestamps(engine, &ingested, transform)
+        renderer
+            .apply_with_timestamps(engine, &ingested, transform)
+            .unwrap()
     } else {
-        (renderer.apply(engine, &ingested, transform), Vec::new())
+        (
+            renderer.apply(engine, &ingested, transform).unwrap(),
+            Vec::new(),
+        )
     };
     let present_buf = renderer.present(engine, &transformed);
     let cold = {
@@ -117,9 +122,14 @@ fn bench_shader_roundtrip(
     // --- Run 2: warm (pipelines compiled, staging buffer + pixel_vec cached) ---
     let t_execute = Instant::now();
     let (transformed, warm_pass_timings) = if use_timestamps {
-        renderer.apply_with_timestamps(engine, &ingested, transform)
+        renderer
+            .apply_with_timestamps(engine, &ingested, transform)
+            .unwrap()
     } else {
-        (renderer.apply(engine, &ingested, transform), Vec::new())
+        (
+            renderer.apply(engine, &ingested, transform).unwrap(),
+            Vec::new(),
+        )
     };
     let present_buf = renderer.present(engine, &transformed);
     let warm = {
