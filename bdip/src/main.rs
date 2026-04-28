@@ -51,8 +51,56 @@ fn parse_transform(s: &str) -> anyhow::Result<Transform> {
     })
 }
 
+fn describe_shader(shader_id: &str) -> anyhow::Result<()> {
+    let reg = registry_by_id(shader_id).ok_or_else(|| {
+        let available = all_registrations()
+            .map(|r| r.meta.id)
+            .collect::<Vec<_>>()
+            .join(", ");
+        anyhow::anyhow!("Unknown shader '{}'. Available: {}", shader_id, available)
+    })?;
+
+    let meta = &reg.meta;
+    println!("Shader:  {}", meta.display_name);
+    println!("ID:      {}", meta.id);
+    println!();
+    println!("{}", meta.description);
+    println!();
+
+    match &meta.param {
+        ParamKind::Sliders(defs) => {
+            let positional: String = defs
+                .iter()
+                .map(|d| format!("<{}>", d.name.to_lowercase().replace(' ', "_")))
+                .collect::<Vec<_>>()
+                .join(":");
+            println!("Usage:   --apply {}:{}", meta.id, positional);
+            println!();
+            println!("Parameters:");
+            for def in defs.iter() {
+                println!(
+                    "  {}  (range: {}..{}, default: {})",
+                    def.name, def.min, def.max, def.default
+                );
+                println!("    {}", def.description);
+            }
+        }
+        ParamKind::Toggle => {
+            println!("Usage:   --apply {}", meta.id);
+            println!();
+            println!("No parameters — the effect is either on or off.");
+        }
+    }
+
+    Ok(())
+}
+
 fn main() -> anyhow::Result<()> {
     let args = cli::Cli::parse();
+
+    if let Some(ref shader_id) = args.describe_shader {
+        return describe_shader(shader_id);
+    }
 
     if args.headless {
         let output_path = args

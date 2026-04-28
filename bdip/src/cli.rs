@@ -26,4 +26,8 @@ pub struct Cli {
     /// Print per-stage pipeline timings to stderr after headless processing
     #[arg(long, default_value_t = false)]
     pub timings: bool,
+
+    /// Print CLI usage and parameter descriptions for a shader, then exit
+    #[arg(long, value_name = "SHADER_ID")]
+    pub describe_shader: Option<String>,
 }
