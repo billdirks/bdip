@@ -229,6 +229,22 @@ pub fn ghost_button(theme: &Theme, status: button::Status) -> button::Style {
     }
 }
 
+/// Style for parameter description tooltips. Uses a dark slate-blue background with a
+/// faint border so the tooltip reads clearly over the sidebar's gray surface without
+/// blending into it. Chosen to be complementary to gray without any garish hue.
+pub fn tooltip_container(_theme: &Theme) -> container::Style {
+    container::Style {
+        background: Some(Background::Color(Color::from_rgb(0.18, 0.21, 0.28))),
+        border: Border {
+            color: Color::from_rgba(0.50, 0.60, 0.78, 0.65),
+            width: 1.0,
+            radius: 4.0.into(),
+        },
+        text_color: Some(Color::from_rgb(0.88, 0.90, 0.94)),
+        ..Default::default()
+    }
+}
+
 /// Style for the error banner displayed at the top of the canvas area.
 pub fn error_banner(_theme: &Theme) -> container::Style {
     container::Style {

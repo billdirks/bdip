@@ -71,6 +71,9 @@ fn transform_view(app: &BdipApp) -> Element<'_, Message> {
                     text(def.description),
                     tooltip::Position::Right,
                 )
+                .gap(10.0)
+                .padding(8)
+                .style(style::tooltip_container)
                 .into();
                 let label_row = row![
                     label,
@@ -106,7 +109,11 @@ fn transform_view(app: &BdipApp) -> Element<'_, Message> {
             .align_y(iced::Alignment::Center)
             .into();
             if let Some(meta) = selected_reg.map(|r| &r.meta) {
-                tooltip(base_row, text(meta.description), tooltip::Position::Right).into()
+                tooltip(base_row, text(meta.description), tooltip::Position::Right)
+                    .gap(10.0)
+                    .padding(8)
+                    .style(style::tooltip_container)
+                    .into()
             } else {
                 base_row
             }
