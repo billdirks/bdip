@@ -21,7 +21,7 @@ impl TransformShader for ColorLutParams {
         name: "Intensity",
         min: 0.0,
         max: 1.0,
-        default: 1.0,
+        default: 0.0,
         description: "How strongly the LUT color grade is applied; \
                       0 leaves the image unchanged, 1 applies it fully.",
     }]);
@@ -74,7 +74,7 @@ mod tests {
                 name: "Intensity",
                 min: 0.0,
                 max: 1.0,
-                default: 1.0,
+                default: 0.0,
                 description: "How strongly the LUT color grade is applied; \
                               0 leaves the image unchanged, 1 applies it fully.",
             }])

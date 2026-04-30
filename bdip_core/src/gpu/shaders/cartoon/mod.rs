@@ -51,7 +51,7 @@ impl TransformShader for CartoonParams {
             name: "Edge Darkness",
             min: 0.0,
             max: 1.0,
-            default: 1.0,
+            default: 0.0,
             description: "Maximum darkening applied at detected edges; 0 disables edge outlines.",
         },
     ]);
@@ -184,7 +184,7 @@ mod tests {
                     name: "Edge Darkness",
                     min: 0.0,
                     max: 1.0,
-                    default: 1.0,
+                    default: 0.0,
                     description: "Maximum darkening applied at detected edges; 0 disables edge outlines.",
                 },
             ])

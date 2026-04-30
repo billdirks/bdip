@@ -21,7 +21,7 @@ impl TransformShader for PopArtParams {
             name: "Strength",
             min: 0.0,
             max: 1.0,
-            default: 1.0,
+            default: 0.0,
             description: "Blend factor between the original image and the pop art result.",
         },
         SliderDef {
@@ -101,7 +101,7 @@ mod tests {
                     name: "Strength",
                     min: 0.0,
                     max: 1.0,
-                    default: 1.0,
+                    default: 0.0,
                     description: "Blend factor between the original image and the pop art result.",
                 },
                 SliderDef {

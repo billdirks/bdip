@@ -21,7 +21,7 @@ impl TransformShader for PolaroidParams {
             name: "Grade",
             min: 0.0,
             max: 1.0,
-            default: 1.0,
+            default: 0.0,
             description: "Intensity of the Polaroid color grade (warm mids, faded blacks); \
                           0 leaves the image ungraded.",
         },
@@ -29,7 +29,7 @@ impl TransformShader for PolaroidParams {
             name: "Border",
             min: 0.0,
             max: 1.0,
-            default: 1.0,
+            default: 0.0,
             description: "Opacity of the white Polaroid border frame; \
                           0 hides the border, 1 shows it at full white.",
         },
@@ -95,7 +95,7 @@ mod tests {
                     name: "Grade",
                     min: 0.0,
                     max: 1.0,
-                    default: 1.0,
+                    default: 0.0,
                     description: "Intensity of the Polaroid color grade (warm mids, faded blacks); \
                                   0 leaves the image ungraded.",
                 },
@@ -103,7 +103,7 @@ mod tests {
                     name: "Border",
                     min: 0.0,
                     max: 1.0,
-                    default: 1.0,
+                    default: 0.0,
                     description: "Opacity of the white Polaroid border frame; \
                                   0 hides the border, 1 shows it at full white.",
                 },

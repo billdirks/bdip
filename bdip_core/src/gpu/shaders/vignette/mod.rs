@@ -20,7 +20,7 @@ impl TransformShader for VignetteParams {
             name: "Radius",
             min: 0.0,
             max: 1.5,
-            default: 0.8,
+            default: 1.5,
             description: "Distance from center at which full darkening begins; \
                           larger values push darkening toward the edges.",
         },
@@ -28,7 +28,7 @@ impl TransformShader for VignetteParams {
             name: "Softness",
             min: 0.0,
             max: 1.0,
-            default: 0.5,
+            default: 0.0,
             description: "Width of the transition zone from full brightness to full darkening.",
         },
     ]);
@@ -76,7 +76,7 @@ mod tests {
                     name: "Radius",
                     min: 0.0,
                     max: 1.5,
-                    default: 0.8,
+                    default: 1.5,
                     description: "Distance from center at which full darkening begins; \
                                   larger values push darkening toward the edges.",
                 },
@@ -84,7 +84,7 @@ mod tests {
                     name: "Softness",
                     min: 0.0,
                     max: 1.0,
-                    default: 0.5,
+                    default: 0.0,
                     description: "Width of the transition zone from full brightness to full darkening.",
                 },
             ])
