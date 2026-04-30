@@ -10,6 +10,7 @@ pub mod grayscale;
 pub mod highlights;
 pub mod invert;
 pub mod parchment;
+pub mod polaroid;
 pub mod saturation;
 pub mod shadows;
 pub mod temperature;
