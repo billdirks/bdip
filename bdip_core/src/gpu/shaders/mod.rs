@@ -6,6 +6,7 @@ pub mod comic_book;
 pub mod contrast;
 pub mod exposure;
 pub mod film_grain_blue;
+pub mod fisheye;
 pub mod grayscale;
 pub mod highlights;
 pub mod invert;
