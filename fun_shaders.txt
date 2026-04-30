@@ -1,0 +1,213 @@
+To help you understand how these filters are built technically (whether in a game engine like Unity/Unreal, a web-based WebGL tool, or a mobile app), I have annotated the list using the following technical key:
+
+### **Implementation Key**
+* **[1S]** – **Single Shader:** Can be achieved in one pass (simple pixel math or UV manipulation).
+* **[MS]** – **Multiple Shaders (Fixed):** Requires a sequence of specific steps (e.g., Edge detection → Blur → Blend).
+* **[VS]** – **Variable Linear Shaders:** The number of passes depends on user settings (e.g., strength of blur or "stacked" effects).
+* **[CG]** – **Complex Graph:** Requires non-linear logic, branching paths, or temporal feedback loops.
+* **[TX]** – **External Texture Required:** Needs a LUT (Look-Up Table), noise map, paper texture, or border mask.
+
+---
+
+
+
+## 🎞️ Retro & Vintage Classics
+1.  **Polaroid:** [MS] [TX] (Requires a border mask and color LUT).
+2.  **Sepia:** [1S] (Simple color matrix multiplication).
+3.  **1970s Fade:** [1S] [TX] (Usually uses a 3D LUT for color grading).
+4.  **Daguerreotype:** [MS] [TX] (Contrast pass + metallic texture overlay).
+5.  **VHS Glitch:** [CG] [TX] (Needs noise maps + time-based UV displacement).
+6.  **Kodachrome:** [1S] [TX] (Specific color curve or LUT).
+7.  **8mm Film:** [CG] [TX] (Flicker logic + grain/scratch textures).
+8.  **Cyanotype:** [1S] (Blue-scale color transformation).
+9.  **Tintype:** [MS] [TX] (Desaturation + vignette + grit overlay).
+10. **Technicolor:** [1S] (Simulating the 3-strip color mix).
+11. **Lomo:** [1S] (Vignette math + saturation boost).
+12. **Film Grain:** [1S] [TX] (Procedural noise or a noise texture).
+13. **Light Leak:** [1S] [TX] (An additive blend of a light streak texture).
+14. **Coffee Stained:** [1S] [TX] (Multiplicative blend of a stain texture).
+15. **Instamatic:** [1S] [TX] (Color shift LUT).
+16. **Dust & Scratches:** [1S] [TX] (Static or animated scratch texture).
+17. **Black & White (Noir):** [1S] (Luminance calculation).
+18. **Retro Newspaper:** [MS] (Grayscale → Quantization → Halftone pass).
+19. **Antique Gold:** [1S] (Color tinting).
+20. **Burned Edges:** [1S] [TX] (Gradient mask or burn texture).
+
+## 🎨 Artistic & Painterly Styles
+21. **Pop Art:** [MS] (Thresholding → Color mapping → Dot overlay).
+22. **Cartoon:** [MS] (Sobel edge detection + Color quantization).
+23. **Oil Painting:** [VS] (Kuwahara filter—requires multiple sampling passes).
+24. **Watercolor:** [CG] [TX] (Pigment bleed simulation + paper texture).
+25. **Charcoal Sketch:** [MS] [TX] (Edge detection + noise-based stroke texture).
+26. **Pencil Sketch:** [MS] (Sobel edge + directional blur).
+27. **Pointillism:** [MS] (Grid-based quantization → Circle drawing).
+28. **Impressionist:** [CG] (Vector field flow + randomized brush sprites).
+29. **Stained Glass:** [MS] (Voronoi noise generation + edge highlighting).
+30. **Mosaic:** [1S] (UV pixelation/stepping).
+31. **Graffiti:** [MS] [TX] (Texture masking + edge softening).
+32. **Gouache:** [MS] (High saturation + smoothing passes).
+33. **Cubism:** [CG] (Coordinate warping + facet generation).
+34. **Ink Wash:** [VS] (Multi-pass blur + dark thresholding).
+35. **Pastel Dreams:** [1S] (High brightness/low saturation math).
+36. **Surrealism:** [CG] (Heavy coordinate distortion + blending).
+37. **Abstract Geometry:** [1S] [TX] (Mathematical shape overlays).
+38. **Fresco:** [1S] [TX] (Plaster texture normal map).
+39. **Line Art:** [1S] (Simple edge detection pass).
+40. **Comic Book:** [MS] [TX] (Halftone texture + thick outlines).
+
+## 🌈 Color & Lighting Effects
+41. **Cyberpunk:** [1S] [TX] (Neon-targeted LUT).
+42. **Teal & Orange:** [1S] (Color grading math).
+43. **Golden Hour:** [1S] (Warm temperature shift).
+44. **Infrared:** [1S] (Swapping Red and Green channels).
+45. **Thermal:** [1S] [TX] (Gradient map texture).
+46. **Negative/Inverted:** [1S] (One minus color).
+47. **Duo-tone:** [1S] (Lerping between two colors based on brightness).
+48. **Selective Color:** [1S] (Conditional logic: if color != X, desaturate).
+49. **Pastel Punch:** [1S] (Luma-based desaturation).
+50. **Soft Glow:** [VS] (Gaussian blur + Additive blend).
+51. **Rainbow Flare:** [1S] [TX] (Prism texture overlay).
+52. **High Key:** [1S] (Exposure boost + crushed blacks).
+53. **Low Key:** [1S] (Exposure drop + heavy contrast).
+54. **Moody Blue:** [1S] (Shadow tinting).
+55. **Candy Color:** [1S] (Vibrance/Saturation boost).
+56. **Cross Process:** [1S] (Inverting specific color curves).
+57. **Sun Flare:** [1S] [TX] (Lens flare sprite).
+58. **Holographic:** [1S] [TX] (Iridescent spectral texture).
+59. **Night Vision:** [1S] [TX] (Green tint + scanline/noise texture).
+60. **Monochrome (Green):** [1S] (Luminance * Green vector).
+
+## 🌀 Distortions & Geometry
+61. **Fisheye:** [1S] (Radial UV barrel distortion).
+62. **Kaleidoscope:** [1S] (Polar coordinate mirroring).
+63. **Tiny Planet:** [1S] (Rectilinear to Stereographic projection).
+64. **Mirror Reflection:** [1S] (UV flipping math).
+65. **Motion Blur:** [VS] (Multi-sample directional blur).
+66. **Pixelate:** [1S] (Floor(UV * Resolution) / Resolution).
+67. **Glitch Art:** [MS] (Bit-crushing + random UV offsetting).
+68. **Slit-scan:** [CG] (Temporal buffer—needs to store previous frames).
+69. **Ripple:** [1S] (Sine wave applied to UVs).
+70. **Swirl:** [1S] (Rotation matrix applied to UVs based on distance).
+71. **Tilt-Shift:** [MS] (Masked blur—Gradient mask + Blur pass).
+72. **Double Exposure:** [1S] [TX] (Screen or Lighten blend of two images).
+73. **Sliced Image:** [1S] (Step function on UVs).
+74. **Fragment:** [VS] (Multiple UV-offset samples).
+75. **Polygon:** [MS] (Delaunay triangulation—computationally heavy).
+76. **ASCII Art:** [MS] [TX] (Grid quantization + character map lookup).
+77. **8-bit/Pixel Art:** [MS] (Downsampling + Palette limiting).
+78. **16-bit Console:** [MS] (Dithering algorithm + high saturation).
+79. **Magnifying Glass:** [1S] (Circular UV scale).
+80. **Vortex:** [1S] (Radial UV twist).
+
+## ✨ Creative & Niche Filters
+81. **Blueprint:** [MS] (Edge detection + Color inversion to Blue).
+82. **X-Ray:** [1S] (Invert + Grayscale + High Contrast).
+83. **Chalkboard:** [MS] [TX] (Inverse edge detection + dust texture).
+84. **Sparkle:** [MS] (Bloom pass on high-luminance pixels).
+85. **Bokeh Shapes:** [MS] [TX] (Specialized blur kernel with shape texture).
+86. **Old Map:** [1S] [TX] (Parchment texture blend).
+87. **Frost/Ice:** [1S] [TX] (Vignette texture mask).
+88. **Fire/Flame:** [CG] [TX] (Animated noise + distortion).
+89. **Underwater:** [MS] [TX] (Blue tint + Caustic texture overlay).
+90. **Matrix Code:** [CG] [TX] (Character scroll logic + texture).
+91. **Halftone Dots:** [1S] (Sine-based grid mask).
+92. **Thermal Heat Map:** [1S] [TX] (Luma-to-Gradient lookup).
+93. **Retro Game Boy:** [1S] (Quantize to 4 levels + Pea-green tint).
+94. **Strobe:** [CG] (Time-based alpha flickering).
+95. **Silhouette:** [1S] (Step function: if brightness < X, black; else white).
+96. **Emboss:** [1S] (Sampling neighboring pixels for height difference).
+97. **Watercolor Edge:** [MS] (Edge detection + dark color multiplication).
+98. **Parchment:** [1S] [TX] (Paper grain overlay).
+99. **Drip Effect:** [CG] (Gravity-based UV displacement).
+100. **Sky Swap:** [CG] [TX] (AI/ML Semantic Segmentation + Alpha masking).
+
+Counts:
+1. [1S] or [MS] without [TX]: 52 Filters
+1.5.   [1S] + TX = 21, [MS] + TX = 10 => [1S] or [MS] with [TX] 31 Filters
+2. [TX] (External Textures): 37 Filters
+3. [CG] (Complex Graphs): 12 Filters
+4. [VS] (Variable Linear Shaders): 5 Filters
+
+---
+
+## Implementation Order
+1. **Polaroid** [MS] [TX]
+2. **Pop Art** [MS]
+3. **Cyberpunk** [1S] [TX]
+4. **Fisheye** [1S]
+5. **Blueprint** [MS]
+6. **Sepia** [1S]
+7. **Teal & Orange** [1S]
+8. **Kaleidoscope** [1S]
+9. **X-Ray** [1S]
+10. **1970s Fade** [1S] [TX]
+11. **Oil Painting** [VS]
+12. **Golden Hour** [1S]
+13. **Tiny Planet** [1S]
+14. **Chalkboard** [MS] [TX]
+15. **Daguerreotype** [MS] [TX]
+16. **Charcoal Sketch** [MS] [TX]
+17. **Infrared** [1S]
+18. **Mirror Reflection** [1S]
+19. **Sparkle** [MS]
+20. **Kodachrome** [1S] [TX]
+21. **Pencil Sketch** [MS]
+22. **Motion Blur** [VS]
+23. **Bokeh Shapes** [MS] [TX]
+24. **Cyanotype** [1S]
+25. **Pointillism** [MS]
+26. **Pixelate** [1S]
+27. **Old Map** [1S] [TX]
+28. **Tintype** [MS] [TX]
+29. **Stained Glass** [MS]
+30. **Duo-tone** [1S]
+31. **Glitch Art** [MS]
+32. **Frost/Ice** [1S] [TX]
+33. **Technicolor** [1S]
+34. **Mosaic** [1S]
+35. **Selective Color** [1S]
+36. **Ripple** [1S]
+37. **Underwater** [MS] [TX]
+38. **Lomo** [1S]
+39. **Graffiti** [MS] [TX]
+40. **Pastel Punch** [1S]
+41. **Swirl** [1S]
+42. **Halftone Dots** [1S]
+43. **Gouache** [MS]
+44. **Soft Glow** [VS]
+45. **Tilt-Shift** [MS]
+46. **Light Leak** [1S] [TX]
+47. **Ink Wash** [VS]
+48. **Rainbow Flare** [1S] [TX]
+49. **Double Exposure** [1S] [TX]
+50. **Retro Game Boy** [1S]
+51. **Coffee Stained** [1S] [TX]
+52. **Pastel Dreams** [1S]
+53. **High Key** [1S]
+54. **Sliced Image** [1S]
+55. **Silhouette** [1S]
+56. **Instamatic** [1S] [TX]
+57. **Abstract Geometry** [1S] [TX]
+58. **Low Key** [1S]
+59. **Fragment** [VS]
+60. **Emboss** [1S]
+61. **Dust & Scratches** [1S] [TX]
+62. **Fresco** [1S] [TX]
+63. **Moody Blue** [1S]
+64. **Polygon** [MS]
+65. **Watercolor Edge** [MS]
+66. **Line Art** [1S]
+67. **Candy Color** [1S]
+68. **ASCII Art** [MS] [TX]
+69. **Retro Newspaper** [MS]
+70. **Cross Process** [1S]
+71. **8-bit/Pixel Art** [MS]
+72. **Antique Gold** [1S]
+73. **Sun Flare** [1S] [TX]
+74. **16-bit Console** [MS]
+75. **Burned Edges** [1S] [TX]
+76. **Holographic** [1S] [TX]
+77. **Magnifying Glass** [1S]
+78. **Night Vision** [1S] [TX]
+79. **Vortex** [1S]
+80. **Monochrome (Green)** [1S]
