@@ -158,40 +158,6 @@ This document tracks known architectural shortcuts, generic naming, and structur
   correctness improvement under multi-threaded submission but does not address
   the synchronous-blocking issue above.
 
-### Preview Occasionally Flashes Black During Rendering
-- **Location:** Unknown. Likely the boundary between `bdip_core`'s renderer output and
-  the `bdip` UI surface (iced/wgpu binding). Not yet narrowed down.
-- **Status:** Reported as an observation (2026-04-23). **No investigation has been done
-  yet** — the hypotheses below are informed guesses, not findings. Treat them as a
-  starting list to disprove, not as a diagnosis.
-- **Symptom:** During interactive preview rendering, the image occasionally flashes
-  black for a frame.
-- **Hypotheses (unverified):**
-  1. **Per-call `present` output buffer reallocation.** `Renderer::present_with_max_binding`
-     allocates a fresh `output_buffer` on every call (`image_pipeline.rs` ~line 388). If
-     the UI is holding a texture handle that gets rebound to the new buffer before the
-     GPU has finished writing it, samplers see uninitialized memory (commonly zeros →
-     black).
-  2. **UI samples the texture before `download_slice` / present writes complete.** If
-     the iced/wgpu surface binds the renderer's output and draws it on a frame where
-     the GPU writes haven't completed (insufficient sync between renderer submission
-     and surface composition), the surface reads undefined contents.
-  3. **Slider-drag race.** A new `apply` is enqueued while a previous `download_slice`
-     is still draining. If the in-flight present buffer or texture handle is recycled
-     mid-frame, the UI may render against a half-written or already-freed resource.
-  4. **Ruled out (sort of):** synchronous blocking in `download_slice` (smell #2 above)
-     does *not* produce black frames on its own — it freezes the UI thread, which
-     leaves the last-presented pixels on screen. Black means something *is* being
-     rendered with wrong contents.
-- **Suggested Next Steps:** Trace the preview path in `bdip/src/` — find where the
-  renderer's output texture/buffer is bound to the iced surface and how slider events
-  trigger re-render. Add temporary logging around present-buffer creation and surface
-  rebinds to correlate with observed black frames. Consider running with
-  `WGPU_BACKEND_VALIDATION=1` and a wgpu validation layer to surface any usage
-  violations.
-- **Priority:** Medium. User-visible glitch on the primary interactive flow, but rare
-  enough to defer until we have time to reproduce reliably.
-
 ### Pipeline Latency Investigation (Profiling)
 - **Location:** `bdip_core/src/gpu/pipeline.rs` (`test_perf_gpu_roundtrip_24mp`)
 - **Goal:** Profile the warm editing path to identify bottlenecks and understand if there are opportunities for further speed improvements on 24MP+ images.
@@ -214,3 +180,10 @@ This document tracks known architectural shortcuts, generic naming, and structur
   2.  Update all shader `META` definitions to include concise, helpful descriptions.
   3.  Implement hover tooltips in the `bdip` UI (via `iced` or similar) to show these descriptions
       when hovering over parameter names in the sidebar.
+
+### Intermediate `Vec<f32>` Allocation in Asset Loading
+- **Location:** `bdip_core/src/gpu/assets/mod.rs` (`decode_and_upload_cube_raw`)
+- **Current Pattern:** When loading raw LUT data (3D textures), the code reads the byte stream into an intermediate `Vec<f32>` before converting it to `f16` for the GPU. This is done because `include_bytes!` only guarantees 1-byte alignment, making `bytemuck::cast_slice` (zero-copy) unsafe for direct `f32` access.
+- **Risk:** Unnecessary heap allocation and data copy during asset loading. While LUTs are usually small (e.g., 33x33x33 floats), this adds a "cold" start penalty to shader activation that could be avoided.
+- **Suggested Remediation:** Refactor the conversion loop to read `f32` values directly from the `&[u8]` slice using `f32::from_le_bytes` (which does not require alignment). This skips the intermediate `Vec<f32>` allocation entirely while remaining robust to any linker-placed memory address.
+- **Priority:** Low. LUT loading is relatively infrequent, but this is a straightforward performance win that simplifies the data pipeline.
