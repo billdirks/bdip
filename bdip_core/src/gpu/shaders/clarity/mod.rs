@@ -301,7 +301,7 @@ mod tests {
         let mut img = crate::Rgba16Image::new(w, h);
         for y in 0..h {
             for x in 0..w {
-                let v = (16384 + (x as u32 * 32768 / (w - 1))) as u16;
+                let v = (16384 + (x * 32768 / (w - 1))) as u16;
                 img.put_pixel(x, y, image::Rgba([v, v, v, 65535]));
             }
         }
