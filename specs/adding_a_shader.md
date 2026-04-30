@@ -24,6 +24,9 @@ Use these existing shaders as templates:
 - The shader operates on linear-light `Rgba16Float` textures.
 - The shader ID (a short ASCII string like `"hsl_hue"`) must be unique across all
   registered shaders.
+- **Identity Default:** The default values for all parameters **must** result in an
+  identity transformation (no change to the image). This ensures that adding a shader
+  to the pipeline has no immediate visual effect until the user modifies the sliders.
 
 ---
 
@@ -55,7 +58,7 @@ impl TransformShader for ExampleParams {
         name: "Amount",
         min: -1.0,
         max: 1.0,
-        default: 0.0,
+        default: 0.0,                   // MUST be an identity value (no-op)
         description: "Per-slider description shown in parameter help.",
     }]);
     const PASSES: &'static [PassDef] = &[PassDef {
@@ -145,7 +148,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let coord = vec2<i32>(global_id.xy);
     let pixel = textureLoad(input_texture, coord, 0);
 
-    // Apply transformation (do NOT clamp — preserve >1.0 headroom for later shaders)
+    // Apply transformation (do NOT clamp — preserve >1.0 headroom for later shaders).
+    // Note: When params.value is its default (0.0), this is an identity transformation.
     let out = vec4<f32>(pixel.rgb + params.value, pixel.a);
     textureStore(output_texture, coord, out);
 }
@@ -165,8 +169,9 @@ Add a `#[cfg(test)] mod tests` block in your `mod.rs`. At minimum, include:
 - `test_<name>_registry_metadata` — verify `display_name`, `param`, and `passes.len()`.
 - `test_<name>_make_uniform_known_value` — call `(reg.make_uniform)(&[val])` and assert
   the returned bytes match `bytemuck::bytes_of(&ExampleParams { value: val, .. })`.
-- **GPU roundtrip tests** covering: identity (no-op value), extreme parameter values,
-  alpha preservation, and chaining with an existing shader.
+- **GPU roundtrip tests** covering: identity (verify that the registered `default`
+  values result in a no-op), extreme parameter values, alpha preservation, and
+  chaining with an existing shader.
 
 Use the `make_solid_image` + `roundtrip` helpers from `gpu::test_util`. Each test
 must cover a single isolated behavior (see `AGENTS.md` § "Unit Testing Standards").
