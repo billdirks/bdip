@@ -1,9 +1,21 @@
 # Adding a New Shader
 
 Adding a single-pass shader requires two new files and one line in `shaders/mod.rs`.
-See `brightness` (slider) and `grayscale` (toggle) for complete working examples.
 Multi-pass shaders follow the same pattern with additional `.wgsl` files; see
 § "Multi-pass shaders" below.
+
+---
+
+## Reference implementations
+
+Use these existing shaders as templates:
+
+| Pattern | Example | Key features |
+|---------|---------|--------------|
+| Single-pass slider | [`brightness`](../bdip_core/src/gpu/shaders/brightness/mod.rs) | One slider, minimal params struct |
+| Single-pass toggle | [`grayscale`](../bdip_core/src/gpu/shaders/grayscale/mod.rs) | No user-facing params (`ParamKind::Toggle`) |
+| Multi-pass | [`clarity`](../bdip_core/src/gpu/shaders/clarity/mod.rs) | 5 passes, scratch textures, `PassScale::Down` |
+| Auxiliary texture (LUT) | [`color_lut`](../bdip_core/src/gpu/shaders/color_lut/mod.rs) | 3D texture, `AuxTextureDef` |
 
 ---
 
@@ -24,7 +36,9 @@ Define a params struct, implement `TransformShader`, and submit the registration
 **Parameterized shader (one or more sliders):**
 
 ```rust
-use crate::gpu::shaders::{ParamKind, PassDef, PassInput, PassOutput, SliderDef, TransformShader};
+use crate::gpu::shaders::{
+    ParamKind, PassDef, PassInput, PassOutput, PassScale, SliderDef, TransformShader,
+};
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -36,17 +50,21 @@ pub struct ExampleParams {
 impl TransformShader for ExampleParams {
     const ID: &'static str = "example";
     const DISPLAY_NAME: &'static str = "Example";
+    const DESCRIPTION: &'static str = "One-sentence description for tooltips and CLI help.";
     const PARAM: ParamKind = ParamKind::Sliders(&[SliderDef {
         name: "Amount",
         min: -1.0,
         max: 1.0,
         default: 0.0,
+        description: "Per-slider description shown in parameter help.",
     }]);
     const PASSES: &'static [PassDef] = &[PassDef {
         label: "example",
         wgsl_source: include_str!("example.wgsl"),
         inputs: &[PassInput::Source],
         output: PassOutput::Final,
+        output_scale: PassScale::Full,
+        aux_textures: &[],
     }];
 
     fn from_values(values: &[f32]) -> Self {
@@ -60,7 +78,9 @@ inventory::submit!(crate::gpu::shaders::ShaderRegistration::new::<ExampleParams>
 **Parameterless shader (toggle):**
 
 ```rust
-use crate::gpu::shaders::{ParamKind, PassDef, PassInput, PassOutput, TransformShader};
+use crate::gpu::shaders::{
+    ParamKind, PassDef, PassInput, PassOutput, PassScale, TransformShader,
+};
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -71,12 +91,15 @@ pub struct ExampleParams {
 impl TransformShader for ExampleParams {
     const ID: &'static str = "example";
     const DISPLAY_NAME: &'static str = "Example";
+    const DESCRIPTION: &'static str = "One-sentence description for tooltips and CLI help.";
     const PARAM: ParamKind = ParamKind::Toggle;
     const PASSES: &'static [PassDef] = &[PassDef {
         label: "example",
         wgsl_source: include_str!("example.wgsl"),
         inputs: &[PassInput::Source],
         output: PassOutput::Final,
+        output_scale: PassScale::Full,
+        aux_textures: &[],
     }];
 
     fn from_values(_: &[f32]) -> Self {
@@ -122,10 +145,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let coord = vec2<i32>(global_id.xy);
     let pixel = textureLoad(input_texture, coord, 0);
 
-    let out = vec4<f32>(
-        clamp(pixel.rgb + params.value, vec3<f32>(0.0), vec3<f32>(1.0)),
-        pixel.a,
-    );
+    // Apply transformation (do NOT clamp — preserve >1.0 headroom for later shaders)
+    let out = vec4<f32>(pixel.rgb + params.value, pixel.a);
     textureStore(output_texture, coord, out);
 }
 ```
@@ -196,7 +217,9 @@ byte-mismatch error.
 ### Implementing `PASSES`
 
 ```rust
-use crate::gpu::shaders::{ParamKind, PassDef, PassInput, PassOutput, SliderDef, TransformShader};
+use crate::gpu::shaders::{
+    ParamKind, PassDef, PassInput, PassOutput, PassScale, SliderDef, TransformShader,
+};
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -208,11 +231,13 @@ pub struct TwoPassParams {
 impl TransformShader for TwoPassParams {
     const ID: &'static str = "two_pass_example";
     const DISPLAY_NAME: &'static str = "Two-Pass Example";
+    const DESCRIPTION: &'static str = "Demonstrates a two-pass blur-then-combine pipeline.";
     const PARAM: ParamKind = ParamKind::Sliders(&[SliderDef {
         name: "Amount",
         min: 0.0,
         max: 1.0,
         default: 0.0,
+        description: "Blend strength between original and processed image.",
     }]);
     const PASSES: &'static [PassDef] = &[
         PassDef {
@@ -220,12 +245,16 @@ impl TransformShader for TwoPassParams {
             wgsl_source: include_str!("two_pass_example_h.wgsl"),
             inputs: &[PassInput::Source],
             output: PassOutput::Scratch("h"),
+            output_scale: PassScale::Full,
+            aux_textures: &[],
         },
         PassDef {
             label: "combine",
             wgsl_source: include_str!("two_pass_example_combine.wgsl"),
             inputs: &[PassInput::Source, PassInput::Scratch("h")],
             output: PassOutput::Final,
+            output_scale: PassScale::Full,
+            aux_textures: &[],
         },
     ];
 
@@ -241,6 +270,15 @@ inventory::submit!(crate::gpu::shaders::ShaderRegistration::new::<TwoPassParams>
 texture. The engine allocates it from a shared pool and returns it after the shader
 completes. A `PassInput::Scratch(s)` in pass `i` must always correspond to a
 `PassOutput::Scratch(s)` in some pass `j < i`.
+
+### Output scale
+
+Use `PassScale::Down(n)` for intermediate passes that operate at reduced resolution
+(e.g., blur kernels). The engine allocates a scratch texture at `(width/n, height/n)`.
+The final pass must use `PassScale::Full`.
+
+See [`clarity`](../bdip_core/src/gpu/shaders/clarity/mod.rs) for a 5-pass shader that
+downsamples 4×, blurs, upsamples, then combines.
 
 ### Const-fn validator
 
@@ -281,3 +319,126 @@ fn main(...) {
 
 The cap value should safely accommodate the largest expected image without capping the
 intended blur. At `SIGMA_FRACTION = 0.02` on a 24 MP image (~6000 px), radius ≈ 360.
+
+---
+
+## Auxiliary textures (LUTs, noise maps, overlays)
+
+Some shaders need external textures — 3D color LUTs, 2D noise maps, paper textures.
+These are declared via `AuxTextureDef` in `PassDef::aux_textures`.
+
+### Declaring an auxiliary texture
+
+```rust
+use crate::gpu::shaders::{
+    AuxSamplerFilter, AuxTextureDef, AuxTextureDimension,
+    ParamKind, PassDef, PassInput, PassOutput, PassScale, SliderDef, TransformShader,
+};
+
+const PASSES: &[PassDef] = &[PassDef {
+    label: "apply_lut",
+    wgsl_source: include_str!("apply_lut.wgsl"),
+    inputs: &[PassInput::Source],
+    output: PassOutput::Final,
+    output_scale: PassScale::Full,
+    aux_textures: &[AuxTextureDef {
+        name: "identity_lut_64",        // must match a registered AuxAssetRegistration
+        dimension: AuxTextureDimension::D3,
+        filter: AuxSamplerFilter::Linear,
+    }],
+}];
+```
+
+The `name` must match an `AuxAssetRegistration` in `gpu/assets.rs`. The engine
+uploads the texture once and caches it for subsequent passes.
+
+### WGSL bind-group layout with aux textures
+
+Auxiliary textures are bound in Group 2. Group 0 remains inputs + output; Group 1
+remains the uniform buffer.
+
+| Group | Binding | Resource |
+|-------|---------|----------|
+| 0 | 0 … N-1 | Input textures |
+| 0 | N | Destination storage texture |
+| 1 | 0 | Uniform buffer |
+| 2 | 0, 2, 4, … | Aux textures (even bindings) |
+| 2 | 1, 3, 5, … | Samplers for each aux texture (odd bindings) |
+
+**Example for a 3D LUT:**
+
+```wgsl
+@group(2) @binding(0) var lut_texture: texture_3d<f32>;
+@group(2) @binding(1) var lut_sampler: sampler;
+```
+
+See [`color_lut`](../bdip_core/src/gpu/shaders/color_lut/mod.rs) for a complete
+implementation using a 64³ identity LUT.
+
+---
+
+## Performance testing
+
+Multi-pass and computationally heavy shaders should have a performance test in
+[`bdip_core/tests/performance.rs`](../bdip_core/tests/performance.rs). These tests
+run via `cargo perf-test` (not the regular `cargo test` suite) and assert wall-clock
+budgets at 24 MP.
+
+### Adding a perf test
+
+```rust
+#[test]
+fn perf_gpu_roundtrip_24mp_example() {
+    let engine = GpuEngine::new().unwrap();
+    let mut renderer = Renderer::new(&engine);
+
+    let img = make_solid_image(PERF_WIDTH, PERF_HEIGHT, 32767, 32767, 32767);
+    let uploaded = upload_texture(&engine.device, &engine.queue, &img);
+
+    let transform = Transform {
+        shader_id: "example",
+        values: vec![0.5],
+    };
+    let result = bench_shader_roundtrip(
+        &engine,
+        &mut renderer,
+        &uploaded,
+        img.width(),
+        img.height(),
+        &transform,
+    );
+
+    let (label, pass_count) = shader_display_info(transform.shader_id);
+    print_perf_report(label, pass_count, &result, PERF_WARM_TARGET_MS);
+
+    assert!(
+        result.warm.critical_path_ms() < PERF_WARM_TARGET_MS,
+        "{label} warm critical path exceeded {PERF_WARM_TARGET_MS:.0} ms target: {:.2} ms",
+        result.warm.critical_path_ms()
+    );
+}
+```
+
+### Timing model
+
+The benchmark harness splits wall-clock time into three buckets:
+
+| Bucket | What it measures |
+|--------|------------------|
+| `execute_ms` | CPU time to encode + submit GPU commands |
+| `gpu_wait_ms` | Wall time blocked in `device.poll(Wait)` — true GPU compute |
+| `readback_ms` | Download path (copy + map + memcpy to CPU) |
+
+The `critical_path_ms()` sum is the user-visible latency. The current targets
+(`PERF_WARM_TARGET_MS = 30 ms`, `PERF_COLD_TARGET_MS = 80 ms`) are defined at the top
+of `performance.rs`.
+
+### When to add a perf test
+
+- Multi-pass shaders (3+ passes)
+- Shaders with auxiliary textures (exercises Group 2 bind group setup)
+- Shaders with `PassScale::Down` (exercises scratch-texture allocation)
+- Any shader expected to be near the performance budget
+
+Simple single-pass shaders (brightness, contrast, grayscale) are covered by the
+baseline `perf_gpu_roundtrip_24mp` test and don't need individual benchmarks.
