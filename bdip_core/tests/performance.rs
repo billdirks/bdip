@@ -435,6 +435,40 @@ fn perf_gpu_roundtrip_24mp_cartoon() {
     );
 }
 
+/// Times the GPU critical path on a 24 MP image with the Pop Art multi-pass
+/// shader (quantize, colorize, combine). All three passes run at full resolution,
+/// making this a useful data point for tracking 3-pass full-scale pipeline cost.
+#[test]
+fn perf_gpu_roundtrip_24mp_pop_art() {
+    let engine = GpuEngine::new().unwrap();
+    let mut renderer = Renderer::new(&engine);
+
+    let img = make_solid_image(PERF_WIDTH, PERF_HEIGHT, 32767, 32767, 32767);
+    let uploaded = upload_texture(&engine.device, &engine.queue, &img);
+
+    let transform = Transform {
+        shader_id: "pop_art",
+        values: vec![1.0f32, 4.0, 12.0],
+    };
+    let result = bench_shader_roundtrip(
+        &engine,
+        &mut renderer,
+        &uploaded,
+        img.width(),
+        img.height(),
+        &transform,
+    );
+
+    let (label, pass_count) = shader_display_info(transform.shader_id);
+    print_perf_report(label, pass_count, &result, PERF_WARM_TARGET_MS);
+
+    assert!(
+        result.warm.critical_path_ms() < PERF_WARM_TARGET_MS,
+        "{label} warm critical path exceeded {PERF_WARM_TARGET_MS:.0} ms target: {:.2} ms",
+        result.warm.critical_path_ms()
+    );
+}
+
 /// Times the GPU critical path on a 24 MP image with the Polaroid multi-pass
 /// shader (grade pass with 3D LUT aux texture, then border pass). Exercises
 /// the 3D LUT cache-hit path alongside the scratch texture pool.

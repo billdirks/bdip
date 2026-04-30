@@ -11,6 +11,7 @@ pub mod highlights;
 pub mod invert;
 pub mod parchment;
 pub mod polaroid;
+pub mod pop_art;
 pub mod saturation;
 pub mod shadows;
 pub mod temperature;
