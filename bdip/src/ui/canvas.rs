@@ -39,19 +39,32 @@ pub fn presentation_to_handle(
     Some(image::Handle::from_rgba(width, height, u8_pixels))
 }
 
+fn image_widget(handle: &image::Handle) -> Element<'_, Message> {
+    container(
+        image(handle.clone())
+            .content_fit(ContentFit::Contain)
+            .width(Length::Fill)
+            .height(Length::Fill),
+    )
+    .width(Length::Fill)
+    .height(Length::Fill)
+    .into()
+}
+
 pub fn view(app: &BdipApp) -> Element<'_, Message> {
-    let canvas_content: Element<'_, Message> = if let Some(handle) = &app.image_handle {
-        container(
-            image(handle.clone())
-                .content_fit(ContentFit::Contain)
-                .width(Length::Fill)
-                .height(Length::Fill),
-        )
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .into()
-    } else {
-        container(
+    let canvas_content: Element<'_, Message> = match (&app.prev_image_handle, &app.image_handle) {
+        // Both handles present: stack prev underneath current to prevent gray
+        // flashes while iced uploads the new texture.
+        (Some(prev), Some(current)) => stack![image_widget(prev), image_widget(current)]
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into(),
+        // Only current handle: render it directly.
+        (None, Some(current)) => image_widget(current),
+        // Only prev handle (shouldn't happen, but handle gracefully).
+        (Some(prev), None) => image_widget(prev),
+        // No image loaded: show placeholder.
+        (None, None) => container(
             button(text("Load an image to begin."))
                 .style(style::link_button)
                 .on_press(Message::LoadImagePressed),
@@ -60,7 +73,7 @@ pub fn view(app: &BdipApp) -> Element<'_, Message> {
         .height(Length::Fill)
         .center_x(Length::Fill)
         .center_y(Length::Fill)
-        .into()
+        .into(),
     };
 
     if let Some(err) = &app.error_message {

@@ -43,6 +43,11 @@ pub struct BdipApp {
     // Image state
     pub base_image: Option<bdip_core::Rgba16Image>,
     pub image_handle: Option<iced::widget::image::Handle>,
+    /// Previous image handle kept alive to prevent gray flashes during preview
+    /// updates. When iced receives a new image handle it needs time to upload
+    /// the texture data; keeping the old handle visible underneath ensures
+    /// something renders during that transition.
+    pub(super) prev_image_handle: Option<iced::widget::image::Handle>,
 
     // GPU state — shared with background render tasks via Arc<Mutex>.
     gpu: Option<Arc<Mutex<GpuState>>>,
@@ -93,6 +98,7 @@ impl BdipApp {
             BdipApp {
                 base_image: None,
                 image_handle: None,
+                prev_image_handle: None,
                 gpu,
                 scheduler: RenderScheduler::new(),
                 history: HistoryManager::new(),
@@ -315,7 +321,15 @@ impl BdipApp {
                 match self.scheduler.complete(generation) {
                     CompleteResult::Stale => Task::none(),
                     CompleteResult::Accept(pending) => {
-                        self.image_handle = handle;
+                        // Only update if we got a valid handle; keep the old preview
+                        // visible when a render fails to avoid black flashes.
+                        if handle.is_some() {
+                            // Keep the previous handle alive so the canvas can render
+                            // it underneath the new one, preventing gray flashes while
+                            // iced uploads the new texture.
+                            self.prev_image_handle = self.image_handle.take();
+                            self.image_handle = handle;
+                        }
                         pending
                             .map(|req| self.spawn_render(req))
                             .unwrap_or(Task::none())
