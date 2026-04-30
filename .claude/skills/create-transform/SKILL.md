@@ -109,12 +109,29 @@ Follow the steps in `specs/adding_a_shader.md`:
 
 ---
 
-## Step 5 — Report
+## Step 5 — Commit
+
+Stage all created and modified files and create a commit with the message:
+
+```
+Created <display-name> transform
+```
+
+where `<display-name>` is the human-readable display name determined in Step 2
+(e.g., `Created Film Grain transform`).
+
+Use `git add <file1> <file2> ...` to stage only the relevant files (do not use
+`git add -A` or `git add .`). Then commit with the exact message format above.
+
+---
+
+## Step 6 — Report
 
 Report:
 - Branch name and shader ID
 - Files created/modified
 - Test results summary
+- Commit hash and message
 - Any non-obvious design decisions (parameter ranges, identity values, multi-pass rationale)
 
 ---
