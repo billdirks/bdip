@@ -161,7 +161,7 @@ Counts:
 28. **Tintype** [MS] [TX]
 29. **Stained Glass** [MS] [Implemented]
 30. **Duo-tone** [1S] [Implemented]
-31. **Glitch Art** [MS]
+31. **Glitch Art** [MS] [Implemented]
 32. **Frost/Ice** [1S] [TX]
 33. **Technicolor** [1S]
 34. **Mosaic** [1S]
