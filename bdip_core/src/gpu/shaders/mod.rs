@@ -11,6 +11,7 @@ pub mod fisheye;
 pub mod golden_hour;
 pub mod grayscale;
 pub mod highlights;
+pub mod infrared;
 pub mod invert;
 pub mod kaleidoscope;
 pub mod parchment;
