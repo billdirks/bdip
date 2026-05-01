@@ -9,6 +9,11 @@ ui-release = "run -p bdip --release"
 # Run headless CLI processing (e.g., cargo headless img.jpg --output out.png --apply brightness:0.5)
 headless = "run -p bdip -- --headless"
 
+describe-shader = "run -p bdip -- --describe-shader"
+list-shaders = "run -p bdip -- --list-shaders"
+
+
+
 # Run headless release CLI processing (e.g., cargo headless img.jpg --output out.png --apply brightness:0.5)
 headless-release = "run -p bdip --release -- --headless"
 

@@ -2,6 +2,7 @@ use bdip_core::gpu::shaders::{ParamKind, Transform, all_registrations, registry_
 use bdip_core::gpu::texture::{download_presentation_buffer, upload_texture};
 use bdip_core::gpu::{engine::GpuEngine, image_pipeline::Renderer};
 use clap::Parser;
+use std::io::IsTerminal;
 
 mod cli;
 mod timing;
@@ -95,18 +96,34 @@ fn describe_shader(shader_id: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn list_shaders() {
+    let mut shaders: Vec<_> = all_registrations().collect();
+    shaders.sort_by_key(|r| r.meta.id);
+
+    let is_tty = std::io::stdout().is_terminal();
+
+    for reg in shaders {
+        if is_tty {
+            println!("\x1b[1m{}\x1b[0m: {}", reg.meta.id, reg.meta.description);
+        } else {
+            println!("{}: {}", reg.meta.id, reg.meta.description);
+        }
+    }
+}
+
 fn main() -> anyhow::Result<()> {
     let args = cli::Cli::parse();
+
+    if args.list_shaders {
+        list_shaders();
+        return Ok(());
+    }
 
     if let Some(ref shader_id) = args.describe_shader {
         return describe_shader(shader_id);
     }
 
     if args.headless {
-        let output_path = args
-            .output
-            .ok_or_else(|| anyhow::anyhow!("--output is required in headless mode"))?;
-
         let mut transforms = Vec::new();
 
         if let Some(pipeline_path) = args.pipeline {
@@ -122,6 +139,16 @@ fn main() -> anyhow::Result<()> {
                 transforms.push(parse_transform(&t)?);
             }
         }
+
+        if transforms.is_empty() {
+            return Err(anyhow::anyhow!(
+                "At least one transform (--apply or --pipeline) is required in headless mode"
+            ));
+        }
+
+        let output_path = args
+            .output
+            .ok_or_else(|| anyhow::anyhow!("--output is required in headless mode"))?;
 
         let input_path = args
             .input
@@ -159,9 +186,9 @@ fn main() -> anyhow::Result<()> {
 
         bdip_core::io::save_image(&img, &output_path)?;
         timer.lap("disk write");
+        println!("Saved output to {:?}", output_path);
 
         timer.report();
-        println!("Saved output to {:?}", output_path);
     } else {
         ui::run(args.input)?;
     }

@@ -28,6 +28,10 @@ pub struct Cli {
     pub timings: bool,
 
     /// Print CLI usage and parameter descriptions for a shader, then exit
-    #[arg(long, value_name = "SHADER_ID")]
+    #[arg(long, value_name = "SHADER_ID", exclusive = true)]
     pub describe_shader: Option<String>,
+
+    /// List all available shaders and their descriptions, then exit
+    #[arg(long, exclusive = true)]
+    pub list_shaders: bool,
 }
