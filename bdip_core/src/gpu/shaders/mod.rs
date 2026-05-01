@@ -6,6 +6,7 @@ pub mod color_lut;
 pub mod comic_book;
 pub mod contrast;
 pub mod cyanotype;
+pub mod duo_tone;
 pub mod exposure;
 pub mod film_grain_blue;
 pub mod fisheye;
