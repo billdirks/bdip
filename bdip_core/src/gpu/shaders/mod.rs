@@ -24,6 +24,7 @@ pub mod teal_and_orange;
 pub mod temperature;
 pub mod thermal;
 pub mod tint;
+pub mod tiny_planet;
 pub mod vignette;
 pub mod x_ray;
 
