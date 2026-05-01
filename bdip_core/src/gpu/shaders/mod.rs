@@ -15,6 +15,7 @@ pub mod parchment;
 pub mod polaroid;
 pub mod pop_art;
 pub mod saturation;
+pub mod sepia;
 pub mod shadows;
 pub mod temperature;
 pub mod thermal;
