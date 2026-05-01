@@ -131,14 +131,14 @@ Counts:
 ---
 
 ## Implementation Order
-1. **Polaroid** [MS] [TX]
-2. **Pop Art** [MS]
+1. **Polaroid** [MS] [TX] [Implemented]
+2. **Pop Art** [MS] [Implemented]
 3. **Cyberpunk** [1S] [TX]
-4. **Fisheye** [1S]
+4. **Fisheye** [1S] [Implemented]
 5. **Blueprint** [MS]
-6. **Sepia** [1S]
-7. **Teal & Orange** [1S]
-8. **Kaleidoscope** [1S]
+6. **Sepia** [1S] [Implemented]
+7. **Teal & Orange** [1S] [Implemented]
+8. **Kaleidoscope** [1S] [Implemented]
 9. **X-Ray** [1S]
 10. **1970s Fade** [1S] [TX]
 11. **Oil Painting** [VS]
