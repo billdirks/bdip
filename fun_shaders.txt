@@ -165,7 +165,7 @@ Counts:
 32. **Frost/Ice** [1S] [TX]
 33. **Technicolor** [1S] [Implemented]
 34. **Mosaic** [1S] [Implemented]
-35. **Selective Color** [1S]
+35. **Selective Color** [1S] [Implemented]
 36. **Ripple** [1S]
 37. **Underwater** [MS] [TX]
 38. **Lomo** [1S]
