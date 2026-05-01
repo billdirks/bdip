@@ -18,6 +18,7 @@ pub mod pop_art;
 pub mod saturation;
 pub mod sepia;
 pub mod shadows;
+pub mod stained_glass;
 pub mod teal_and_orange;
 pub mod temperature;
 pub mod thermal;
