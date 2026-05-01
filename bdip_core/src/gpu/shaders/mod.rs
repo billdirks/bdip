@@ -26,6 +26,7 @@ pub mod pointillism;
 pub mod polaroid;
 pub mod pop_art;
 pub mod saturation;
+pub mod selective_color;
 pub mod sepia;
 pub mod shadows;
 pub mod sparkle;
