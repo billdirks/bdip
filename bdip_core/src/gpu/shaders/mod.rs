@@ -16,6 +16,7 @@ pub mod invert;
 pub mod kaleidoscope;
 pub mod mirror_reflection;
 pub mod parchment;
+pub mod pencil_sketch;
 pub mod polaroid;
 pub mod pop_art;
 pub mod saturation;
