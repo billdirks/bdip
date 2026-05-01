@@ -18,6 +18,7 @@ pub mod infrared;
 pub mod invert;
 pub mod kaleidoscope;
 pub mod mirror_reflection;
+pub mod mosaic;
 pub mod parchment;
 pub mod pencil_sketch;
 pub mod pixelate;
