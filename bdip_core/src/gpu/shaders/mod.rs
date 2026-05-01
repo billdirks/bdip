@@ -14,6 +14,7 @@ pub mod highlights;
 pub mod infrared;
 pub mod invert;
 pub mod kaleidoscope;
+pub mod mirror_reflection;
 pub mod parchment;
 pub mod polaroid;
 pub mod pop_art;
