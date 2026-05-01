@@ -18,6 +18,7 @@ pub mod kaleidoscope;
 pub mod mirror_reflection;
 pub mod parchment;
 pub mod pencil_sketch;
+pub mod pixelate;
 pub mod pointillism;
 pub mod polaroid;
 pub mod pop_art;
