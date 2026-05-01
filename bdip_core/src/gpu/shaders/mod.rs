@@ -10,6 +10,7 @@ pub mod duo_tone;
 pub mod exposure;
 pub mod film_grain_blue;
 pub mod fisheye;
+pub mod glitch_art;
 pub mod golden_hour;
 pub mod grayscale;
 pub mod highlights;
