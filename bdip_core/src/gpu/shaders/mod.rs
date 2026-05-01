@@ -23,6 +23,7 @@ pub mod temperature;
 pub mod thermal;
 pub mod tint;
 pub mod vignette;
+pub mod x_ray;
 
 #[cfg(test)]
 mod cross_shader_tests;
