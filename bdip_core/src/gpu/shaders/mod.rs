@@ -30,6 +30,7 @@ pub mod shadows;
 pub mod sparkle;
 pub mod stained_glass;
 pub mod teal_and_orange;
+pub mod technicolor;
 pub mod temperature;
 pub mod thermal;
 pub mod tint;
