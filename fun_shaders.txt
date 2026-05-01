@@ -160,7 +160,7 @@ Counts:
 27. **Old Map** [1S] [TX]
 28. **Tintype** [MS] [TX]
 29. **Stained Glass** [MS] [Implemented]
-30. **Duo-tone** [1S]
+30. **Duo-tone** [1S] [Implemented]
 31. **Glitch Art** [MS]
 32. **Frost/Ice** [1S] [TX]
 33. **Technicolor** [1S]
