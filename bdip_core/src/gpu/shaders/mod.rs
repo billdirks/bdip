@@ -1,3 +1,4 @@
+pub mod blueprint;
 pub mod brightness;
 pub mod cartoon;
 pub mod clarity;
