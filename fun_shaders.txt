@@ -172,7 +172,7 @@ Counts:
 39. **Graffiti** [MS] [TX]
 40. **Pastel Punch** [1S] [Implemented]
 41. **Swirl** [1S] [Implemented]
-42. **Halftone Dots** [1S]
+42. **Halftone Dots** [1S] [Implemented]
 43. **Gouache** [MS]
 44. **Soft Glow** [VS]
 45. **Tilt-Shift** [MS]
