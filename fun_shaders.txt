@@ -209,5 +209,5 @@ Counts:
 76. **Holographic** [1S] [TX]
 77. **Magnifying Glass** [1S] [Implemented]
 78. **Night Vision** [1S] [TX]
-79. **Vortex** [1S]
+79. **Vortex** [1S] [Implemented]
 80. **Monochrome (Green)** [1S]
