@@ -33,6 +33,7 @@ pub mod parchment;
 pub mod pastel_dreams;
 pub mod pastel_punch;
 pub mod pencil_sketch;
+pub mod pixel_art_8bit;
 pub mod pixelate;
 pub mod pointillism;
 pub mod polaroid;
