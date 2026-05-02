@@ -33,6 +33,7 @@ pub mod pencil_sketch;
 pub mod pixelate;
 pub mod pointillism;
 pub mod polaroid;
+pub mod polygon;
 pub mod pop_art;
 pub mod retro_game_boy;
 pub mod ripple;
