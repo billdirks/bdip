@@ -15,6 +15,7 @@ pub mod golden_hour;
 pub mod gouache;
 pub mod grayscale;
 pub mod halftone_dots;
+pub mod high_key;
 pub mod highlights;
 pub mod infrared;
 pub mod invert;
