@@ -1,5 +1,6 @@
 pub mod blueprint;
 pub mod brightness;
+pub mod candy_color;
 pub mod cartoon;
 pub mod clarity;
 pub mod color_lut;
