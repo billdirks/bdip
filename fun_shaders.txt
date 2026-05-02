@@ -188,7 +188,7 @@ Counts:
 55. **Silhouette** [1S] [Implemented]
 56. **Instamatic** [1S] [TX]
 57. **Abstract Geometry** [1S] [TX]
-58. **Low Key** [1S]
+58. **Low Key** [1S] [Implemented]
 59. **Fragment** [VS]
 60. **Emboss** [1S]
 61. **Dust & Scratches** [1S] [TX]
