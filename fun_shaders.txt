@@ -180,7 +180,7 @@ Counts:
 47. **Ink Wash** [VS]
 48. **Rainbow Flare** [1S] [TX]
 49. **Double Exposure** [1S] [TX]
-50. **Retro Game Boy** [1S]
+50. **Retro Game Boy** [1S] [Implemented]
 51. **Coffee Stained** [1S] [TX]
 52. **Pastel Dreams** [1S]
 53. **High Key** [1S]
