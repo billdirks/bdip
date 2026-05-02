@@ -62,6 +62,7 @@ pub mod tilt_shift;
 pub mod tint;
 pub mod tiny_planet;
 pub mod vignette;
+pub mod vortex;
 pub mod watercolor_edge;
 pub mod x_ray;
 
