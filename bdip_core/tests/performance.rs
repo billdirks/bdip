@@ -469,6 +469,43 @@ fn perf_gpu_roundtrip_24mp_pop_art() {
     );
 }
 
+/// Times the GPU critical path on a 24 MP image with the Tilt-Shift multi-pass
+/// shader (down, blur_h, blur_v, up, composite). The separable Gaussian passes run
+/// at 4× downsampled resolution, making this a data point for the cost of the
+/// downsample→blur→upsample strategy plus a masked-blend composite at 24 MP.
+#[test]
+fn perf_gpu_roundtrip_24mp_tilt_shift() {
+    let engine = GpuEngine::new().unwrap();
+    let mut renderer = Renderer::new(&engine);
+
+    let img = make_solid_image(PERF_WIDTH, PERF_HEIGHT, 32767, 32767, 32767);
+    let uploaded = upload_texture(&engine.device, &engine.queue, &img);
+
+    // focus_center=0.5, focus_width=0.3, blur_strength=1.0: the top and bottom
+    // 35% of the image are fully blurred, exercising the maximum kernel radius.
+    let transform = Transform {
+        shader_id: "tilt_shift",
+        values: vec![0.5f32, 0.3, 1.0],
+    };
+    let result = bench_shader_roundtrip(
+        &engine,
+        &mut renderer,
+        &uploaded,
+        img.width(),
+        img.height(),
+        &transform,
+    );
+
+    let (label, pass_count) = shader_display_info(transform.shader_id);
+    print_perf_report(label, pass_count, &result, PERF_WARM_TARGET_MS);
+
+    assert!(
+        result.warm.critical_path_ms() < PERF_WARM_TARGET_MS,
+        "{label} warm critical path exceeded {PERF_WARM_TARGET_MS:.0} ms target: {:.2} ms",
+        result.warm.critical_path_ms()
+    );
+}
+
 /// Times the GPU critical path on a 24 MP image with the Polaroid multi-pass
 /// shader (grade pass with 3D LUT aux texture, then border pass). Exercises
 /// the 3D LUT cache-hit path alongside the scratch texture pool.

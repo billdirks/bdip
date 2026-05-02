@@ -41,6 +41,7 @@ pub mod teal_and_orange;
 pub mod technicolor;
 pub mod temperature;
 pub mod thermal;
+pub mod tilt_shift;
 pub mod tint;
 pub mod tiny_planet;
 pub mod vignette;
