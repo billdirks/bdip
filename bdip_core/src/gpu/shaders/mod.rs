@@ -21,6 +21,7 @@ pub mod infrared;
 pub mod invert;
 pub mod kaleidoscope;
 pub mod lomo;
+pub mod low_key;
 pub mod mirror_reflection;
 pub mod mosaic;
 pub mod parchment;
