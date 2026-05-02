@@ -34,6 +34,7 @@ pub mod sepia;
 pub mod shadows;
 pub mod sparkle;
 pub mod stained_glass;
+pub mod swirl;
 pub mod teal_and_orange;
 pub mod technicolor;
 pub mod temperature;
