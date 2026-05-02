@@ -6,6 +6,7 @@ pub mod clarity;
 pub mod color_lut;
 pub mod comic_book;
 pub mod contrast;
+pub mod cross_process;
 pub mod cyanotype;
 pub mod duo_tone;
 pub mod emboss;
