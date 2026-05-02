@@ -24,6 +24,7 @@ pub mod kaleidoscope;
 pub mod lomo;
 pub mod low_key;
 pub mod mirror_reflection;
+pub mod moody_blue;
 pub mod mosaic;
 pub mod parchment;
 pub mod pastel_dreams;
