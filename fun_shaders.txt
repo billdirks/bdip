@@ -185,7 +185,7 @@ Counts:
 52. **Pastel Dreams** [1S] [Implemented]
 53. **High Key** [1S] [Implemented]
 54. **Sliced Image** [1S] [Implemented]
-55. **Silhouette** [1S]
+55. **Silhouette** [1S] [Implemented]
 56. **Instamatic** [1S] [TX]
 57. **Abstract Geometry** [1S] [TX]
 58. **Low Key** [1S]
