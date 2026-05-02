@@ -30,6 +30,7 @@ pub mod lomo;
 pub mod low_key;
 pub mod magnifying_glass;
 pub mod mirror_reflection;
+pub mod monochrome_green;
 pub mod moody_blue;
 pub mod mosaic;
 pub mod parchment;
