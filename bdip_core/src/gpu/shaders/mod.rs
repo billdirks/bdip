@@ -6,6 +6,7 @@ pub mod cartoon;
 pub mod clarity;
 pub mod color_lut;
 pub mod comic_book;
+pub mod console_16bit;
 pub mod contrast;
 pub mod cross_process;
 pub mod cyanotype;
