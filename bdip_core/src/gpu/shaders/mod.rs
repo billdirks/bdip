@@ -1,3 +1,4 @@
+pub mod antique_gold;
 pub mod blueprint;
 pub mod brightness;
 pub mod candy_color;
