@@ -199,7 +199,7 @@ Counts:
 66. **Line Art** [1S] [Implemented]
 67. **Candy Color** [1S] [Implemented]
 68. **ASCII Art** [MS] [TX]
-69. **Retro Newspaper** [MS]
+69. **Retro Newspaper** [MS] [Implemented]
 70. **Cross Process** [1S]
 71. **8-bit/Pixel Art** [MS]
 72. **Antique Gold** [1S]
