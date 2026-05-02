@@ -23,6 +23,7 @@ pub mod lomo;
 pub mod mirror_reflection;
 pub mod mosaic;
 pub mod parchment;
+pub mod pastel_dreams;
 pub mod pastel_punch;
 pub mod pencil_sketch;
 pub mod pixelate;
