@@ -204,7 +204,7 @@ Counts:
 71. **8-bit/Pixel Art** [MS] [Implemented]
 72. **Antique Gold** [1S] [Implemented]
 73. **Sun Flare** [1S] [TX]
-74. **16-bit Console** [MS]
+74. **16-bit Console** [MS] [Implemented]
 75. **Burned Edges** [1S] [TX]
 76. **Holographic** [1S] [TX]
 77. **Magnifying Glass** [1S]
