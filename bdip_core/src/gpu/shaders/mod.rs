@@ -28,6 +28,7 @@ pub mod kaleidoscope;
 pub mod line_art;
 pub mod lomo;
 pub mod low_key;
+pub mod magnifying_glass;
 pub mod mirror_reflection;
 pub mod moody_blue;
 pub mod mosaic;
