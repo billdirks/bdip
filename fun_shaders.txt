@@ -190,7 +190,7 @@ Counts:
 57. **Abstract Geometry** [1S] [TX]
 58. **Low Key** [1S] [Implemented]
 59. **Fragment** [VS]
-60. **Emboss** [1S]
+60. **Emboss** [1S] [Implemented]
 61. **Dust & Scratches** [1S] [TX]
 62. **Fresco** [1S] [TX]
 63. **Moody Blue** [1S]
