@@ -171,7 +171,7 @@ Counts:
 38. **Lomo** [1S] [Implemented]
 39. **Graffiti** [MS] [TX]
 40. **Pastel Punch** [1S] [Implemented]
-41. **Swirl** [1S]
+41. **Swirl** [1S] [Implemented]
 42. **Halftone Dots** [1S]
 43. **Gouache** [MS]
 44. **Soft Glow** [VS]
