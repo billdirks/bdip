@@ -29,6 +29,7 @@ pub mod pixelate;
 pub mod pointillism;
 pub mod polaroid;
 pub mod pop_art;
+pub mod retro_game_boy;
 pub mod ripple;
 pub mod saturation;
 pub mod selective_color;
