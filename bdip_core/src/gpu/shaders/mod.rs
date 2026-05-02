@@ -13,6 +13,7 @@ pub mod fisheye;
 pub mod glitch_art;
 pub mod golden_hour;
 pub mod grayscale;
+pub mod halftone_dots;
 pub mod highlights;
 pub mod infrared;
 pub mod invert;
