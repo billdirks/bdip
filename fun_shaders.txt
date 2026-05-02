@@ -168,7 +168,7 @@ Counts:
 35. **Selective Color** [1S] [Implemented]
 36. **Ripple** [1S] [Implemented]
 37. **Underwater** [MS] [TX]
-38. **Lomo** [1S]
+38. **Lomo** [1S] [Implemented]
 39. **Graffiti** [MS] [TX]
 40. **Pastel Punch** [1S]
 41. **Swirl** [1S]
