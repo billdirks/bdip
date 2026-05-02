@@ -175,7 +175,7 @@ Counts:
 42. **Halftone Dots** [1S] [Implemented]
 43. **Gouache** [MS] [Implemented]
 44. **Soft Glow** [VS]
-45. **Tilt-Shift** [MS]
+45. **Tilt-Shift** [MS] [Implemented]
 46. **Light Leak** [1S] [TX]
 47. **Ink Wash** [VS]
 48. **Rainbow Flare** [1S] [TX]
