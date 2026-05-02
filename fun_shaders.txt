@@ -194,7 +194,7 @@ Counts:
 61. **Dust & Scratches** [1S] [TX]
 62. **Fresco** [1S] [TX]
 63. **Moody Blue** [1S] [Implemented]
-64. **Polygon** [MS]
+64. **Polygon** [MS] [Implemented]
 65. **Watercolor Edge** [MS]
 66. **Line Art** [1S]
 67. **Candy Color** [1S]
