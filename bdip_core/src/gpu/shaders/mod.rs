@@ -37,6 +37,7 @@ pub mod saturation;
 pub mod selective_color;
 pub mod sepia;
 pub mod shadows;
+pub mod silhouette;
 pub mod sliced_image;
 pub mod sparkle;
 pub mod stained_glass;
