@@ -201,7 +201,7 @@ Counts:
 68. **ASCII Art** [MS] [TX]
 69. **Retro Newspaper** [MS] [Implemented]
 70. **Cross Process** [1S] [Implemented]
-71. **8-bit/Pixel Art** [MS]
+71. **8-bit/Pixel Art** [MS] [Implemented]
 72. **Antique Gold** [1S]
 73. **Sun Flare** [1S] [TX]
 74. **16-bit Console** [MS]
