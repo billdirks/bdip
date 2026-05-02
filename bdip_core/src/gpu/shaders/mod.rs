@@ -12,6 +12,7 @@ pub mod film_grain_blue;
 pub mod fisheye;
 pub mod glitch_art;
 pub mod golden_hour;
+pub mod gouache;
 pub mod grayscale;
 pub mod halftone_dots;
 pub mod highlights;
