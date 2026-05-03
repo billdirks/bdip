@@ -7,6 +7,7 @@ pub mod cartoon;
 pub mod chalkboard;
 pub mod charcoal_sketch;
 pub mod clarity;
+pub mod coffee_stained;
 pub mod color_lut;
 pub mod comic_book;
 pub mod console_16bit;
