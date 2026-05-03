@@ -33,6 +33,7 @@ pub mod halftone_dots;
 pub mod high_key;
 pub mod highlights;
 pub mod infrared;
+pub mod instamatic;
 pub mod invert;
 pub mod kaleidoscope;
 pub mod kodachrome;
