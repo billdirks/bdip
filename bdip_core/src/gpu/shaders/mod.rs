@@ -21,6 +21,7 @@ pub mod exposure;
 pub mod fade_1970s;
 pub mod film_grain_blue;
 pub mod fisheye;
+pub mod frost_ice;
 pub mod glitch_art;
 pub mod golden_hour;
 pub mod gouache;
