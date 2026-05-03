@@ -157,7 +157,7 @@ Counts:
 24. **Cyanotype** [1S] [Implemented]
 25. **Pointillism** [MS] [Implemented]
 26. **Pixelate** [1S] [Implemented]
-27. **Old Map** [1S] [TX]
+27. **Old Map** [1S] [TX] [Implemented]
 28. **Tintype** [MS] [TX]
 29. **Stained Glass** [MS] [Implemented]
 30. **Duo-tone** [1S] [Implemented]
