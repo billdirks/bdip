@@ -14,6 +14,7 @@ pub mod cyberpunk;
 pub mod duo_tone;
 pub mod emboss;
 pub mod exposure;
+pub mod fade_1970s;
 pub mod film_grain_blue;
 pub mod fisheye;
 pub mod glitch_art;
