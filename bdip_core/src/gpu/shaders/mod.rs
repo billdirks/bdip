@@ -40,6 +40,7 @@ pub mod mirror_reflection;
 pub mod monochrome_green;
 pub mod moody_blue;
 pub mod mosaic;
+pub mod old_map;
 pub mod parchment;
 pub mod pastel_dreams;
 pub mod pastel_punch;
