@@ -211,3 +211,10 @@ Counts:
 78. **Night Vision** [1S] [TX]
 79. **Vortex** [1S] [Implemented]
 80. **Monochrome (Green)** [1S] [Implemented]
+
+
+Notes:
+duo-tone: ui overlap. Make sure we always have controls on the screen. maybe scrollbar?
+Emboss: something is wrong with direction range or direction in general. It seems to wrap like on torus
+Halftone Dots: Frequency doesn't seem smooth. maybe not torus though?
+pastel dreams: seems strange.
