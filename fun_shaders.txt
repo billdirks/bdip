@@ -153,7 +153,7 @@ Counts:
 20. **Kodachrome** [1S] [TX] [Implemented]
 21. **Pencil Sketch** [MS] [Implemented]
 22. **Motion Blur** [VS]
-23. **Bokeh Shapes** [MS] [TX]
+23. **Bokeh Shapes** [MS] [TX] [Implemented]
 24. **Cyanotype** [1S] [Implemented]
 25. **Pointillism** [MS] [Implemented]
 26. **Pixelate** [1S] [Implemented]
