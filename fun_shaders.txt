@@ -133,7 +133,7 @@ Counts:
 ## Implementation Order
 1. **Polaroid** [MS] [TX] [Implemented]
 2. **Pop Art** [MS] [Implemented]
-3. **Cyberpunk** [1S] [TX]
+3. **Cyberpunk** [1S] [TX] [Implemented]
 4. **Fisheye** [1S] [Implemented]
 5. **Blueprint** [MS] [Implemented]
 6. **Sepia** [1S] [Implemented]
