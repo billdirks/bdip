@@ -54,6 +54,7 @@ pub mod pointillism;
 pub mod polaroid;
 pub mod polygon;
 pub mod pop_art;
+pub mod rainbow_flare;
 pub mod retro_game_boy;
 pub mod retro_newspaper;
 pub mod ripple;
