@@ -181,7 +181,7 @@ Counts:
 48. **Rainbow Flare** [1S] [TX] [Implemented]
 49. **Double Exposure** [1S] [TX] [Implemented]
 50. **Retro Game Boy** [1S] [Implemented]
-51. **Coffee Stained** [1S] [TX]
+51. **Coffee Stained** [1S] [TX] [Implemented]
 52. **Pastel Dreams** [1S] [Implemented]
 53. **High Key** [1S] [Implemented]
 54. **Sliced Image** [1S] [Implemented]
