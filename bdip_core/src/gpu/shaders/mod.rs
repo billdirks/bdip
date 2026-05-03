@@ -69,6 +69,7 @@ pub mod temperature;
 pub mod thermal;
 pub mod tilt_shift;
 pub mod tint;
+pub mod tintype;
 pub mod tiny_planet;
 pub mod vignette;
 pub mod vortex;
