@@ -150,7 +150,7 @@ Counts:
 17. **Infrared** [1S] [Implemented]
 18. **Mirror Reflection** [1S] [Implemented]
 19. **Sparkle** [MS] [Implemented]
-20. **Kodachrome** [1S] [TX]
+20. **Kodachrome** [1S] [TX] [Implemented]
 21. **Pencil Sketch** [MS] [Implemented]
 22. **Motion Blur** [VS]
 23. **Bokeh Shapes** [MS] [TX]
