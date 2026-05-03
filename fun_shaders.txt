@@ -140,7 +140,7 @@ Counts:
 7. **Teal & Orange** [1S] [Implemented]
 8. **Kaleidoscope** [1S] [Implemented]
 9. **X-Ray** [1S] [Implemented]
-10. **1970s Fade** [1S] [TX]
+10. **1970s Fade** [1S] [TX] [Implemented]
 11. **Oil Painting** [VS]
 12. **Golden Hour** [1S] [Implemented]
 13. **Tiny Planet** [1S] [Implemented]
