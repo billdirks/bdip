@@ -72,6 +72,7 @@ pub mod tilt_shift;
 pub mod tint;
 pub mod tintype;
 pub mod tiny_planet;
+pub mod underwater;
 pub mod vignette;
 pub mod vortex;
 pub mod watercolor_edge;
