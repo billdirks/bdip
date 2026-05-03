@@ -34,6 +34,7 @@ pub mod infrared;
 pub mod invert;
 pub mod kaleidoscope;
 pub mod kodachrome;
+pub mod light_leak;
 pub mod line_art;
 pub mod lomo;
 pub mod low_key;
