@@ -25,6 +25,7 @@ pub mod frost_ice;
 pub mod glitch_art;
 pub mod golden_hour;
 pub mod gouache;
+pub mod graffiti;
 pub mod grayscale;
 pub mod halftone_dots;
 pub mod high_key;
