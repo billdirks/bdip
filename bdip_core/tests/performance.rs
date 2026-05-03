@@ -506,6 +506,43 @@ fn perf_gpu_roundtrip_24mp_tilt_shift() {
     );
 }
 
+/// Times the GPU critical path on a 24 MP image with the Bokeh Shapes multi-pass
+/// shader (polygon blur pass + blend pass). The blur pass iterates an integer-offset
+/// kernel up to 50 px in radius, making this a data point for the cost of a dense
+/// per-pixel gather kernel at full resolution.
+#[test]
+fn perf_gpu_roundtrip_24mp_bokeh_shapes() {
+    let engine = GpuEngine::new().unwrap();
+    let mut renderer = Renderer::new(&engine);
+
+    let img = make_solid_image(PERF_WIDTH, PERF_HEIGHT, 32767, 32767, 32767);
+    let uploaded = upload_texture(&engine.device, &engine.queue, &img);
+
+    // radius=20, sides=6 (hexagon), strength=1.0: exercises a medium-radius
+    // hexagonal kernel at full blend strength.
+    let transform = Transform {
+        shader_id: "bokeh_shapes",
+        values: vec![20.0f32, 6.0, 1.0],
+    };
+    let result = bench_shader_roundtrip(
+        &engine,
+        &mut renderer,
+        &uploaded,
+        img.width(),
+        img.height(),
+        &transform,
+    );
+
+    let (label, pass_count) = shader_display_info(transform.shader_id);
+    print_perf_report(label, pass_count, &result, PERF_WARM_TARGET_MS);
+
+    assert!(
+        result.warm.critical_path_ms() < PERF_WARM_TARGET_MS,
+        "{label} warm critical path exceeded {PERF_WARM_TARGET_MS:.0} ms target: {:.2} ms",
+        result.warm.critical_path_ms()
+    );
+}
+
 /// Times the GPU critical path on a 24 MP image with the Polaroid multi-pass
 /// shader (grade pass with 3D LUT aux texture, then border pass). Exercises
 /// the 3D LUT cache-hit path alongside the scratch texture pool.

@@ -1,5 +1,6 @@
 pub mod antique_gold;
 pub mod blueprint;
+pub mod bokeh_shapes;
 pub mod brightness;
 pub mod candy_color;
 pub mod cartoon;
