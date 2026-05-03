@@ -146,7 +146,7 @@ Counts:
 13. **Tiny Planet** [1S] [Implemented]
 14. **Chalkboard** [MS] [TX] [Implemented]
 15. **Daguerreotype** [MS] [TX] [Implemented]
-16. **Charcoal Sketch** [MS] [TX]
+16. **Charcoal Sketch** [MS] [TX] [Implemented]
 17. **Infrared** [1S] [Implemented]
 18. **Mirror Reflection** [1S] [Implemented]
 19. **Sparkle** [MS] [Implemented]
