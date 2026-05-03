@@ -10,6 +10,7 @@ pub mod console_16bit;
 pub mod contrast;
 pub mod cross_process;
 pub mod cyanotype;
+pub mod cyberpunk;
 pub mod duo_tone;
 pub mod emboss;
 pub mod exposure;
