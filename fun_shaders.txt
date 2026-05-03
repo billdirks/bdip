@@ -179,7 +179,7 @@ Counts:
 46. **Light Leak** [1S] [TX] [Implemented]
 47. **Ink Wash** [VS]
 48. **Rainbow Flare** [1S] [TX] [Implemented]
-49. **Double Exposure** [1S] [TX]
+49. **Double Exposure** [1S] [TX] [Implemented]
 50. **Retro Game Boy** [1S] [Implemented]
 51. **Coffee Stained** [1S] [TX]
 52. **Pastel Dreams** [1S] [Implemented]
