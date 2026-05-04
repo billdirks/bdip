@@ -576,3 +576,40 @@ fn perf_gpu_roundtrip_24mp_polaroid() {
         result.warm.critical_path_ms()
     );
 }
+
+/// Times the GPU critical path on a 24 MP image with the ASCII Art two-pass
+/// shader (gray, ascii). The ascii pass uses a nearest-sampled 2D character
+/// atlas (Group 2 aux texture), exercising the aux cache-hit path on the warm
+/// run alongside the gray scratch texture pool.
+#[test]
+fn perf_gpu_roundtrip_24mp_ascii_art() {
+    let engine = GpuEngine::new().unwrap();
+    let mut renderer = Renderer::new(&engine);
+
+    let img = make_solid_image(PERF_WIDTH, PERF_HEIGHT, 32767, 32767, 32767);
+    let uploaded = upload_texture(&engine.device, &engine.queue, &img);
+
+    // cell_size=8, strength=1.0: exercises the full ASCII art pipeline at the
+    // default cell size (8×8 px cells).
+    let transform = Transform {
+        shader_id: "ascii_art",
+        values: vec![8.0f32, 1.0],
+    };
+    let result = bench_shader_roundtrip(
+        &engine,
+        &mut renderer,
+        &uploaded,
+        img.width(),
+        img.height(),
+        &transform,
+    );
+
+    let (label, pass_count) = shader_display_info(transform.shader_id);
+    print_perf_report(label, pass_count, &result, PERF_WARM_TARGET_MS);
+
+    assert!(
+        result.warm.critical_path_ms() < PERF_WARM_TARGET_MS,
+        "{label} warm critical path exceeded {PERF_WARM_TARGET_MS:.0} ms target: {:.2} ms",
+        result.warm.critical_path_ms()
+    );
+}

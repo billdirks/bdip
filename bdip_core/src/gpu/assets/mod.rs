@@ -1,3 +1,4 @@
+pub mod ascii_char_map;
 pub mod blue_noise;
 pub mod halftone_dots;
 pub mod luts;
