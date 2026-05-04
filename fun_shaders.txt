@@ -192,7 +192,7 @@ Counts:
 59. **Fragment** [VS]
 60. **Emboss** [1S] [Implemented]
 61. **Dust and Scratches** [1S] [TX] [Implemented]
-62. **Fresco** [1S] [TX]
+62. **Fresco** [1S] [TX] [Implemented]
 63. **Moody Blue** [1S] [Implemented]
 64. **Polygon** [MS] [Implemented]
 65. **Watercolor Edge** [MS] [Implemented]
