@@ -19,6 +19,7 @@ pub mod cyberpunk;
 pub mod daguerreotype;
 pub mod double_exposure;
 pub mod duo_tone;
+pub mod dust_and_scratches;
 pub mod emboss;
 pub mod exposure;
 pub mod fade_1970s;
