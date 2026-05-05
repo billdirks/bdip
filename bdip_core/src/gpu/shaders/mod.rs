@@ -4,6 +4,7 @@ pub mod ascii_art;
 pub mod blueprint;
 pub mod bokeh_shapes;
 pub mod brightness;
+pub mod burned_edges;
 pub mod candy_color;
 pub mod cartoon;
 pub mod chalkboard;
