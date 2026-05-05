@@ -52,6 +52,7 @@ pub mod mirror_reflection;
 pub mod monochrome_green;
 pub mod moody_blue;
 pub mod mosaic;
+pub mod night_vision;
 pub mod old_map;
 pub mod parchment;
 pub mod pastel_dreams;
