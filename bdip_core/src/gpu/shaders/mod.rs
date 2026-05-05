@@ -37,6 +37,7 @@ pub mod grayscale;
 pub mod halftone_dots;
 pub mod high_key;
 pub mod highlights;
+pub mod holographic;
 pub mod infrared;
 pub mod instamatic;
 pub mod invert;
