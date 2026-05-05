@@ -73,6 +73,7 @@ pub mod silhouette;
 pub mod sliced_image;
 pub mod sparkle;
 pub mod stained_glass;
+pub mod sun_flare;
 pub mod swirl;
 pub mod teal_and_orange;
 pub mod technicolor;
