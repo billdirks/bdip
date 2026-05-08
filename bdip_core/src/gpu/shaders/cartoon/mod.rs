@@ -7,10 +7,11 @@ use crate::gpu::shaders::{
 pub struct CartoonParams {
     pub strength: f32,
     pub levels: f32,
+    pub smoothing: f32,
     pub edge_threshold: f32,
     pub edge_softness: f32,
     pub edge_darkness: f32,
-    pub _padding: [f32; 3], // pad to 32 bytes
+    pub _padding: [f32; 2], // pad to 32 bytes
 }
 
 impl TransformShader for CartoonParams {
@@ -32,6 +33,14 @@ impl TransformShader for CartoonParams {
             max: 16.0,
             default: 8.0,
             description: "Number of discrete tonal steps in the quantized color palette.",
+        },
+        SliderDef {
+            name: "Smoothing",
+            min: 0.0,
+            max: 1.0,
+            default: 0.5,
+            description: "Bilateral filter strength; higher values flatten more color variation \
+                          within regions while still preserving sharp edges.",
         },
         SliderDef {
             name: "Edge Threshold",
@@ -57,27 +66,11 @@ impl TransformShader for CartoonParams {
     ]);
     const PASSES: &'static [PassDef] = &[
         PassDef {
-            label: "down",
-            wgsl_source: include_str!("downsample.wgsl"),
+            label: "bilateral",
+            wgsl_source: include_str!("bilateral.wgsl"),
             inputs: &[PassInput::Source],
-            output: PassOutput::Scratch("down"),
-            output_scale: PassScale::Down(4),
-            aux_textures: &[],
-        },
-        PassDef {
-            label: "smooth_h",
-            wgsl_source: include_str!("smooth_h.wgsl"),
-            inputs: &[PassInput::Scratch("down")],
-            output: PassOutput::Scratch("sh"),
-            output_scale: PassScale::Down(4),
-            aux_textures: &[],
-        },
-        PassDef {
-            label: "smooth_v",
-            wgsl_source: include_str!("smooth_v.wgsl"),
-            inputs: &[PassInput::Scratch("sh")],
             output: PassOutput::Scratch("smooth"),
-            output_scale: PassScale::Down(4),
+            output_scale: PassScale::Full,
             aux_textures: &[],
         },
         PassDef {
@@ -85,14 +78,6 @@ impl TransformShader for CartoonParams {
             wgsl_source: include_str!("quantize.wgsl"),
             inputs: &[PassInput::Scratch("smooth")],
             output: PassOutput::Scratch("quant"),
-            output_scale: PassScale::Down(4),
-            aux_textures: &[],
-        },
-        PassDef {
-            label: "up",
-            wgsl_source: include_str!("upsample.wgsl"),
-            inputs: &[PassInput::Scratch("quant")],
-            output: PassOutput::Scratch("quant_up"),
             output_scale: PassScale::Full,
             aux_textures: &[],
         },
@@ -109,7 +94,7 @@ impl TransformShader for CartoonParams {
             wgsl_source: include_str!("combine.wgsl"),
             inputs: &[
                 PassInput::Source,
-                PassInput::Scratch("quant_up"),
+                PassInput::Scratch("quant"),
                 PassInput::Scratch("edges"),
             ],
             output: PassOutput::Final,
@@ -122,10 +107,11 @@ impl TransformShader for CartoonParams {
         Self {
             strength: values[0],
             levels: values[1],
-            edge_threshold: values[2],
-            edge_softness: values[3],
-            edge_darkness: values[4],
-            _padding: [0.0; 3],
+            smoothing: values[2],
+            edge_threshold: values[3],
+            edge_softness: values[4],
+            edge_darkness: values[5],
+            _padding: [0.0; 2],
         }
     }
 }
@@ -167,6 +153,14 @@ mod tests {
                     description: "Number of discrete tonal steps in the quantized color palette.",
                 },
                 SliderDef {
+                    name: "Smoothing",
+                    min: 0.0,
+                    max: 1.0,
+                    default: 0.5,
+                    description: "Bilateral filter strength; higher values flatten more color variation \
+                                  within regions while still preserving sharp edges.",
+                },
+                SliderDef {
                     name: "Edge Threshold",
                     min: 0.0,
                     max: 1.0,
@@ -191,22 +185,23 @@ mod tests {
         );
         assert_eq!(
             reg.meta.passes.len(),
-            7,
-            "Cartoon must have exactly 7 passes"
+            4,
+            "Cartoon must have exactly 4 passes"
         );
     }
 
     #[test]
     fn test_cartoon_make_uniform_known_value() {
         let reg = registry_by_id("cartoon").unwrap();
-        let bytes = (reg.make_uniform)(&[0.5, 8.0, 0.2, 0.1, 0.8]);
+        let bytes = (reg.make_uniform)(&[0.5, 8.0, 0.5, 0.2, 0.1, 0.8]);
         let expected = bytemuck::bytes_of(&CartoonParams {
             strength: 0.5,
             levels: 8.0,
+            smoothing: 0.5,
             edge_threshold: 0.2,
             edge_softness: 0.1,
             edge_darkness: 0.8,
-            _padding: [0.0; 3],
+            _padding: [0.0; 2],
         });
         assert_eq!(bytes, expected);
     }
@@ -238,7 +233,7 @@ mod tests {
             &img,
             &[Transform {
                 shader_id: "cartoon",
-                values: vec![0.0, 8.0, 0.15, 0.10, 0.0],
+                values: vec![0.0, 8.0, 0.5, 0.15, 0.10, 0.0],
             }],
         );
 
@@ -273,7 +268,7 @@ mod tests {
             &img,
             &[Transform {
                 shader_id: "cartoon",
-                values: vec![1.0, 4.0, 0.15, 0.10, 0.0],
+                values: vec![1.0, 4.0, 0.5, 0.15, 0.10, 0.0],
             }],
         );
 
@@ -310,7 +305,7 @@ mod tests {
             &img,
             &[Transform {
                 shader_id: "cartoon",
-                values: vec![0.0, 8.0, 0.1, 0.1, 1.0],
+                values: vec![0.0, 8.0, 0.5, 0.1, 0.1, 1.0],
             }],
         );
 
@@ -361,7 +356,7 @@ mod tests {
             &img,
             &[Transform {
                 shader_id: "cartoon",
-                values: vec![0.0, 8.0, 0.5, 0.05, 1.0],
+                values: vec![0.0, 8.0, 0.5, 0.5, 0.05, 1.0],
             }],
         );
 
@@ -372,7 +367,7 @@ mod tests {
             &img,
             &[Transform {
                 shader_id: "cartoon",
-                values: vec![0.0, 8.0, 0.5, 0.3, 1.0],
+                values: vec![0.0, 8.0, 0.5, 0.5, 0.3, 1.0],
             }],
         );
 
@@ -410,7 +405,7 @@ mod tests {
             &img,
             &[Transform {
                 shader_id: "cartoon",
-                values: vec![1.0, 4.0, 1.0, 0.1, 1.0],
+                values: vec![1.0, 4.0, 0.5, 1.0, 0.1, 1.0],
             }],
         );
 
@@ -421,7 +416,7 @@ mod tests {
             &img,
             &[Transform {
                 shader_id: "cartoon",
-                values: vec![1.0, 4.0, 1.0, 0.1, 0.0],
+                values: vec![1.0, 4.0, 0.5, 1.0, 0.1, 0.0],
             }],
         );
 
@@ -445,7 +440,7 @@ mod tests {
             &img,
             &[Transform {
                 shader_id: "cartoon",
-                values: vec![0.5, 8.0, 0.15, 0.10, 1.0],
+                values: vec![0.5, 8.0, 0.5, 0.15, 0.10, 1.0],
             }],
         );
         for pixel in out.pixels() {
@@ -460,7 +455,7 @@ mod tests {
         let img = make_solid_image(16, 16, 32767, 32767, 32767);
         let transform = Transform {
             shader_id: "cartoon",
-            values: vec![0.5, 8.0, 0.15, 0.10, 1.0],
+            values: vec![0.5, 8.0, 0.5, 0.15, 0.10, 1.0],
         };
         let out1 = roundtrip(
             &mut renderer,
@@ -506,7 +501,7 @@ mod tests {
             &img,
             &[Transform {
                 shader_id: "cartoon",
-                values: vec![0.5, 4.0, 0.1, 0.1, 1.0],
+                values: vec![0.5, 4.0, 0.5, 0.1, 0.1, 1.0],
             }],
         );
 
@@ -517,7 +512,7 @@ mod tests {
             &img,
             &[Transform {
                 shader_id: "cartoon",
-                values: vec![0.5, 4.0, 0.1, 0.1, 0.0],
+                values: vec![0.5, 4.0, 0.5, 0.1, 0.1, 0.0],
             }],
         );
 
@@ -531,6 +526,139 @@ mod tests {
         assert!(
             any_darker,
             "edge binding must contribute darkening: no pixel was darker with edges enabled"
+        );
+    }
+
+    #[test]
+    fn test_cartoon_bilateral_preserves_edges() {
+        // Verify bilateral filter preserves hard edges (doesn't blur across them).
+        let engine = GpuEngine::new().unwrap();
+        let mut renderer = Renderer::new(&engine);
+
+        // Hard vertical edge: left half white, right half black.
+        let mut img = crate::Rgba16Image::new(32, 32);
+        for y in 0..32u32 {
+            for x in 0..32u32 {
+                let v: u16 = if x < 16 { 65535 } else { 0 };
+                img.put_pixel(x, y, image::Rgba([v, v, v, 65535]));
+            }
+        }
+
+        // strength=1, high edge_threshold to suppress edge darkening, smoothing=0.5.
+        let out = roundtrip(
+            &mut renderer,
+            &engine,
+            &img,
+            &[Transform {
+                shader_id: "cartoon",
+                values: vec![1.0, 8.0, 0.5, 1.0, 0.1, 0.0],
+            }],
+        );
+
+        let left_of_edge = out.get_pixel(14, 16)[0];
+        let right_of_edge = out.get_pixel(17, 16)[0];
+
+        assert!(
+            left_of_edge > 50000,
+            "white side should remain bright after bilateral filter: got {left_of_edge}"
+        );
+        assert!(
+            right_of_edge < 15000,
+            "black side should remain dark after bilateral filter: got {right_of_edge}"
+        );
+    }
+
+    #[test]
+    fn test_cartoon_bilateral_smooths_flat_regions() {
+        // Verify bilateral filter reduces variance within a noisy flat region.
+        let engine = GpuEngine::new().unwrap();
+        let mut renderer = Renderer::new(&engine);
+
+        // Noisy mid-gray: values vary around 32768 by ±5000.
+        let mut img = crate::Rgba16Image::new(32, 32);
+        for (i, pixel) in img.pixels_mut().enumerate() {
+            let noise = ((i as u16).wrapping_mul(31337) % 10000) as i32 - 5000;
+            let v = (32768i32 + noise).clamp(0, 65535) as u16;
+            *pixel = image::Rgba([v, v, v, 65535]);
+        }
+
+        let variance_before: f64 = {
+            let mean: f64 = img.pixels().map(|p| p[0] as f64).sum::<f64>() / (32.0 * 32.0);
+            img.pixels()
+                .map(|p| (p[0] as f64 - mean).powi(2))
+                .sum::<f64>()
+                / (32.0 * 32.0)
+        };
+
+        // smoothing=1.0 (aggressive), high levels to avoid quantization flattening the measurement.
+        let out = roundtrip(
+            &mut renderer,
+            &engine,
+            &img,
+            &[Transform {
+                shader_id: "cartoon",
+                values: vec![1.0, 16.0, 1.0, 1.0, 0.1, 0.0],
+            }],
+        );
+
+        let variance_after: f64 = {
+            let mean: f64 = out.pixels().map(|p| p[0] as f64).sum::<f64>() / (32.0 * 32.0);
+            out.pixels()
+                .map(|p| (p[0] as f64 - mean).powi(2))
+                .sum::<f64>()
+                / (32.0 * 32.0)
+        };
+
+        assert!(
+            variance_after < variance_before,
+            "bilateral filter should reduce variance in flat regions: before={variance_before:.0}, \
+             after={variance_after:.0}"
+        );
+    }
+
+    #[test]
+    fn test_cartoon_smoothing_parameter_affects_filtering() {
+        // Verify the smoothing parameter controls bilateral filter strength.
+        let engine = GpuEngine::new().unwrap();
+        let mut renderer = Renderer::new(&engine);
+
+        // Gradient image.
+        let mut img = crate::Rgba16Image::new(32, 32);
+        for (i, pixel) in img.pixels_mut().enumerate() {
+            let v = (i as u32 * 65535 / (32 * 32)) as u16;
+            *pixel = image::Rgba([v, v, v, 65535]);
+        }
+
+        // Minimal smoothing (smoothing=0): near-identity bilateral.
+        let out_min = roundtrip(
+            &mut renderer,
+            &engine,
+            &img,
+            &[Transform {
+                shader_id: "cartoon",
+                values: vec![1.0, 16.0, 0.0, 1.0, 0.1, 0.0],
+            }],
+        );
+
+        // Maximum smoothing (smoothing=1): aggressive bilateral.
+        let out_max = roundtrip(
+            &mut renderer,
+            &engine,
+            &img,
+            &[Transform {
+                shader_id: "cartoon",
+                values: vec![1.0, 16.0, 1.0, 1.0, 0.1, 0.0],
+            }],
+        );
+
+        let differs = out_min
+            .pixels()
+            .zip(out_max.pixels())
+            .any(|(a, b)| (a[0] as i32 - b[0] as i32).abs() > 500);
+
+        assert!(
+            differs,
+            "smoothing=0 and smoothing=1 must produce visibly different outputs"
         );
     }
 }

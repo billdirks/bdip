@@ -4,23 +4,23 @@
 //
 // Binding layout (position-indexed, 3 inputs → inputs at 0–2, output at 3):
 //   @binding(0) Source
-//   @binding(1) Scratch("quant_up")  — upsampled posterized image (full-res)
+//   @binding(1) Scratch("quant")  — posterized image (full-res)
 //   @binding(2) Scratch("edges")
 //   @binding(3) output
 //
-// All five Cartoon WGSL files declare the full CartoonParams struct to satisfy
+// All four Cartoon WGSL files declare the full CartoonParams struct to satisfy
 // WebGPU's uniform binding-size validation (see specs/multi-pass-plan.md
 // § "Bind-group contract (multi-pass passes)").
 
 struct CartoonParams {
     strength:       f32,
     levels:         f32,
+    smoothing:      f32,
     edge_threshold: f32,
     edge_softness:  f32,
     edge_darkness:  f32,
     _padding0:      f32,
     _padding1:      f32,
-    _padding2:      f32,
 }
 
 @group(0) @binding(0) var input_source:   texture_2d<f32>;

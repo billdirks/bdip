@@ -1,24 +1,25 @@
 // Cartoon — edge detection pass (Sobel on Source).
 //
 // Sobel magnitude is computed on Rec.709 luma of the original Source image, not
-// the smoothed one. The smooth pass intentionally erases edges; computing Sobel
-// on Source preserves the faithful edge structure of the photograph.
+// the bilateral-filtered one. The bilateral pass intentionally erases intra-region
+// variation; computing Sobel on Source preserves the faithful edge structure of the
+// photograph.
 //
 // Output: single-channel edge mask stored in .r; .gba = (0, 0, 1).
 //
-// All five Cartoon WGSL files declare the full CartoonParams struct to satisfy
+// All four Cartoon WGSL files declare the full CartoonParams struct to satisfy
 // WebGPU's uniform binding-size validation (see specs/multi-pass-plan.md
 // § "Bind-group contract (multi-pass passes)").
 
 struct CartoonParams {
     strength:       f32,
     levels:         f32,
+    smoothing:      f32,
     edge_threshold: f32,
     edge_softness:  f32,
     edge_darkness:  f32,
     _padding0:      f32,
     _padding1:      f32,
-    _padding2:      f32,
 }
 
 // Bindings — position-indexed (1 input → input at 0, output at 1).

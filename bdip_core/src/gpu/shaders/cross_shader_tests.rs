@@ -127,7 +127,7 @@ fn test_cartoon_then_saturation() {
 
     // strength=1 to engage posterization fully; edge_darkness=0 to isolate color
     // quantization without edge darkening complicating the unique-color count.
-    let cartoon_params = vec![1.0f32, 4.0, 0.15, 0.10, 0.0];
+    let cartoon_params = vec![1.0f32, 4.0, 0.5, 0.15, 0.10, 0.0];
 
     let out_cartoon = roundtrip(
         &mut renderer,
