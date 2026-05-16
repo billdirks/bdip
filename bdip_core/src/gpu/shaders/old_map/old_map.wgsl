@@ -92,7 +92,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         PARCHMENT_B + grain,
     );
 
-    // --- Step 4: Additive parchment blend over sepia ---
+    // --- Step 4: Multiplicative parchment blend over sepia ---
     // Multiply the sepia colour by the parchment (values near 0.9 warm-toned)
     // to simulate ink printed on aged paper.  Multiplicative blend darkens the
     // image where the parchment colour is low (grain variation) and preserves

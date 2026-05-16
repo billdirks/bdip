@@ -187,3 +187,15 @@ This document tracks known architectural shortcuts, generic naming, and structur
 - **Risk:** Unnecessary heap allocation and data copy during asset loading. While LUTs are usually small (e.g., 33x33x33 floats), this adds a "cold" start penalty to shader activation that could be avoided.
 - **Suggested Remediation:** Refactor the conversion loop to read `f32` values directly from the `&[u8]` slice using `f32::from_le_bytes` (which does not require alignment). This skips the intermediate `Vec<f32>` allocation entirely while remaining robust to any linker-placed memory address.
 - **Priority:** Low. LUT loading is relatively infrequent, but this is a straightforward performance win that simplifies the data pipeline.
+
+## Code Cleanliness
+
+### Minor Issue: Dead Code in antique_gold shader
+
+  Lines 18-20 and 31 (antique_gold.wgsl:31): The luminance() function and let lum = luminance(rgb); are defined but never used. Other shaders like moody_blue and fade_1970s use luminance for
+  shadow-weighted tinting, but antique_gold applies a pure color matrix without luminance-dependent weighting.
+
+  Suggested cleanup (optional):
+  // Remove lines 17-20 (function) and line 31 (variable)
+
+  This is harmless but adds unnecessary computation and code clutter.
