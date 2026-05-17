@@ -4,6 +4,7 @@ pub mod halftone_dots;
 pub mod luts;
 pub mod paper_grain;
 pub mod thermal_gradient;
+pub mod twilight_cat;
 
 use crate::error::BdipError;
 use crate::gpu::shaders::AuxTextureDimension;

@@ -7,6 +7,7 @@ pub mod brightness;
 pub mod burned_edges;
 pub mod candy_color;
 pub mod cartoon;
+pub mod cat_ghost;
 pub mod chalkboard;
 pub mod charcoal_sketch;
 pub mod clarity;
