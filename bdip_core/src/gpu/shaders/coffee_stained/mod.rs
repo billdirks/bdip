@@ -14,16 +14,15 @@ pub struct CoffeeStainedParams {
 impl TransformShader for CoffeeStainedParams {
     const ID: &'static str = "coffee_stained";
     const DISPLAY_NAME: &'static str = "Coffee Stained";
-    const DESCRIPTION: &'static str = "Simulates coffee or tea stains on a photograph using procedural noise-based stain shapes \
-         with a warm brown multiplicative tint.";
+    const DESCRIPTION: &'static str = "Simulates realistic coffee or tea stains with the characteristic ring effect where the \
+         stain edge is darker than the center, matching how real coffee dries via capillary flow.";
     const PARAM: ParamKind = ParamKind::Sliders(&[
         SliderDef {
             name: "Strength",
             min: 0.0,
             max: 1.0,
             default: 0.0,
-            description: "Intensity of the stain effect; 0 is unchanged, 1 is the full coffee-stain \
-                 look.",
+            description: "Blend between original image (0.0) and coffee-stained effect (1.0).",
         },
         SliderDef {
             name: "Ring Width",
@@ -90,8 +89,7 @@ mod tests {
                     min: 0.0,
                     max: 1.0,
                     default: 0.0,
-                    description: "Intensity of the stain effect; 0 is unchanged, 1 is the full \
-                         coffee-stain look.",
+                    description: "Blend between original image (0.0) and coffee-stained effect (1.0).",
                 },
                 SliderDef {
                     name: "Ring Width",
