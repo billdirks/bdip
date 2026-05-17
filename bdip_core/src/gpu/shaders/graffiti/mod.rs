@@ -69,15 +69,25 @@ impl TransformShader for GraffitiParams {
         },
     ]);
 
-    // Two-pass pipeline:
-    //   Pass 1 — bleed:    box-blur the source to simulate spray-paint overspray
-    //                      → scratch texture.
-    //   Pass 2 — quantize: posterize colors, darken edges via Sobel, blend with source.
+    // Three-pass pipeline:
+    //   Pass 1a — bleed_h:  horizontal box-blur of the source → scratch texture.
+    //   Pass 1b — bleed_v:  vertical box-blur of bleed_h → scratch texture.
+    //                       Together these two passes form a separable 2D box blur
+    //                       that simulates isotropic spray-paint overspray.
+    //   Pass 2  — quantize: posterize colors, darken edges via Sobel, blend with source.
     const PASSES: &'static [PassDef] = &[
         PassDef {
-            label: "bleed",
+            label: "bleed_h",
             wgsl_source: include_str!("graffiti_bleed.wgsl"),
             inputs: &[PassInput::Source],
+            output: PassOutput::Scratch("bleed_h"),
+            output_scale: PassScale::Full,
+            aux_textures: &[],
+        },
+        PassDef {
+            label: "bleed_v",
+            wgsl_source: include_str!("graffiti_bleed_v.wgsl"),
+            inputs: &[PassInput::Scratch("bleed_h")],
             output: PassOutput::Scratch("bleed"),
             output_scale: PassScale::Full,
             aux_textures: &[],
@@ -160,8 +170,8 @@ mod tests {
         );
         assert_eq!(
             reg.meta.passes.len(),
-            2,
-            "Graffiti must have exactly 2 passes"
+            3,
+            "Graffiti must have exactly 3 passes"
         );
     }
 
@@ -437,6 +447,95 @@ mod tests {
         for pixel in out.pixels() {
             assert_eq!(pixel[3], 65535, "alpha must be 65535 after chaining");
         }
+    }
+
+    /// A single bright pixel should blur symmetrically in both axes, not just horizontally.
+    ///
+    /// Before the two-pass fix the bleed was horizontal-only; this test verifies the
+    /// vertical pass is now contributing equally.
+    #[test]
+    fn test_graffiti_blur_is_isotropic() {
+        let engine = GpuEngine::new().unwrap();
+        let mut renderer = Renderer::new(&engine);
+
+        // 64×64 black image with a single bright pixel at center.
+        let mut img = crate::Rgba16Image::new(64, 64);
+        for y in 0..64u32 {
+            for x in 0..64u32 {
+                img.put_pixel(x, y, image::Rgba([0, 0, 0, 65535]));
+            }
+        }
+        img.put_pixel(32, 32, image::Rgba([65535, 65535, 65535, 65535]));
+
+        let out = roundtrip(
+            &mut renderer,
+            &engine,
+            &img,
+            &[Transform {
+                shader_id: "graffiti",
+                values: vec![1.0, 16.0, 0.5, 1.0],
+            }],
+        );
+
+        // Equal-distance neighbours in X and Y must have comparable brightness.
+        let horizontal_neighbor = out.get_pixel(32 + 5, 32)[0] as i32;
+        let vertical_neighbor = out.get_pixel(32, 32 + 5)[0] as i32;
+        let diff = (horizontal_neighbor - vertical_neighbor).abs();
+        assert!(
+            diff < 5000,
+            "blur should be isotropic: horizontal neighbor={}, vertical neighbor={}, diff={}",
+            horizontal_neighbor,
+            vertical_neighbor,
+            diff
+        );
+    }
+
+    /// Bleed must soften horizontal edges (top-to-bottom transitions), which only a
+    /// vertical blur can accomplish.  The pre-fix horizontal-only blur left these edges
+    /// entirely unaffected.
+    #[test]
+    fn test_graffiti_bleed_affects_horizontal_edges() {
+        let engine = GpuEngine::new().unwrap();
+        let mut renderer = Renderer::new(&engine);
+
+        // 128×64 step: top half dark, bottom half bright — a horizontal edge.
+        let mut img = crate::Rgba16Image::new(128, 64);
+        for y in 0..64u32 {
+            for x in 0..128u32 {
+                let v: u16 = if y < 32 { 21845 } else { 43690 };
+                img.put_pixel(x, y, image::Rgba([v, v, v, 65535]));
+            }
+        }
+
+        let out_no_bleed = roundtrip(
+            &mut renderer,
+            &engine,
+            &img,
+            &[Transform {
+                shader_id: "graffiti",
+                values: vec![1.0, 6.0, 0.5, 0.0],
+            }],
+        );
+        let out_bleed = roundtrip(
+            &mut renderer,
+            &engine,
+            &img,
+            &[Transform {
+                shader_id: "graffiti",
+                values: vec![1.0, 6.0, 0.5, 1.0],
+            }],
+        );
+
+        // At least one pixel near the horizontal boundary must differ between runs.
+        let any_different = (0..128u32).any(|x| {
+            let a = out_no_bleed.get_pixel(x, 31)[0] as i32;
+            let b = out_bleed.get_pixel(x, 31)[0] as i32;
+            (a - b).abs() > 64
+        });
+        assert!(
+            any_different,
+            "bleed should affect horizontal edges (vertical blur must work)"
+        );
     }
 
     /// Running Graffiti twice with identical inputs must produce bit-identical output.

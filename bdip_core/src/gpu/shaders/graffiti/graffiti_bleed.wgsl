@@ -1,9 +1,8 @@
-// Graffiti — Pass 1: spray-bleed blur.
+// Graffiti — Pass 1a: horizontal blur.
 //
-// Applies a separable box blur to the source image to simulate the soft,
-// diffuse overspray characteristic of spray paint. The blurred result is stored
-// in a scratch texture and fed into Pass 2 for color quantization and edge
-// darkening.
+// First pass of a separable box blur. Blurs the source horizontally and writes
+// the result to a scratch texture. The vertical pass (graffiti_bleed_v.wgsl)
+// completes the 2D blur by reading this scratch texture.
 //
 // The blur radius is derived from the `bleed` parameter scaled against image
 // size, with a compile-time cap (RADIUS_CAP) to bound register pressure and
@@ -51,13 +50,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
 
-    // Separable box blur: horizontal pass only (vertical is handled implicitly
-    // by symmetry on the scratch texture fed into pass 2).
-    //
-    // A true separable two-pass blur would require a second horizontal scratch,
-    // but for the spray-bleed effect a single-pass 2D box kernel using a
-    // horizontal tap line is visually sufficient and keeps the pass count at 2.
-    // The kernel samples along a horizontal line of width 2*radius+1.
+    // Horizontal blur: sample along a horizontal line of width 2*radius+1.
+    // The vertical pass (graffiti_bleed_v.wgsl) follows to complete the 2D blur.
     let diameter      = 2 * radius + 1;
     let inv_diam      = 1.0 / f32(diameter);
     var accum: vec4<f32> = vec4<f32>(0.0);
