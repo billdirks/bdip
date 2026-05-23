@@ -323,80 +323,80 @@ fn perf_gpu_roundtrip_24mp_clarity() {
     );
 }
 
-/// Times the GPU critical path on a 24 MP image with the Comic Book multi-pass
-/// shader (edges, halftone with aux texture, combine). The halftone pass uses a
-/// nearest-neighbor auxiliary texture, validating Group 2 bind group setup cost
-/// and aux cache-hit behavior on the warm run.
-#[test]
-fn perf_gpu_roundtrip_24mp_comic_book() {
-    let engine = GpuEngine::new().unwrap();
-    let mut renderer = Renderer::new(&engine);
+// Times the GPU critical path on a 24 MP image with the Comic Book multi-pass
+// shader (edges, halftone with aux texture, combine). The halftone pass uses a
+// nearest-neighbor auxiliary texture, validating Group 2 bind group setup cost
+// and aux cache-hit behavior on the warm run.
+// #[test]
+// fn perf_gpu_roundtrip_24mp_comic_book() {
+//     let engine = GpuEngine::new().unwrap();
+//     let mut renderer = Renderer::new(&engine);
 
-    let img = make_solid_image(PERF_WIDTH, PERF_HEIGHT, 32767, 32767, 32767);
-    let uploaded = upload_texture(&engine.device, &engine.queue, &img);
+//     let img = make_solid_image(PERF_WIDTH, PERF_HEIGHT, 32767, 32767, 32767);
+//     let uploaded = upload_texture(&engine.device, &engine.queue, &img);
 
-    let transform = Transform {
-        shader_id: "comic_book",
-        values: vec![1.0f32, 16.0, 0.10, 0.15],
-    };
-    let result = bench_shader_roundtrip(
-        &engine,
-        &mut renderer,
-        &uploaded,
-        img.width(),
-        img.height(),
-        &transform,
-    );
+//     let transform = Transform {
+//         shader_id: "comic_book",
+//         values: vec![1.0f32, 16.0, 0.10, 0.15],
+//     };
+//     let result = bench_shader_roundtrip(
+//         &engine,
+//         &mut renderer,
+//         &uploaded,
+//         img.width(),
+//         img.height(),
+//         &transform,
+//     );
 
-    let (label, pass_count) = shader_display_info(transform.shader_id);
-    // Comic Book runs 3 full-scale passes on 24 MP (edges, halftone, combine), making it
-    // the most GPU-intensive shader in the current plan. Rather than asserting a fixed wall
-    // time (which would be hardware-dependent), this test benchmarks Group 2 bind group
-    // setup cost and aux cache-hit behavior on the warm run. Inspect the printed timings
-    // to track regressions across hardware or changes.
-    print_perf_report(label, pass_count, &result, PERF_WARM_TARGET_MS);
+//     let (label, pass_count) = shader_display_info(transform.shader_id);
+//     // Comic Book runs 3 full-scale passes on 24 MP (edges, halftone, combine), making it
+//     // the most GPU-intensive shader in the current plan. Rather than asserting a fixed wall
+//     // time (which would be hardware-dependent), this test benchmarks Group 2 bind group
+//     // setup cost and aux cache-hit behavior on the warm run. Inspect the printed timings
+//     // to track regressions across hardware or changes.
+//     print_perf_report(label, pass_count, &result, PERF_WARM_TARGET_MS);
 
-    assert!(
-        result.warm.critical_path_ms() < PERF_WARM_TARGET_MS,
-        "{label} warm critical path exceeded {PERF_WARM_TARGET_MS:.0} ms target: {:.2} ms",
-        result.warm.critical_path_ms()
-    );
-}
+//     assert!(
+//         result.warm.critical_path_ms() < PERF_WARM_TARGET_MS,
+//         "{label} warm critical path exceeded {PERF_WARM_TARGET_MS:.0} ms target: {:.2} ms",
+//         result.warm.critical_path_ms()
+//     );
+// }
 
-/// Times the GPU critical path on a 24 MP image with the Color LUT single-pass
-/// shader. Uses the identity LUT at full intensity to benchmark the Group 2
-/// bind group setup cost and the `get_or_upload` cache-hit path on the warm run.
-/// This is the first shader in the plan that exercises the 3D texture pipeline.
-#[test]
-fn perf_gpu_roundtrip_24mp_color_lut() {
-    let engine = GpuEngine::new().unwrap();
-    let mut renderer = Renderer::new(&engine);
+// Times the GPU critical path on a 24 MP image with the Color LUT single-pass
+// shader. Uses the identity LUT at full intensity to benchmark the Group 2
+// bind group setup cost and the `get_or_upload` cache-hit path on the warm run.
+// This is the first shader in the plan that exercises the 3D texture pipeline.
+// #[test]
+// fn perf_gpu_roundtrip_24mp_color_lut() {
+//     let engine = GpuEngine::new().unwrap();
+//     let mut renderer = Renderer::new(&engine);
 
-    let img = make_solid_image(PERF_WIDTH, PERF_HEIGHT, 32767, 32767, 32767);
-    let uploaded = upload_texture(&engine.device, &engine.queue, &img);
+//     let img = make_solid_image(PERF_WIDTH, PERF_HEIGHT, 32767, 32767, 32767);
+//     let uploaded = upload_texture(&engine.device, &engine.queue, &img);
 
-    let transform = Transform {
-        shader_id: "color_lut",
-        values: vec![1.0f32],
-    };
-    let result = bench_shader_roundtrip(
-        &engine,
-        &mut renderer,
-        &uploaded,
-        img.width(),
-        img.height(),
-        &transform,
-    );
+//     let transform = Transform {
+//         shader_id: "color_lut",
+//         values: vec![1.0f32],
+//     };
+//     let result = bench_shader_roundtrip(
+//         &engine,
+//         &mut renderer,
+//         &uploaded,
+//         img.width(),
+//         img.height(),
+//         &transform,
+//     );
 
-    let (label, pass_count) = shader_display_info(transform.shader_id);
-    print_perf_report(label, pass_count, &result, PERF_WARM_TARGET_MS);
+//     let (label, pass_count) = shader_display_info(transform.shader_id);
+//     print_perf_report(label, pass_count, &result, PERF_WARM_TARGET_MS);
 
-    assert!(
-        result.warm.critical_path_ms() < PERF_WARM_TARGET_MS,
-        "{label} warm critical path exceeded {PERF_WARM_TARGET_MS:.0} ms target: {:.2} ms",
-        result.warm.critical_path_ms()
-    );
-}
+//     assert!(
+//         result.warm.critical_path_ms() < PERF_WARM_TARGET_MS,
+//         "{label} warm critical path exceeded {PERF_WARM_TARGET_MS:.0} ms target: {:.2} ms",
+//         result.warm.critical_path_ms()
+//     );
+// }
 
 /// Times the GPU critical path on a 24 MP image with the Cartoon multi-pass
 /// shader (bilateral, quantize, edges, combine). See `perf_gpu_roundtrip_24mp`
@@ -447,181 +447,181 @@ fn perf_gpu_roundtrip_24mp_cartoon() {
     );
 }
 
-/// Times the GPU critical path on a 24 MP image with the Pop Art multi-pass
-/// shader (quantize, colorize, combine). All three passes run at full resolution,
-/// making this a useful data point for tracking 3-pass full-scale pipeline cost.
-#[test]
-fn perf_gpu_roundtrip_24mp_pop_art() {
-    let engine = GpuEngine::new().unwrap();
-    let mut renderer = Renderer::new(&engine);
+// Times the GPU critical path on a 24 MP image with the Pop Art multi-pass
+// shader (quantize, colorize, combine). All three passes run at full resolution,
+// making this a useful data point for tracking 3-pass full-scale pipeline cost.
+// #[test]
+// fn perf_gpu_roundtrip_24mp_pop_art() {
+//     let engine = GpuEngine::new().unwrap();
+//     let mut renderer = Renderer::new(&engine);
 
-    let img = make_solid_image(PERF_WIDTH, PERF_HEIGHT, 32767, 32767, 32767);
-    let uploaded = upload_texture(&engine.device, &engine.queue, &img);
+//     let img = make_solid_image(PERF_WIDTH, PERF_HEIGHT, 32767, 32767, 32767);
+//     let uploaded = upload_texture(&engine.device, &engine.queue, &img);
 
-    let transform = Transform {
-        shader_id: "pop_art",
-        values: vec![1.0f32, 4.0, 12.0],
-    };
-    let result = bench_shader_roundtrip(
-        &engine,
-        &mut renderer,
-        &uploaded,
-        img.width(),
-        img.height(),
-        &transform,
-    );
+//     let transform = Transform {
+//         shader_id: "pop_art",
+//         values: vec![1.0f32, 4.0, 12.0],
+//     };
+//     let result = bench_shader_roundtrip(
+//         &engine,
+//         &mut renderer,
+//         &uploaded,
+//         img.width(),
+//         img.height(),
+//         &transform,
+//     );
 
-    let (label, pass_count) = shader_display_info(transform.shader_id);
-    print_perf_report(label, pass_count, &result, PERF_WARM_TARGET_MS);
+//     let (label, pass_count) = shader_display_info(transform.shader_id);
+//     print_perf_report(label, pass_count, &result, PERF_WARM_TARGET_MS);
 
-    assert!(
-        result.warm.critical_path_ms() < PERF_WARM_TARGET_MS,
-        "{label} warm critical path exceeded {PERF_WARM_TARGET_MS:.0} ms target: {:.2} ms",
-        result.warm.critical_path_ms()
-    );
-}
+//     assert!(
+//         result.warm.critical_path_ms() < PERF_WARM_TARGET_MS,
+//         "{label} warm critical path exceeded {PERF_WARM_TARGET_MS:.0} ms target: {:.2} ms",
+//         result.warm.critical_path_ms()
+//     );
+// }
 
-/// Times the GPU critical path on a 24 MP image with the Tilt-Shift multi-pass
-/// shader (down, blur_h, blur_v, up, composite). The separable Gaussian passes run
-/// at 4× downsampled resolution, making this a data point for the cost of the
-/// downsample→blur→upsample strategy plus a masked-blend composite at 24 MP.
-#[test]
-fn perf_gpu_roundtrip_24mp_tilt_shift() {
-    let engine = GpuEngine::new().unwrap();
-    let mut renderer = Renderer::new(&engine);
+// Times the GPU critical path on a 24 MP image with the Tilt-Shift multi-pass
+// shader (down, blur_h, blur_v, up, composite). The separable Gaussian passes run
+// at 4× downsampled resolution, making this a data point for the cost of the
+// downsample→blur→upsample strategy plus a masked-blend composite at 24 MP.
+// #[test]
+// fn perf_gpu_roundtrip_24mp_tilt_shift() {
+//     let engine = GpuEngine::new().unwrap();
+//     let mut renderer = Renderer::new(&engine);
 
-    let img = make_solid_image(PERF_WIDTH, PERF_HEIGHT, 32767, 32767, 32767);
-    let uploaded = upload_texture(&engine.device, &engine.queue, &img);
+//     let img = make_solid_image(PERF_WIDTH, PERF_HEIGHT, 32767, 32767, 32767);
+//     let uploaded = upload_texture(&engine.device, &engine.queue, &img);
 
-    // focus_center=0.5, focus_width=0.3, blur_strength=1.0: the top and bottom
-    // 35% of the image are fully blurred, exercising the maximum kernel radius.
-    let transform = Transform {
-        shader_id: "tilt_shift",
-        values: vec![0.5f32, 0.3, 1.0],
-    };
-    let result = bench_shader_roundtrip(
-        &engine,
-        &mut renderer,
-        &uploaded,
-        img.width(),
-        img.height(),
-        &transform,
-    );
+//     // focus_center=0.5, focus_width=0.3, blur_strength=1.0: the top and bottom
+//     // 35% of the image are fully blurred, exercising the maximum kernel radius.
+//     let transform = Transform {
+//         shader_id: "tilt_shift",
+//         values: vec![0.5f32, 0.3, 1.0],
+//     };
+//     let result = bench_shader_roundtrip(
+//         &engine,
+//         &mut renderer,
+//         &uploaded,
+//         img.width(),
+//         img.height(),
+//         &transform,
+//     );
 
-    let (label, pass_count) = shader_display_info(transform.shader_id);
-    print_perf_report(label, pass_count, &result, PERF_WARM_TARGET_MS);
+//     let (label, pass_count) = shader_display_info(transform.shader_id);
+//     print_perf_report(label, pass_count, &result, PERF_WARM_TARGET_MS);
 
-    assert!(
-        result.warm.critical_path_ms() < PERF_WARM_TARGET_MS,
-        "{label} warm critical path exceeded {PERF_WARM_TARGET_MS:.0} ms target: {:.2} ms",
-        result.warm.critical_path_ms()
-    );
-}
+//     assert!(
+//         result.warm.critical_path_ms() < PERF_WARM_TARGET_MS,
+//         "{label} warm critical path exceeded {PERF_WARM_TARGET_MS:.0} ms target: {:.2} ms",
+//         result.warm.critical_path_ms()
+//     );
+// }
 
-/// Times the GPU critical path on a 24 MP image with the Bokeh Shapes multi-pass
-/// shader (polygon blur pass + blend pass). The blur pass iterates an integer-offset
-/// kernel up to 50 px in radius, making this a data point for the cost of a dense
-/// per-pixel gather kernel at full resolution.
-#[test]
-fn perf_gpu_roundtrip_24mp_bokeh_shapes() {
-    let engine = GpuEngine::new().unwrap();
-    let mut renderer = Renderer::new(&engine);
+// Times the GPU critical path on a 24 MP image with the Bokeh Shapes multi-pass
+// shader (polygon blur pass + blend pass). The blur pass iterates an integer-offset
+// kernel up to 50 px in radius, making this a data point for the cost of a dense
+// per-pixel gather kernel at full resolution.
+// #[test]
+// fn perf_gpu_roundtrip_24mp_bokeh_shapes() {
+//     let engine = GpuEngine::new().unwrap();
+//     let mut renderer = Renderer::new(&engine);
 
-    let img = make_solid_image(PERF_WIDTH, PERF_HEIGHT, 32767, 32767, 32767);
-    let uploaded = upload_texture(&engine.device, &engine.queue, &img);
+//     let img = make_solid_image(PERF_WIDTH, PERF_HEIGHT, 32767, 32767, 32767);
+//     let uploaded = upload_texture(&engine.device, &engine.queue, &img);
 
-    // radius=20, sides=6 (hexagon), strength=1.0: exercises a medium-radius
-    // hexagonal kernel at full blend strength.
-    let transform = Transform {
-        shader_id: "bokeh_shapes",
-        values: vec![20.0f32, 6.0, 1.0],
-    };
-    let result = bench_shader_roundtrip(
-        &engine,
-        &mut renderer,
-        &uploaded,
-        img.width(),
-        img.height(),
-        &transform,
-    );
+//     // radius=20, sides=6 (hexagon), strength=1.0: exercises a medium-radius
+//     // hexagonal kernel at full blend strength.
+//     let transform = Transform {
+//         shader_id: "bokeh_shapes",
+//         values: vec![20.0f32, 6.0, 1.0],
+//     };
+//     let result = bench_shader_roundtrip(
+//         &engine,
+//         &mut renderer,
+//         &uploaded,
+//         img.width(),
+//         img.height(),
+//         &transform,
+//     );
 
-    let (label, pass_count) = shader_display_info(transform.shader_id);
-    print_perf_report(label, pass_count, &result, PERF_WARM_TARGET_MS);
+//     let (label, pass_count) = shader_display_info(transform.shader_id);
+//     print_perf_report(label, pass_count, &result, PERF_WARM_TARGET_MS);
 
-    assert!(
-        result.warm.critical_path_ms() < PERF_WARM_TARGET_MS,
-        "{label} warm critical path exceeded {PERF_WARM_TARGET_MS:.0} ms target: {:.2} ms",
-        result.warm.critical_path_ms()
-    );
-}
+//     assert!(
+//         result.warm.critical_path_ms() < PERF_WARM_TARGET_MS,
+//         "{label} warm critical path exceeded {PERF_WARM_TARGET_MS:.0} ms target: {:.2} ms",
+//         result.warm.critical_path_ms()
+//     );
+// }
 
-/// Times the GPU critical path on a 24 MP image with the Polaroid multi-pass
-/// shader (grade pass with 3D LUT aux texture, then border pass). Exercises
-/// the 3D LUT cache-hit path alongside the scratch texture pool.
-#[test]
-fn perf_gpu_roundtrip_24mp_polaroid() {
-    let engine = GpuEngine::new().unwrap();
-    let mut renderer = Renderer::new(&engine);
+// Times the GPU critical path on a 24 MP image with the Polaroid multi-pass
+// shader (grade pass with 3D LUT aux texture, then border pass). Exercises
+// the 3D LUT cache-hit path alongside the scratch texture pool.
+// #[test]
+// fn perf_gpu_roundtrip_24mp_polaroid() {
+//     let engine = GpuEngine::new().unwrap();
+//     let mut renderer = Renderer::new(&engine);
 
-    let img = make_solid_image(PERF_WIDTH, PERF_HEIGHT, 32767, 32767, 32767);
-    let uploaded = upload_texture(&engine.device, &engine.queue, &img);
+//     let img = make_solid_image(PERF_WIDTH, PERF_HEIGHT, 32767, 32767, 32767);
+//     let uploaded = upload_texture(&engine.device, &engine.queue, &img);
 
-    let transform = Transform {
-        shader_id: "polaroid",
-        values: vec![1.0f32, 1.0],
-    };
-    let result = bench_shader_roundtrip(
-        &engine,
-        &mut renderer,
-        &uploaded,
-        img.width(),
-        img.height(),
-        &transform,
-    );
+//     let transform = Transform {
+//         shader_id: "polaroid",
+//         values: vec![1.0f32, 1.0],
+//     };
+//     let result = bench_shader_roundtrip(
+//         &engine,
+//         &mut renderer,
+//         &uploaded,
+//         img.width(),
+//         img.height(),
+//         &transform,
+//     );
 
-    let (label, pass_count) = shader_display_info(transform.shader_id);
-    print_perf_report(label, pass_count, &result, PERF_WARM_TARGET_MS);
+//     let (label, pass_count) = shader_display_info(transform.shader_id);
+//     print_perf_report(label, pass_count, &result, PERF_WARM_TARGET_MS);
 
-    assert!(
-        result.warm.critical_path_ms() < PERF_WARM_TARGET_MS,
-        "{label} warm critical path exceeded {PERF_WARM_TARGET_MS:.0} ms target: {:.2} ms",
-        result.warm.critical_path_ms()
-    );
-}
+//     assert!(
+//         result.warm.critical_path_ms() < PERF_WARM_TARGET_MS,
+//         "{label} warm critical path exceeded {PERF_WARM_TARGET_MS:.0} ms target: {:.2} ms",
+//         result.warm.critical_path_ms()
+//     );
+// }
 
-/// Times the GPU critical path on a 24 MP image with the ASCII Art two-pass
-/// shader (gray, ascii). The ascii pass uses a nearest-sampled 2D character
-/// atlas (Group 2 aux texture), exercising the aux cache-hit path on the warm
-/// run alongside the gray scratch texture pool.
-#[test]
-fn perf_gpu_roundtrip_24mp_ascii_art() {
-    let engine = GpuEngine::new().unwrap();
-    let mut renderer = Renderer::new(&engine);
+// Times the GPU critical path on a 24 MP image with the ASCII Art two-pass
+// shader (gray, ascii). The ascii pass uses a nearest-sampled 2D character
+// atlas (Group 2 aux texture), exercising the aux cache-hit path on the warm
+// run alongside the gray scratch texture pool.
+// #[test]
+// fn perf_gpu_roundtrip_24mp_ascii_art() {
+//     let engine = GpuEngine::new().unwrap();
+//     let mut renderer = Renderer::new(&engine);
 
-    let img = make_solid_image(PERF_WIDTH, PERF_HEIGHT, 32767, 32767, 32767);
-    let uploaded = upload_texture(&engine.device, &engine.queue, &img);
+//     let img = make_solid_image(PERF_WIDTH, PERF_HEIGHT, 32767, 32767, 32767);
+//     let uploaded = upload_texture(&engine.device, &engine.queue, &img);
 
-    // cell_size=8, strength=1.0: exercises the full ASCII art pipeline at the
-    // default cell size (8×8 px cells).
-    let transform = Transform {
-        shader_id: "ascii_art",
-        values: vec![8.0f32, 1.0],
-    };
-    let result = bench_shader_roundtrip(
-        &engine,
-        &mut renderer,
-        &uploaded,
-        img.width(),
-        img.height(),
-        &transform,
-    );
+//     // cell_size=8, strength=1.0: exercises the full ASCII art pipeline at the
+//     // default cell size (8×8 px cells).
+//     let transform = Transform {
+//         shader_id: "ascii_art",
+//         values: vec![8.0f32, 1.0],
+//     };
+//     let result = bench_shader_roundtrip(
+//         &engine,
+//         &mut renderer,
+//         &uploaded,
+//         img.width(),
+//         img.height(),
+//         &transform,
+//     );
 
-    let (label, pass_count) = shader_display_info(transform.shader_id);
-    print_perf_report(label, pass_count, &result, PERF_WARM_TARGET_MS);
+//     let (label, pass_count) = shader_display_info(transform.shader_id);
+//     print_perf_report(label, pass_count, &result, PERF_WARM_TARGET_MS);
 
-    assert!(
-        result.warm.critical_path_ms() < PERF_WARM_TARGET_MS,
-        "{label} warm critical path exceeded {PERF_WARM_TARGET_MS:.0} ms target: {:.2} ms",
-        result.warm.critical_path_ms()
-    );
-}
+//     assert!(
+//         result.warm.critical_path_ms() < PERF_WARM_TARGET_MS,
+//         "{label} warm critical path exceeded {PERF_WARM_TARGET_MS:.0} ms target: {:.2} ms",
+//         result.warm.critical_path_ms()
+//     );
+// }

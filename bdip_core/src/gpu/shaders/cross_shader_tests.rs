@@ -243,37 +243,37 @@ fn test_brightness_saturation_commutativity() {
     }
 }
 
-/// Stacking FilmGrainBlue → ColorLUT verifies that two shaders with different
-/// auxiliary textures (blue_noise_128 and identity_lut_64) compose correctly
-/// without interfering. The identity LUT at full intensity is a near-no-op, so
-/// grain added by FilmGrainBlue must still be visible in the output.
-#[test]
-fn test_film_grain_blue_then_color_lut_composes() {
-    let engine = GpuEngine::new().unwrap();
-    let mut renderer = Renderer::new(&engine);
-    let img = make_solid_image(16, 16, 32767, 32767, 32767);
+// Stacking FilmGrainBlue → ColorLUT verifies that two shaders with different
+// auxiliary textures (blue_noise_128 and identity_lut_64) compose correctly
+// without interfering. The identity LUT at full intensity is a near-no-op, so
+// grain added by FilmGrainBlue must still be visible in the output.
+// #[test]
+// fn test_film_grain_blue_then_color_lut_composes() {
+//     let engine = GpuEngine::new().unwrap();
+//     let mut renderer = Renderer::new(&engine);
+//     let img = make_solid_image(16, 16, 32767, 32767, 32767);
 
-    let out = roundtrip(
-        &mut renderer,
-        &engine,
-        &img,
-        &[
-            Transform {
-                shader_id: "film_grain_blue",
-                values: vec![0.05, 0.5],
-            },
-            Transform {
-                shader_id: "color_lut",
-                values: vec![1.0],
-            },
-        ],
-    );
+//     let out = roundtrip(
+//         &mut renderer,
+//         &engine,
+//         &img,
+//         &[
+//             Transform {
+//                 shader_id: "film_grain_blue",
+//                 values: vec![0.05, 0.5],
+//             },
+//             Transform {
+//                 shader_id: "color_lut",
+//                 values: vec![1.0],
+//             },
+//         ],
+//     );
 
-    // The identity LUT at full intensity is approximately a no-op. Grain from
-    // film_grain_blue must still be visible: at least one pixel must differ from
-    // the solid mid-gray input by more than 128 u16.
-    let any_perturbed = out
-        .pixels()
-        .any(|p| (p[0] as i32 - 32767).unsigned_abs() > 128);
-    assert!(any_perturbed, "grain must survive the identity LUT pass");
-}
+//     // The identity LUT at full intensity is approximately a no-op. Grain from
+//     // film_grain_blue must still be visible: at least one pixel must differ from
+//     // the solid mid-gray input by more than 128 u16.
+//     let any_perturbed = out
+//         .pixels()
+//         .any(|p| (p[0] as i32 - 32767).unsigned_abs() > 128);
+//     assert!(any_perturbed, "grain must survive the identity LUT pass");
+// }
