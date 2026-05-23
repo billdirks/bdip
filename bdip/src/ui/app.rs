@@ -166,6 +166,10 @@ impl BdipApp {
                 self.preview_slider = None;
                 self.is_loading = false;
                 self.error_message = None;
+                // Clear stale handles so the previous image's pixels cannot bleed
+                // through beneath the new image when their dimensions differ.
+                self.image_handle = None;
+                self.prev_image_handle = None;
                 // Dispatch the initial preview render asynchronously.
                 let render_list = build_render_list(&self.history, None);
                 self.spawn_render(RenderRequest::Preview {
@@ -1002,5 +1006,36 @@ mod tests {
         let meta = two_param_meta();
         let vals = current_values_for("test_two", &history, &meta.param);
         assert_eq!(vals, vec![0.5, 0.7]);
+    }
+
+    fn make_app_with_image_handles() -> BdipApp {
+        let handle = iced::widget::image::Handle::from_rgba(1, 1, vec![0u8, 0, 0, 255]);
+        BdipApp {
+            base_image: None,
+            image_handle: Some(handle.clone()),
+            prev_image_handle: Some(handle),
+            gpu: None,
+            scheduler: RenderScheduler::new(),
+            history: HistoryManager::new(),
+            selected_transform: ShaderOption {
+                id: "brightness",
+                display_name: "Brightness",
+            },
+            preview_slider: None,
+            error_message: None,
+            is_loading: false,
+            is_saving: false,
+            menu_open: false,
+            loaded_path: None,
+        }
+    }
+
+    #[test]
+    fn test_image_loaded_clears_stale_image_handles() {
+        let mut app = make_app_with_image_handles();
+        let img = bdip_core::Rgba16Image::new(100, 100);
+        let _ = app.update(Message::ImageLoaded(Ok((PathBuf::from("test.png"), img))));
+        assert!(app.image_handle.is_none());
+        assert!(app.prev_image_handle.is_none());
     }
 }
