@@ -114,8 +114,9 @@ Compare the implementation against your research. Evaluate:
 
 ## Step 4 — Write Findings to Spec File
 
-First, read `specs/fix-halftone-dots-plan.md` as an example of the expected format and level of
-detail. Then create the file `specs/fix-$ARGUMENTS-plan.md` with:
+First, read `bdip_core/shaders-wip/specs/fix-halftone-dots-plan.md` as an example of the expected
+format and level of detail. Then create the file 
+`bdip_core/shaders-wip/specs/fix-$ARGUMENTS-plan.md` with:
 
 ### 1. Problem Summary
 - List all issues found (critical, moderate, minor)
@@ -124,7 +125,7 @@ detail. Then create the file `specs/fix-$ARGUMENTS-plan.md` with:
 
 ### 2. Implementation Plan
 Break fixes into PRs that can each be implemented by a fresh Sonnet instance with the prompt:
-"Implement PR X from @specs/fix-$ARGUMENTS-plan.md"
+"Implement PR X from @bdip_core/shaders-wip/specs/fix-$ARGUMENTS-plan.md"
 
 Each PR should include:
 - **Goal**: One sentence describing the objective
