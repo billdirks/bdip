@@ -35,15 +35,39 @@ mod tests {
     use crate::gpu::shaders::{Transform, registry_by_id};
     use crate::gpu::test_util::{make_solid_image, roundtrip};
 
+    fn run_invert(
+        engine: &GpuEngine,
+        renderer: &mut Renderer,
+        r: u16,
+        g: u16,
+        b: u16,
+    ) -> crate::Rgba16Image {
+        let img = make_solid_image(2, 2, r, g, b);
+        roundtrip(
+            renderer,
+            engine,
+            &img,
+            &[Transform {
+                shader_id: "invert",
+                values: vec![],
+            }],
+        )
+    }
+
     #[test]
     fn test_invert_registry_entry_exists() {
         assert!(registry_by_id("invert").is_some());
     }
 
     #[test]
-    fn test_invert_registry_metadata() {
+    fn test_invert_display_name() {
         let reg = registry_by_id("invert").unwrap();
         assert_eq!(reg.meta.display_name, "Invert");
+    }
+
+    #[test]
+    fn test_invert_param_kind() {
+        let reg = registry_by_id("invert").unwrap();
         assert_eq!(reg.meta.param, ParamKind::Toggle);
     }
 
@@ -56,34 +80,45 @@ mod tests {
     }
 
     #[test]
-    fn test_invert_shader() {
+    fn test_invert_black_channel_becomes_white() {
         let engine = GpuEngine::new().unwrap();
         let mut renderer = Renderer::new(&engine);
-
-        // Note: linear-light invert means 1.0 - linear_value.
-        let img = make_solid_image(2, 2, 0, 65535, 32767);
-        let out_img = roundtrip(
-            &mut renderer,
-            &engine,
-            &img,
-            &[Transform {
-                shader_id: "invert",
-                values: vec![],
-            }],
+        let out = run_invert(&engine, &mut renderer, 0, 32767, 32767);
+        let r = out.get_pixel(0, 0)[0];
+        assert!(
+            (r as i32 - 65535).abs() <= 100,
+            "R: expected ~65535, got {r}"
         );
+    }
 
-        for pixel in out_img.pixels() {
-            // R: 0 → inverted → 65535
-            assert!(
-                (pixel[0] as i32 - 65535).abs() <= 100,
-                "R: expected ~65535, got {}",
-                pixel[0]
-            );
-            // G: 65535 → inverted → 0
-            assert!(pixel[1] <= 100, "G: expected ~0, got {}", pixel[1]);
-            // Alpha preserved
-            assert_eq!(pixel[3], 65535);
-        }
+    #[test]
+    fn test_invert_white_channel_becomes_black() {
+        let engine = GpuEngine::new().unwrap();
+        let mut renderer = Renderer::new(&engine);
+        let out = run_invert(&engine, &mut renderer, 32767, 65535, 32767);
+        let g = out.get_pixel(0, 0)[1];
+        assert!(g <= 100, "G: expected ~0, got {g}");
+    }
+
+    #[test]
+    fn test_invert_midtone_channel_inverts() {
+        let engine = GpuEngine::new().unwrap();
+        let mut renderer = Renderer::new(&engine);
+        let out = run_invert(&engine, &mut renderer, 32767, 32767, 32767);
+        let b = out.get_pixel(0, 0)[2];
+        // 32767 ≈ 0.5 sRGB ≈ 0.214 linear; inverted → 0.786 linear ≈ 0.899 sRGB ≈ 58922 u16.
+        assert!(
+            (b as i32 - 58922).abs() <= 300,
+            "B: expected ~58922, got {b}"
+        );
+    }
+
+    #[test]
+    fn test_invert_alpha_preserved() {
+        let engine = GpuEngine::new().unwrap();
+        let mut renderer = Renderer::new(&engine);
+        let out = run_invert(&engine, &mut renderer, 0, 0, 0);
+        assert_eq!(out.get_pixel(0, 0)[3], 65535, "alpha must be preserved");
     }
 
     #[test]
