@@ -128,12 +128,15 @@ fn transform_view(app: &BdipApp) -> Element<'_, Message> {
         })
         .style(style::section_header_text);
 
-    let content = column![transform_picker, transform_control].spacing(16);
+    let transform_scroll = scrollable(transform_control).height(Length::Fill);
+
+    let content = column![transform_picker, transform_scroll].spacing(16);
 
     column![header, content]
         .spacing(style::SECTION_HEADER_SPACING)
         .padding(style::SECTION_SIDEBAR_PADDING)
         .width(Length::Fill)
+        .height(Length::Fill)
         .into()
 }
 
