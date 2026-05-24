@@ -1,72 +1,60 @@
-# bdip — High-Performance Image Processor
+# bdip - High-performance image transformations
 
-A GPU-accelerated image processing application built in Rust, targeting macOS (Metal/WebGPU). The
-project's goal is to achieve sub-20ms rendering latency for 24MP images on Apple Silicon by
-utilizing floating-point precision on the GPU.
+A performance minded library and application for applying gpu-based image shaders. There are 2 major goals:
+
+1. This project aims to be as fast as possible and competitive with commericial implementations. I'm specificially targeting 24MP images on Apple silicon.
+2. It should be easy to add shaders. This should be doable without any real understanding of Rust. For more information [see below](#adding-a-shader). 
 
 ## Architecture
 
-The project is structured as a Cargo workspace:
-- **`bdip_core`**: The headless core library. Contains the `wgpu` transformation engine, error
-  handling, history logic, and file I/O operations.
-- **`bdip`**: The application binary. Serves as both a headless CLI tool for batch processing
-  and an `iced`-backed UI window (the declarative frontend).
+This project is broken up into 2 crates:
+- **`bdip_core`**: The core library that is responsible for all image transformation logic and file I/O. This should be importable by any Rust application that wants to apply image transformations.
+- **`bdip`**: An example application. This can be run in 2 ways:
+* As a desktop GUI application that allows interactively editing images.
+* As a headless CLI tool that can be used in a pipeline for batch processing.
 
-## Quick Start & Usage
+## Quickstart
 
-This project uses custom Cargo aliases to streamline development workflows. You can view the
-underlying command definitions in `.cargo/config.toml`.
+Cargo aliases can be helpful and are found in `.cargo/config.toml`.
 
-### Running the Application
+### Run the UI 
 
-**Run the UI Prototype (Spike)**
-Boots the `iced` window to validate the readback bridge. By default, it generates a test image:
 ```bash
-cargo ui
-```
-You can also pass a specific image path to test the UI with real data:
-```bash
-cargo ui -- path/to/your/image.jpg
+cargo ui-release
 ```
 
-**Run the UI (Performance Testing)**
-To test pipeline performance without the latency penalty of Rust's debug mode, use the release
-alias. This applies optimizations such as SIMD vectorization to the CPU Bridge:
+If you decide on a set of transformations you like in the UI you can export them (`Export pipeline` in the `File` pulldown) and pass that file to the CLI to apply it to images in a pipeline.
+
+The command also takes an image path to be loaded:
+
 ```bash
-cargo ui-release -- path/to/your/image.jpg
+cargo ui-release -- path/to/your/image.png
 ```
 
-**Run the CLI (Headless processing)**
-Processes an image through the core pipeline without starting the UI. Requires an input path,
-`--output`, and at least one `--apply` transformation:
+You can replace `ui-release` by `ui` for the debug build. It will be noticeable slower.
+
+### Run the CLI
+
+You can run the app in headless mode. You can string together `--apply` flags to apply multiple transforms (these happen from left to right) or pass in a file. Here are some examples:
+
 ```bash
-cargo headless path/to/your/image.jpg --output out.png --apply brightness:0.5
-```
-There is also a headless release version which is useful for performance testing:
-```bash
-cargo headless-release path/to/your/image.jpg --output out.png --apply brightness:0.5
+cargo headless input.tif --output out.png --apply 'abstract_geometry:0.37:18.5:0.2:0.51' --apply 'fisheye:-0.19'
 ```
 
-You can also chain multiple transformations or use a pipeline file:
-```bash
-cargo headless input.jpg --output out.png --apply brightness:0.3 --apply brightness:0.2
-cargo headless input.jpg --output out.png --pipeline transforms.txt
+```
+cargo headless input.tif --output out.png --pipeline pipeline.txt
 ```
 
-**Inspect pipeline stage timings**
-Add `--timings` to any headless invocation to print per-stage wall-clock durations to stderr.
-Use the release build for numbers comparable to the targets in `specs/perf_goal_1.md`:
-```bash
-cargo headless-release path/to/your/image.jpg --output out.png --apply brightness:0.5 --timings
+where `pipeline.txt` is:
+
+```
+abstract_geometry:0.37:18.5:0.20:0.51
+fisheye:-0.19
 ```
 
-Output reports five stages: `disk read`, `gpu upload`, `gpu execute`, `gpu readback`, and
-`disk write`. The interactive latency goal covers `gpu execute` + `gpu readback` (target:
-8–20 ms on Apple Silicon for a 24 MP image).
+**BDIRKS - add --help example**
 
 ### Development Commands
-
-Run the following commands before finalizing any edits to ensure code quality:
 
 **1. Code Formatting**
 Ensure all Rust code is neatly formatted:
@@ -74,7 +62,7 @@ Ensure all Rust code is neatly formatted:
 cargo format
 ```
 
-**2. Static Analysis **
+**2. Static Analysis**
 Check for warnings, clippy issues, and unoptimized patterns across the entire workspace:
 ```bash
 cargo lint
@@ -86,21 +74,20 @@ Run the core library unit tests and the end-to-end CLI flow tests:
 cargo test --workspace
 ```
 
-### Performance Benchmarking
-
-**Run the GPU roundtrip benchmark**
-Times the full GPU-critical path (CPU→GPU upload, shader execution, GPU→CPU readback) on a
-synthetically generated 24 MP image. This is the primary signal for tracking progress toward
-the sub-20 ms latency goal in `specs/perf_goal_1.md`. Always run in release mode — debug mode
-adds significant overhead unrelated to the pipeline itself:
+**4. Performance testing**
 ```bash
 cargo perf-test
 ```
 
-The test prints per-stage timings and always passes. As performance improves toward the 8–20 ms
-target, the thresholds in the test will be tightened and it will become gating.
+**5. Headless performance diagnostics**
+```bash
+cargo headless input.tif --output out.png --pipeline pipeline.txt --timings
+```
 
-## Documentation & Performance
-`bdip` has strict, predefined requirements targeting the commercial photo editing space. For detailed
-latency calculations, architecture diagrams, and system specifications, see the documentation in the
-`specs/` directory.
+## Adding a Shader
+
+All shader implementations are found in [this directory](./bdip_core/src/gpu/shaders). Auxilary image assets are stored [here](./bdip_core/src/gpu/assets/) and can be shared between shaders. A how to write a shader doc, which can also be used by AI, can be found [here](./specs/adding_a_shader.md).
+
+## Specification
+
+The [original specification](./specs/specification.md) and supporting [architectural diagram](./specs/architecture_diagram.md) along with a description of the [execution model](./specs/execution_model.md) are found in the [specs directory](./specs/).
