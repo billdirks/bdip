@@ -1,21 +1,16 @@
 [alias]
 
-# Start the UI prototype Spike (Debug mode)
+# Start the UI application (debug mode)
 ui = "run -p bdip"
 
-# Start the UI prototype Spike (Release mode for accurate performance/latency testing)
+# Start the UI application (release mode for accurate performance/latency testing)
 ui-release = "run -p bdip --release"
 
-# Run headless CLI processing (e.g., cargo headless img.jpg --output out.png --apply brightness:0.5)
-headless = "run -p bdip -- --headless"
+# Run the headless CLI batch processor (e.g., cargo cli -- input.tif --output out.png --apply brightness:0.5)
+cli = "run -p bdip-cli"
 
-describe-shader = "run -p bdip -- --describe-shader"
-list-shaders = "run -p bdip -- --list-shaders"
-
-
-
-# Run headless release CLI processing (e.g., cargo headless img.jpg --output out.png --apply brightness:0.5)
-headless-release = "run -p bdip --release -- --headless"
+# Run the headless CLI batch processor in release mode
+cli-release = "run -p bdip-cli --release"
 
 # Run all 24 MP GPU roundtrip performance benchmarks (brightness, Clarity, Cartoon).
 # These live in bdip_core/tests/performance.rs as a dedicated integration test

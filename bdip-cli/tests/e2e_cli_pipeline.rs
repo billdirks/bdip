@@ -40,18 +40,15 @@ fn test_cli_apply_flow() {
     let in_path = setup_test_image(&tmp_dir);
     let out_path = tmp_dir.path().join("test_out_apply.png");
 
-    let cargo_bin = assert_cmd::cargo::cargo_bin("bdip");
+    let cargo_bin = assert_cmd::cargo::cargo_bin("bdip-cli");
     let mut cmd = Command::new(cargo_bin);
-    cmd.arg("--headless")
-        .arg(&in_path)
-        .arg("--output")
-        .arg(&out_path);
+    cmd.arg(&in_path).arg("--output").arg(&out_path);
 
     for transform in TEST_TRANSFORMS {
         cmd.arg("--apply").arg(transform);
     }
 
-    let output = cmd.output().expect("Failed to execute bdip");
+    let output = cmd.output().expect("Failed to execute bdip-cli");
     if !output.status.success() {
         panic!(
             "CLI --apply failed: {}",
@@ -79,16 +76,15 @@ fn test_cli_pipeline_flow() {
     // Write the transforms to a pipeline file
     std::fs::write(&pipeline_path, TEST_TRANSFORMS.join("\n")).unwrap();
 
-    let cargo_bin = assert_cmd::cargo::cargo_bin("bdip");
+    let cargo_bin = assert_cmd::cargo::cargo_bin("bdip-cli");
     let mut cmd = Command::new(cargo_bin);
-    cmd.arg("--headless")
-        .arg(&in_path)
+    cmd.arg(&in_path)
         .arg("--output")
         .arg(&out_path)
         .arg("--pipeline")
         .arg(&pipeline_path);
 
-    let output = cmd.output().expect("Failed to execute bdip");
+    let output = cmd.output().expect("Failed to execute bdip-cli");
     if !output.status.success() {
         panic!(
             "CLI --pipeline failed: {}",
@@ -107,23 +103,22 @@ fn test_cli_pipeline_flow() {
 }
 
 #[test]
-fn test_cli_headless_without_input_fails() {
+fn test_cli_missing_input_fails() {
     let tmp_dir = tempfile::tempdir().unwrap();
     let out_path = tmp_dir.path().join("should_not_exist.png");
 
-    let cargo_bin = assert_cmd::cargo::cargo_bin("bdip");
+    let cargo_bin = assert_cmd::cargo::cargo_bin("bdip-cli");
     let output = Command::new(cargo_bin)
-        .arg("--headless")
         .arg("--output")
         .arg(&out_path)
         .arg("--apply")
         .arg("brightness:0.5")
         .output()
-        .expect("Failed to execute bdip");
+        .expect("Failed to execute bdip-cli");
 
     assert!(
         !output.status.success(),
-        "Headless mode without an input file should fail"
+        "Invocation without a required input file should fail"
     );
     assert!(!out_path.exists());
 }
@@ -141,16 +136,15 @@ fn test_cli_16bit_precision_preserved() {
 
     let out_path = tmp_dir.path().join("test_out_16bit.png");
 
-    let cargo_bin = assert_cmd::cargo::cargo_bin("bdip");
+    let cargo_bin = assert_cmd::cargo::cargo_bin("bdip-cli");
     let mut cmd = Command::new(cargo_bin);
-    cmd.arg("--headless")
-        .arg(&in_path)
+    cmd.arg(&in_path)
         .arg("--output")
         .arg(&out_path)
         .arg("--apply")
         .arg("brightness:0.0"); // Identity transform
 
-    let output = cmd.output().expect("Failed to execute bdip");
+    let output = cmd.output().expect("Failed to execute bdip-cli");
     if !output.status.success() {
         panic!(
             "CLI --apply failed: {}",
@@ -188,9 +182,8 @@ fn test_headless_multi_apply() {
 
     let out_path = tmp_dir.path().join("test_out_multi.png");
 
-    let cargo_bin = assert_cmd::cargo::cargo_bin("bdip");
+    let cargo_bin = assert_cmd::cargo::cargo_bin("bdip-cli");
     let output = Command::new(cargo_bin)
-        .arg("--headless")
         .arg(&in_path)
         .arg("--output")
         .arg(&out_path)
@@ -199,7 +192,7 @@ fn test_headless_multi_apply() {
         .arg("--apply")
         .arg("saturation:-0.5")
         .output()
-        .expect("Failed to execute bdip");
+        .expect("Failed to execute bdip-cli");
 
     if !output.status.success() {
         panic!(

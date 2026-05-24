@@ -463,12 +463,21 @@ name = "bdip"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "assert_cmd",
  "bdip_core",
  "clap",
  "iced",
- "image",
  "rfd",
+]
+
+[[package]]
+name = "bdip-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "assert_cmd",
+ "bdip_core",
+ "clap",
+ "image",
  "tempfile",
 ]
 
