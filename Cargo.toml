@@ -1,3 +1,13 @@
 [workspace]
 members = ["bdip_core", "bdip"]
 resolver = "2"
+
+# Optimize PNG encoder and its fast deflate backend in debug builds (20s → 6.7s).
+# This minimizes long write times for png in debug mode. They are still longer than release builds
+# due to generic monomophization. That is, img.save_with_format, is a generic defined in the image
+# crate but the compiled version is in our crate and is cpu intensive without optimization.
+[profile.dev.package.png]
+opt-level = 3
+
+[profile.dev.package.fdeflate]
+opt-level = 3
