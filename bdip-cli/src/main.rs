@@ -11,7 +11,7 @@ mod timing;
 #[command(author, version, about, long_about = None)]
 struct CliArgs {
     /// Input image file path
-    pub input: PathBuf,
+    pub input: Option<PathBuf>,
 
     /// Output file path
     #[arg(short, long)]
@@ -175,15 +175,19 @@ fn main() -> anyhow::Result<()> {
         ));
     }
 
+    let input_path = args
+        .input
+        .ok_or_else(|| anyhow::anyhow!("<INPUT> is required when processing an image"))?;
+
     let output_path = args
         .output
         .ok_or_else(|| anyhow::anyhow!("--output is required"))?;
 
-    println!("Running processing on {:?}", args.input);
+    println!("Running processing on {:?}", input_path);
 
     let mut timer = timing::PipelineTimer::new(args.timings);
 
-    let mut img = bdip_core::io::load_image(&args.input)?;
+    let mut img = bdip_core::io::load_image(&input_path)?;
     timer.lap("disk read");
 
     let engine = GpuEngine::new()?;

@@ -1,22 +1,22 @@
 [alias]
 
 # Start the UI application (debug mode)
-ui = "run -p bdip"
+ui = "run -p bdip --"
 
 # Start the UI application (release mode)
-ui-release = "run -p bdip --release"
+ui-release = "run -p bdip --release --"
 
 # Run the headless CLI batch processor (e.g., cargo cli -- input.tif --output out.png --apply brightness:0.5)
-cli = "run -p bdip-cli"
+cli = "run -p bdip-cli --"
 
 # Run the headless CLI batch processor in release mode
-cli-release = "run -p bdip-cli --release"
+cli-release = "run -p bdip-cli --release --"
 
 # Run all 24 MP GPU roundtrip performance benchmarks (brightness, Clarity, Cartoon).
-# These live in bdip_core/tests/performance.rs as a dedicated integration test
+# These live in bdip-core/tests/performance.rs as a dedicated integration test
 # target, so `--test performance` selects them. --test-threads=1 avoids GPU contention
 # during readback.
-perf-test = "test --release -p bdip_core --test performance -- --nocapture --test-threads=1"
+perf-test = "test --release -p bdip-core --test performance -- --nocapture --test-threads=1"
 
 # Run rigorous static analysis (as required by .cursorrules)
 lint = "clippy --workspace --all-targets --all-features"
