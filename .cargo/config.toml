@@ -3,7 +3,7 @@
 # Start the UI application (debug mode)
 ui = "run -p bdip"
 
-# Start the UI application (release mode for accurate performance/latency testing)
+# Start the UI application (release mode)
 ui-release = "run -p bdip --release"
 
 # Run the headless CLI batch processor (e.g., cargo cli -- input.tif --output out.png --apply brightness:0.5)

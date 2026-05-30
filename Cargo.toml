@@ -1,5 +1,5 @@
 [workspace]
-members = ["bdip_core", "bdip", "bdip-cli"]
+members = ["bdip-core", "bdip", "bdip-cli"]
 resolver = "2"
 
 # Optimize PNG encoder and its fast deflate backend in debug builds (20s → 6.7s).
