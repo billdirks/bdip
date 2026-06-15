@@ -1,6 +1,6 @@
 # bdip - High-performance image transformations
 
-A performance minded library and application for applying gpu-based image shaders. There are 2
+A performance-minded library and application for applying image shaders. There are 2
 major goals:
 
 1. This project aims to be as fast as possible and competitive with commercial implementations.
@@ -15,8 +15,7 @@ This project is broken up into 3 crates: a core library and 2 applications which
 - **`bdip-core`**: The core library responsible for all image transformation logic and file I/O.
   It can be imported by any Rust application that wants to apply image transformations.
 - **`bdip`**: A desktop GUI application for interactively editing images.
-- **`bdip-cli`**: A CLI applicaiton that can be used for batch processing. It depends only on 
-`bdip-core` and does not pull in any GUI dependencies (`iced`, `rfd`).
+- **`bdip-cli`**: A CLI application that can be used for batch processing.
 
 ## Quickstart
 
@@ -28,7 +27,7 @@ The cargo aliases are helpful and can be found in `.cargo/config.toml`. I highli
 cargo ui-release
 ```
 
-If you decide on a set of transformations you like in the UI you can export them (`Export pipeline` in the `File` pulldown) and pass that file to `bdip-cli` to apply it to images in a pipeline.
+If you decide on a set of transformations you like in the UI, you can export them (`Export pipeline` in the `File` pulldown) and pass that file to `bdip-cli` to apply it to images in a pipeline.
 
 The command also takes an image path to be loaded:
 
@@ -107,8 +106,8 @@ cargo cli input.tif --output out.png --pipeline pipeline.txt --timings
 ## Adding a Shader
 
 All shader implementations are found in
-[this directory](./bdip_core/src/gpu/shaders). Auxiliary image assets are stored
-[here](./bdip_core/src/gpu/assets/) and can be shared between shaders. A how-to-write-a-shader
+[this directory](./bdip-core/src/gpu/shaders). Auxiliary image assets are stored
+[here](./bdip-core/src/gpu/assets/) and can be shared between shaders. A how-to-write-a-shader
 doc, which can also be used by AI, can be found [here](./specs/adding_a_shader.md).
 
 ## Specification

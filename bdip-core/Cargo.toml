@@ -2,6 +2,10 @@
 name = "bdip-core"
 version = "0.1.0"
 edition = "2024"
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
+description = "High-performance, extensible shader library."
 
 [dependencies]
 bytemuck = { version = "1.25.0", features = ["derive"] }

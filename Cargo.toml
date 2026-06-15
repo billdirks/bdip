@@ -2,6 +2,11 @@
 members = ["bdip-core", "bdip", "bdip-cli"]
 resolver = "2"
 
+[workspace.package]
+license = "BSD-3-Clause"
+repository = "https://github.com/billdirks/bdip"
+readme = "README.md"
+
 # Optimize PNG encoder and its fast deflate backend in debug builds (20s → 6.7s).
 # This minimizes long write times for png in debug mode. They are still longer than release builds
 # due to generic monomophization. That is, img.save_with_format, is a generic defined in the image
