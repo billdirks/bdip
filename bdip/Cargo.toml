@@ -14,3 +14,9 @@ clap = { version = "4.6.0", features = ["derive"] }
 iced = { version = "0.14.0", features = ["image"] }
 rfd = "0.15"
 
+[package.metadata.bundle]
+name = "bdip"
+identifier = "com.billdirks.bdip"
+icon = ["assets/goat.icns"]
+version = "0.1.1"
+copyright = "Copyright (c) 2026, William Dirks"
