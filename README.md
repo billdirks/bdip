@@ -17,6 +17,54 @@ This project is broken up into 3 crates: a core library and 2 applications which
 - **`bdip`**: A desktop GUI application for interactively editing images.
 - **`bdip-cli`**: A CLI application that can be used for batch processing.
 
+## Installation
+
+For development, you can clone [the GitHub repo](https://github.com/billdirks/bdip).
+
+To install the release binaries, you can download the pre-compiled binaries (for Mac) or
+build them from source.
+
+### Brew installation (Mac)
+
+```bash
+brew tap billdirks/bdip
+brew trust billdirks/bdip
+
+# Install the CLI application
+brew install bdip-cli
+
+# Install the desktop GUI application
+brew install --cask bdip
+```
+
+### Release page install (Mac)
+
+Navigate to the [GitHub release page](https://github.com/billdirks/bdip/releases) and download the binaries from the `Assets` section.
+
+### Installing from Cargo
+
+```bash
+# Install the desktop GUI application
+cargo install bdip
+
+# Install the CLI application
+cargo install bdip-cli
+```
+
+### Compiling from source
+
+Use these commands to build the release binaries directly from source:
+
+```bash
+# Build the bdip GUI app (not the mac app bundle)
+cargo build --release -p bdip
+# The release binary can be found in target/release/bdip
+
+# Build the bdip-cli app
+cargo build --release -p bdip-cli
+# The release binary can be found in target/release/bdip-cli
+```
+
 ## Quickstart
 
 The cargo aliases are helpful and can be found in `.cargo/config.toml`. I highlight some here.
